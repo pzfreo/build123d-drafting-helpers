@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.1.1 — 2026-05-19
+
+Bug fix, two new helpers, and a drafting-conventions reference doc.
+
+### Bug fixes
+
+- **`view_axes` rewritten with pure Python arithmetic** — no `build123d.Vector` / OCC import on this path. Eliminates the cold-start timeout that caused the MCP `view_axes` tool to fail when the worker process hadn't yet loaded the OCC kernel (#114 build123d-mcp).
+
+### New helpers
+
+- **`iso_title_block(part_name, drawing_number, ...)`** — ISO-style 2-row title block (170 × 16 mm default), returns `TitleBlockResult(lines, text, bbox)` for SVG layer routing.
+- **`surface_finish_mark(ra_value, position, ...)`** — ISO 1302 check-mark symbol with Ra annotation, returns `SurfaceFinishResult(lines, text, label_str, position)`.
+
+### Documentation
+
+- **`docs/drafting-conventions.md`** — offset-sign table, label-overflow crash rule, text fill-layer rule, leader gap rule, reach-for-what table, and the recommended build→lint→render→inspect feedback loop.
+
+---
+
 ## v0.1.0 — 2026-05-19
 
 First PyPI release.
