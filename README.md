@@ -1,10 +1,32 @@
-# build123d-drafting
+# build123d-drafting-helpers
 
-Drawing annotation helpers for [build123d](https://github.com/gumyr/build123d) — pure Python, no MCP dependency.
+[![PyPI](https://img.shields.io/pypi/v/build123d-drafting-helpers.svg)](https://pypi.org/project/build123d-drafting-helpers/)
+[![Python](https://img.shields.io/pypi/pyversions/build123d-drafting-helpers.svg)](https://pypi.org/project/build123d-drafting-helpers/)
+[![License](https://img.shields.io/pypi/l/build123d-drafting-helpers.svg)](LICENSE)
+
+Third-party drawing-annotation helpers for [build123d](https://github.com/gumyr/build123d) — pure Python, no MCP dependency. Not affiliated with the upstream build123d project.
 
 ```python
 from build123d_drafting import dim_linear, leader, view_axes, lint_drawing
 ```
+
+The install name is `build123d-drafting-helpers`; the import name is `build123d_drafting`.
+
+> **Not to be confused with [`baverman/build123d_draft`](https://github.com/baverman/build123d_draft)** — that project is *modelling shortcuts* (slot helpers, rotation aliases, `build_line` wrappers), not drafting/annotation. Different scope despite the similar name.
+
+## Installation
+
+```
+pip install build123d-drafting-helpers
+```
+
+Or with uv:
+
+```
+uv add build123d-drafting-helpers
+```
+
+Requires `build123d >= 0.7.0` and Python ≥ 3.10.
 
 ## Helpers
 
@@ -72,22 +94,27 @@ for issue in issues:
     print(issue.severity, issue.message)
 ```
 
-## Installation
+---
 
-Install directly from GitHub (no PyPI release yet):
+### `iso_title_block(...)` and `surface_finish_mark(...)`
+
+`iso_title_block` is a **standalone title box** (170 × 16 mm by default), positioned by the caller. It is *not* a substitute for `build123d.TechnicalDrawing`, which is a whole-page chrome — page-sized border + grid ticks + embedded title box, returned as a single `Sketch`. Use `TechnicalDrawing` when you want the full drawing-sheet frame; reach for `iso_title_block` when you want just the title box, positionable anywhere, with separate `lines`/`text` `Compound`s for SVG layer routing, and with `material` / `general_tolerance` fields that `TechnicalDrawing` does not carry.
+
+`surface_finish_mark` produces an ISO 1302 Ra-value check-mark symbol — build123d does not ship one.
+
+## Status against upstream
+
+- `lint_drawing` is a prototype of rule-based drawing checks that build123d's roadmap mentions as future work. If upstream ships its own linter later, this one can be deprecated.
+- `dim_linear` is a thin convenience wrapper over `ExtensionLine` — it does not replace the underlying class, it just lets you write `side="above"` instead of computing the right-hand-normal signed offset by hand. If upstream adds a named-side parameter, this helper becomes redundant.
+
+## Development
 
 ```
-pip install git+https://github.com/pzfreo/build123d-drafting-helpers.git
+git clone https://github.com/pzfreo/build123d-drafting-helpers.git
+cd build123d-drafting-helpers
+uv run pytest tests/
 ```
-
-Or with uv:
-
-```
-uv add git+https://github.com/pzfreo/build123d-drafting-helpers.git
-```
-
-Requires `build123d >= 0.7.0` and Python ≥ 3.10.
 
 ## Status
 
-Alpha. API may change. Developed alongside [build123d-mcp](https://github.com/pzfreo/build123d-mcp).
+Alpha. API may change. Developed alongside [build123d-mcp](https://github.com/pzfreo/build123d-mcp), which integrates these helpers into its LLM-facing drawing workflow.

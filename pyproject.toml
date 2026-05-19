@@ -3,11 +3,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "build123d-drafting"
+name = "build123d-drafting-helpers"
 version = "0.1.0"
-description = "Drawing annotation helpers for build123d — dim_linear, leader, view_axes, lint_drawing"
+description = "Third-party drawing-annotation helpers for build123d — dim_linear, leader, view_axes, lint_drawing"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = { file = "LICENSE" }
+authors = [{ name = "Paul Fremantle", email = "pzfreo@gmail.com" }]
 requires-python = ">=3.10"
 dependencies = [
     "build123d>=0.7.0",
@@ -20,14 +21,35 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 
 [project.urls]
+Homepage = "https://github.com/pzfreo/build123d-drafting-helpers"
 Repository = "https://github.com/pzfreo/build123d-drafting-helpers"
 Issues = "https://github.com/pzfreo/build123d-drafting-helpers/issues"
+Changelog = "https://github.com/pzfreo/build123d-drafting-helpers/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/build123d_drafting"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/build123d_drafting",
+    "tests",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "pyproject.toml",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7",
+    "pytest-timeout",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
