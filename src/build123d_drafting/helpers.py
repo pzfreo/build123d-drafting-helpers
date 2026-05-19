@@ -361,8 +361,25 @@ def leader(
 
 
 # ---------------------------------------------------------------------------
-# view_axes
+# view_axes — pure Python helpers (no OCC import)
 # ---------------------------------------------------------------------------
+
+def _dot3(a: tuple, b: tuple) -> float:
+    return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
+
+def _sub3(a: tuple, b: tuple) -> tuple:
+    return (a[0]-b[0], a[1]-b[1], a[2]-b[2])
+
+def _scale3(s: float, v: tuple) -> tuple:
+    return (s*v[0], s*v[1], s*v[2])
+
+def _cross3(a: tuple, b: tuple) -> tuple:
+    return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+
+def _norm3(v: tuple) -> tuple:
+    mag = math.sqrt(_dot3(v, v))
+    return (v[0]/mag, v[1]/mag, v[2]/mag) if mag > 1e-10 else (0.0, 0.0, 0.0)
+
 
 def view_axes(
     viewport_origin: tuple,
@@ -392,23 +409,25 @@ def view_axes(
         {"world_X": ("page_X", -1.0), "world_Y": ("page_Y", 1.0), "world_Z": ("depth", 0.0)}
         ↑ world-X is flipped on the page — the classic bottom-view axis swap.
     """
-    vo = Vector(*viewport_origin)
-    la = Vector(*look_at)
-    vu = Vector(*viewport_up)
+    # Pure Python arithmetic — no build123d/OCC import so this call is fast
+    # even when the OCC kernel hasn't been loaded yet (avoids _SHORT_TIMEOUT).
+    vo = tuple(float(x) for x in viewport_origin)
+    la = tuple(float(x) for x in look_at)
+    vu = tuple(float(x) for x in viewport_up)
 
-    view_dir = (la - vo).normalized()
+    view_dir = _norm3(_sub3(la, vo))
     # Gram-Schmidt: remove the view_dir component from viewport_up
-    page_y = (vu - vu.dot(view_dir) * view_dir).normalized()
-    page_x = view_dir.cross(page_y)
+    page_y = _norm3(_sub3(vu, _scale3(_dot3(vu, view_dir), view_dir)))
+    page_x = _cross3(view_dir, page_y)
 
     result: dict[str, tuple[str, float]] = {}
     for name, world_v in [
-        ("world_X", Vector(1, 0, 0)),
-        ("world_Y", Vector(0, 1, 0)),
-        ("world_Z", Vector(0, 0, 1)),
+        ("world_X", (1.0, 0.0, 0.0)),
+        ("world_Y", (0.0, 1.0, 0.0)),
+        ("world_Z", (0.0, 0.0, 1.0)),
     ]:
-        px = world_v.dot(page_x)
-        py = world_v.dot(page_y)
+        px = _dot3(world_v, page_x)
+        py = _dot3(world_v, page_y)
         if abs(px) < 1e-9 and abs(py) < 1e-9:
             result[name] = ("depth", 0.0)
         elif abs(px) >= abs(py):
