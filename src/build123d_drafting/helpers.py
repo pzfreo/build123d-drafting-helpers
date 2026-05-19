@@ -311,9 +311,11 @@ def leader(
     text_w = probe.bounding_box().size.X
     gap = draft.pad_around_text
 
-    # Shelf goes in the direction away from tip (left or right)
+    # Shelf goes in the direction away from tip (left or right).
+    # Shelf is a short stub (= gap) that ends where the text starts.
+    # Using gap + text_w + gap would extend the shelf line through the label.
     shelf_dir = 1.0 if elbow_v.X >= tip_v.X else -1.0
-    shelf_len = gap + text_w + gap
+    shelf_len = gap
     shelf_end_v = Vector(elbow_v.X + shelf_dir * shelf_len, elbow_v.Y, 0.0)
 
     # Arrow: shaft from tip to elbow with arrowhead at tip
