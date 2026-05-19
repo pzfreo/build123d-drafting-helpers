@@ -11,10 +11,14 @@ from build123d_drafting.helpers import (
     DimResult,
     LeaderResult,
     LintIssue,
+    SurfaceFinishResult,
+    TitleBlockResult,
     dim_linear,
+    iso_title_block,
     leader,
     lint_drawing,
     safe_dim_line,
+    surface_finish_mark,
     view_axes,
 )
 
@@ -22,9 +26,13 @@ __all__ = [
     "DimResult",
     "LeaderResult",
     "LintIssue",
+    "SurfaceFinishResult",
+    "TitleBlockResult",
     "dim_linear",
+    "iso_title_block",
     "leader",
     "lint_drawing",
     "safe_dim_line",
+    "surface_finish_mark",
     "view_axes",
 ]

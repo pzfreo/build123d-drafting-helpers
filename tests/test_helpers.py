@@ -3,8 +3,9 @@ import pytest
 from build123d import Draft, Compound, Edge, Vector
 
 from build123d_drafting import (
-    DimResult, LeaderResult, LintIssue,
-    dim_linear, leader, lint_drawing, safe_dim_line, view_axes,
+    DimResult, LeaderResult, LintIssue, TitleBlockResult, SurfaceFinishResult,
+    dim_linear, iso_title_block, leader, lint_drawing, safe_dim_line,
+    surface_finish_mark, view_axes,
 )
 
 
@@ -232,3 +233,124 @@ class TestLintDrawing:
         issues = lint_drawing([dim, lea])
         # No issues expected for clean inputs
         assert issues == []
+
+
+# ---------------------------------------------------------------------------
+# iso_title_block
+# ---------------------------------------------------------------------------
+
+class TestIsoTitleBlock:
+    def test_returns_title_block_result(self, draft):
+        res = iso_title_block("My Part", "DRW-001", draft=draft)
+        assert isinstance(res, TitleBlockResult)
+
+    def test_lines_is_compound(self, draft):
+        res = iso_title_block("My Part", "DRW-001", draft=draft)
+        assert isinstance(res.lines, Compound)
+
+    def test_text_is_compound(self, draft):
+        res = iso_title_block("My Part", "DRW-001", draft=draft)
+        assert isinstance(res.text, Compound)
+
+    def test_bbox_dict_correct_dimensions(self, draft):
+        res = iso_title_block("Part", "001", width=170, cell_height=8, draft=draft)
+        assert res.bbox["width"] == pytest.approx(170.0)
+        assert res.bbox["height"] == pytest.approx(16.0)  # 2 rows × 8mm
+        assert res.bbox["min_x"] == pytest.approx(0.0)
+        assert res.bbox["min_y"] == pytest.approx(0.0)
+
+    def test_custom_width_respected(self, draft):
+        res = iso_title_block("Part", "001", width=210, draft=draft)
+        assert res.bbox["width"] == pytest.approx(210.0)
+        assert res.bbox["max_x"] == pytest.approx(210.0)
+
+    def test_shape_property_returns_compound(self, draft):
+        res = iso_title_block("Part", "001", draft=draft)
+        assert isinstance(res.shape, Compound)
+
+    def test_default_draft_used_when_none(self):
+        # Should not raise when draft is omitted
+        res = iso_title_block("Part", "DRW-001")
+        assert isinstance(res, TitleBlockResult)
+
+    def test_optional_fields_empty_string(self, draft):
+        # All optional fields empty — should still produce a valid result
+        res = iso_title_block("Part", "001", draft=draft)
+        assert res.lines is not None
+        assert res.text is not None
+
+    def test_all_fields_populated(self, draft):
+        res = iso_title_block(
+            part_name="Bracket",
+            drawing_number="BRK-042",
+            scale="2:1",
+            material="Al 6061",
+            general_tolerance="ISO 2768-m",
+            designed_by="J. Smith",
+            date="2026-05-19",
+            draft=draft,
+        )
+        assert isinstance(res, TitleBlockResult)
+        # lines compound should have edges (outer border + dividers = at least 8)
+        assert len(res.lines.edges()) >= 8
+
+
+# ---------------------------------------------------------------------------
+# surface_finish_mark
+# ---------------------------------------------------------------------------
+
+class TestSurfaceFinishMark:
+    def test_returns_surface_finish_result(self, draft):
+        res = surface_finish_mark("Ra 1.6", (10, 20), draft=draft)
+        assert isinstance(res, SurfaceFinishResult)
+
+    def test_label_str_preserved(self, draft):
+        res = surface_finish_mark("Ra 3.2", (0, 0), draft=draft)
+        assert res.label_str == "Ra 3.2"
+
+    def test_position_stored(self, draft):
+        res = surface_finish_mark("Ra 1.6", (15.0, 25.0), draft=draft)
+        assert res.position == pytest.approx((15.0, 25.0))
+
+    def test_lines_is_compound(self, draft):
+        res = surface_finish_mark("Ra 1.6", (0, 0), draft=draft)
+        assert isinstance(res.lines, Compound)
+
+    def test_text_is_compound(self, draft):
+        res = surface_finish_mark("Ra 1.6", (0, 0), draft=draft)
+        assert isinstance(res.text, Compound)
+
+    def test_shape_property_returns_compound(self, draft):
+        res = surface_finish_mark("Ra 1.6", (0, 0), draft=draft)
+        assert isinstance(res.shape, Compound)
+
+    def test_symbol_has_three_edges(self, draft):
+        # leg1 (diagonal), leg2 (vertical), shelf (horizontal)
+        res = surface_finish_mark("Ra 1.6", (0, 0), draft=draft)
+        assert len(res.lines.edges()) == 3
+
+    def test_tip_is_at_position(self, draft):
+        px, py = 10.0, 20.0
+        res = surface_finish_mark("Ra 1.6", (px, py), draft=draft)
+        bb = res.shape.bounding_box()
+        # The tip is the lowest point — bbox min_y should equal py
+        assert bb.min.Y == pytest.approx(py, abs=0.01)
+        # bbox min_x should equal px (tip is leftmost point for 0° rotation)
+        assert bb.min.X == pytest.approx(px, abs=0.01)
+
+    def test_rotation_changes_bbox(self, draft):
+        res0 = surface_finish_mark("Ra 1.6", (0, 0), angle=0.0, draft=draft)
+        res90 = surface_finish_mark("Ra 1.6", (0, 0), angle=90.0, draft=draft)
+        bb0 = res0.shape.bounding_box()
+        bb90 = res90.shape.bounding_box()
+        # At 90° rotation the extents in X and Y should differ noticeably
+        assert abs(bb0.size.X - bb90.size.X) > 0.5
+
+    def test_default_draft_used_when_none(self):
+        res = surface_finish_mark("Ra 1.6", (0, 0))
+        assert isinstance(res, SurfaceFinishResult)
+
+    def test_bbox_method_works(self, draft):
+        res = surface_finish_mark("Ra 1.6", (5, 5), draft=draft)
+        bb = res.bbox()
+        assert bb is not None

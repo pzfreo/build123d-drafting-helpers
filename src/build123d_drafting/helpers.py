@@ -31,6 +31,7 @@ These helpers paper over the rough edges in build123d.drafting:
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Literal
@@ -90,6 +91,40 @@ class LeaderResult:
     @property
     def shape(self) -> Compound:
         """Combined compound for single-layer export."""
+        return Compound(children=[self.lines, self.text])
+
+    def bbox(self):
+        return self.shape.bounding_box()
+
+
+@dataclass
+class TitleBlockResult:
+    """Returned by iso_title_block().
+
+    Route *lines* to a line_color SVG layer and *text* to a fill_color layer.
+    """
+    lines: Compound   # border and grid edges
+    text: Compound    # all text faces
+    bbox: dict        # {"min_x", "min_y", "max_x", "max_y", "width", "height"}
+
+    @property
+    def shape(self) -> Compound:
+        return Compound(children=[self.lines, self.text])
+
+
+@dataclass
+class SurfaceFinishResult:
+    """Returned by surface_finish_mark().
+
+    Route *lines* to a line_color SVG layer and *text* to a fill_color layer.
+    """
+    lines: Compound               # check-mark strokes and horizontal shelf
+    text: Compound                # Ra label glyphs
+    label_str: str
+    position: tuple[float, float]
+
+    @property
+    def shape(self) -> Compound:
         return Compound(children=[self.lines, self.text])
 
     def bbox(self):
@@ -469,3 +504,233 @@ def _lint_leader(item: LeaderResult, issues: list[LintIssue]) -> None:
             ))
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# iso_title_block
+# ---------------------------------------------------------------------------
+
+# Column fractions: description, drawing_number, scale, material, date
+_TB_COL_FRACTIONS = [0.40, 0.20, 0.15, 0.15, 0.10]
+
+
+def iso_title_block(
+    part_name: str,
+    drawing_number: str,
+    scale: str = "1:1",
+    material: str = "",
+    general_tolerance: str = "",
+    designed_by: str = "",
+    date: str = "",
+    cell_height: float = 8.0,
+    width: float = 170.0,
+    draft: Draft | None = None,
+) -> TitleBlockResult:
+    """ISO-style 2-row title block built at the origin.
+
+    The block is 170 × 16 mm by default (width × 2 rows) and is placed with
+    its bottom-left corner at (0, 0).  Move it with `.lines.moved(loc)` and
+    `.text.moved(loc)` after construction.
+
+    Layout::
+
+        ┌──────────────────┬─────────┬──────┬──────┬──────┐
+        │  part_name       │ dwg_no  │scale │ mat  │ date │  ← top row
+        ├──────────────────┼─────────┴──────┴──────┴──────┤
+        │ general_tolerance│    designed_by               │  ← bottom row
+        └──────────────────┴─────────────────────────────-┘
+
+    Column proportions: 40 / 20 / 15 / 15 / 10 %.  The bottom row merges the
+    right four columns into one "designed_by" cell.
+
+    Args:
+        part_name:         part description / title.
+        drawing_number:    drawing identifier.
+        scale:             e.g. "1:1", "2:1".
+        material:          material specification.
+        general_tolerance: tolerance note (e.g. "ISO 2768-m").
+        designed_by:       drafter / designer name.
+        date:              issue date string.
+        cell_height:       height of each row in mm (default 8).
+        width:             total block width in mm (default 170).
+        draft:             Draft config for font settings; defaults to 2.5 mm.
+
+    Returns:
+        TitleBlockResult with .lines, .text, and .bbox dict.
+    """
+    if draft is None:
+        draft = Draft(font_size=2.5, decimal_precision=1)
+
+    # Column x-positions
+    col_widths = [f * width for f in _TB_COL_FRACTIONS]
+    x: list[float] = [0.0]
+    for w in col_widths:
+        x.append(x[-1] + w)
+
+    y0, y1, y2 = 0.0, cell_height, 2.0 * cell_height
+
+    # --- Grid edges ---
+    edge_list: list[Edge] = []
+
+    # Outer border
+    edge_list.append(Edge.make_line(Vector(x[0], y0, 0), Vector(x[-1], y0, 0)))
+    edge_list.append(Edge.make_line(Vector(x[-1], y0, 0), Vector(x[-1], y2, 0)))
+    edge_list.append(Edge.make_line(Vector(x[-1], y2, 0), Vector(x[0], y2, 0)))
+    edge_list.append(Edge.make_line(Vector(x[0], y2, 0), Vector(x[0], y0, 0)))
+
+    # Horizontal divider between rows
+    edge_list.append(Edge.make_line(Vector(x[0], y1, 0), Vector(x[-1], y1, 0)))
+
+    # Top-row vertical dividers (between all 5 cells)
+    for xi in x[1:-1]:
+        edge_list.append(Edge.make_line(Vector(xi, y1, 0), Vector(xi, y2, 0)))
+
+    # Bottom-row: single divider after the first column
+    edge_list.append(Edge.make_line(Vector(x[1], y0, 0), Vector(x[1], y1, 0)))
+
+    lines = Compound(children=edge_list)
+
+    # --- Text ---
+    fs = draft.font_size
+    font = draft.font
+
+    def _cell_txt(value: str, cx: float, cy: float) -> Text | None:
+        if not value:
+            return None
+        return Text(
+            txt=value,
+            font_size=fs,
+            font=font,
+            align=(Align.CENTER, Align.CENTER),
+            mode=Mode.PRIVATE,
+        ).moved(Location(Vector(cx, cy, 0.0)))
+
+    # Top row cell centres
+    top_y_mid = (y1 + y2) / 2.0
+    top_cells = [
+        (part_name,      (x[0] + x[1]) / 2.0),
+        (drawing_number, (x[1] + x[2]) / 2.0),
+        (scale,          (x[2] + x[3]) / 2.0),
+        (material,       (x[3] + x[4]) / 2.0),
+        (date,           (x[4] + x[5]) / 2.0),
+    ]
+
+    # Bottom row cell centres
+    bot_y_mid = (y0 + y1) / 2.0
+    bot_cells = [
+        (general_tolerance, (x[0] + x[1]) / 2.0),
+        (designed_by,       (x[1] + x[-1]) / 2.0),
+    ]
+
+    text_shapes = [
+        _cell_txt(v, cx, top_y_mid) for v, cx in top_cells
+    ] + [
+        _cell_txt(v, cx, bot_y_mid) for v, cx in bot_cells
+    ]
+    text_shapes = [t for t in text_shapes if t is not None]
+
+    text = Compound(children=text_shapes) if text_shapes else Compound(children=[])
+
+    bbox_dict = {
+        "min_x": 0.0, "min_y": 0.0,
+        "max_x": width, "max_y": y2,
+        "width": width, "height": y2,
+    }
+    return TitleBlockResult(lines=lines, text=text, bbox=bbox_dict)
+
+
+# ---------------------------------------------------------------------------
+# surface_finish_mark
+# ---------------------------------------------------------------------------
+
+def surface_finish_mark(
+    ra_value: str,
+    position: tuple,
+    angle: float = 0.0,
+    draft: Draft | None = None,
+    size: float | None = None,
+) -> SurfaceFinishResult:
+    """ISO 1302 surface finish check-mark symbol with Ra annotation.
+
+    The symbol has three strokes::
+
+          _________
+          |
+          |          ← vertical right leg (1.5 × left-leg height)
+         /
+        /            ← left diagonal leg at 60° from horizontal
+       tip
+
+    The Ra label sits on the horizontal shelf extending from the elbow.
+
+    Args:
+        ra_value: surface finish annotation (e.g. "Ra 1.6", "Ra 3.2").
+        position: world XY position of the symbol tip (x, y[, z]).
+        angle:    rotation in degrees, CCW around the tip (default 0).
+        draft:    Draft config; defaults to 2.5 mm font.
+        size:     diagonal leg length in mm; defaults to 2 × font_size.
+
+    Returns:
+        SurfaceFinishResult with .lines (strokes + shelf) and .text (label).
+        Route .lines to a line_color layer and .text to a fill_color layer.
+    """
+    if draft is None:
+        draft = Draft(font_size=2.5, decimal_precision=1)
+
+    leg_len = size if size is not None else 2.0 * draft.font_size
+
+    # Diagonal left leg rises at 60° from horizontal
+    leg_angle = math.radians(60.0)
+    elbow_x = leg_len * math.cos(leg_angle)
+    elbow_y = leg_len * math.sin(leg_angle)
+    elbow_v = Vector(elbow_x, elbow_y, 0.0)
+
+    # Vertical right leg: 1.5× the elbow height
+    top_v = Vector(elbow_x, 1.5 * elbow_y, 0.0)
+
+    leg1 = Edge.make_line(Vector(0.0, 0.0, 0.0), elbow_v)
+    leg2 = Edge.make_line(elbow_v, top_v)
+
+    # Horizontal shelf from elbow, sized to hold the label
+    probe = Text(
+        txt=ra_value,
+        font_size=draft.font_size,
+        font=draft.font,
+        align=Align.CENTER,
+        mode=Mode.PRIVATE,
+    )
+    text_w = probe.bounding_box().size.X
+    gap = draft.pad_around_text
+    shelf_end_v = Vector(elbow_x + gap + text_w + gap, elbow_y, 0.0)
+    shelf = Edge.make_line(elbow_v, shelf_end_v)
+
+    lines_raw = Compound(children=[leg1, leg2, shelf])
+
+    # Text: left-aligned, vertically centred at shelf height
+    text_raw = Compound(children=[
+        Text(
+            txt=ra_value,
+            font_size=draft.font_size,
+            font=draft.font,
+            align=(Align.MIN, Align.CENTER),
+            mode=Mode.PRIVATE,
+        ).moved(Location(Vector(elbow_x + gap, elbow_y, 0.0)))
+    ])
+
+    # Rotate around origin then translate to position
+    if angle != 0.0:
+        rot_loc = Location((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), angle)
+        lines_raw = lines_raw.moved(rot_loc)
+        text_raw = text_raw.moved(rot_loc)
+
+    pos_v = Vector(position[0], position[1], 0.0)
+    trans_loc = Location(pos_v)
+    lines_out = lines_raw.moved(trans_loc)
+    text_out = text_raw.moved(trans_loc)
+
+    return SurfaceFinishResult(
+        lines=lines_out,
+        text=text_out,
+        label_str=ra_value,
+        position=(pos_v.X, pos_v.Y),
+    )
