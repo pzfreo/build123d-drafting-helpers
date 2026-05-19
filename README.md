@@ -1,10 +1,30 @@
-# build123d-drafting
+# build123d-drafting-helpers
 
-Drawing annotation helpers for [build123d](https://github.com/gumyr/build123d) — pure Python, no MCP dependency.
+[![PyPI](https://img.shields.io/pypi/v/build123d-drafting-helpers.svg)](https://pypi.org/project/build123d-drafting-helpers/)
+[![Python](https://img.shields.io/pypi/pyversions/build123d-drafting-helpers.svg)](https://pypi.org/project/build123d-drafting-helpers/)
+[![License](https://img.shields.io/pypi/l/build123d-drafting-helpers.svg)](LICENSE)
+
+Third-party drawing-annotation helpers for [build123d](https://github.com/gumyr/build123d) — pure Python, no MCP dependency. Not affiliated with the upstream build123d project.
 
 ```python
 from build123d_drafting import dim_linear, leader, view_axes, lint_drawing
 ```
+
+The install name is `build123d-drafting-helpers`; the import name is `build123d_drafting`.
+
+## Installation
+
+```
+pip install build123d-drafting-helpers
+```
+
+Or with uv:
+
+```
+uv add build123d-drafting-helpers
+```
+
+Requires `build123d >= 0.7.0` and Python ≥ 3.10.
 
 ## Helpers
 
@@ -72,22 +92,14 @@ for issue in issues:
     print(issue.severity, issue.message)
 ```
 
-## Installation
-
-Install directly from GitHub (no PyPI release yet):
+## Development
 
 ```
-pip install git+https://github.com/pzfreo/build123d-drafting-helpers.git
+git clone https://github.com/pzfreo/build123d-drafting-helpers.git
+cd build123d-drafting-helpers
+uv run pytest tests/
 ```
-
-Or with uv:
-
-```
-uv add git+https://github.com/pzfreo/build123d-drafting-helpers.git
-```
-
-Requires `build123d >= 0.7.0` and Python ≥ 3.10.
 
 ## Status
 
-Alpha. API may change. Developed alongside [build123d-mcp](https://github.com/pzfreo/build123d-mcp).
+Alpha. API may change. Developed alongside [build123d-mcp](https://github.com/pzfreo/build123d-mcp), which integrates these helpers into its LLM-facing drawing workflow.
