@@ -74,8 +74,16 @@ for issue in issues:
 
 ## Installation
 
+Install directly from GitHub (no PyPI release yet):
+
 ```
-pip install build123d-drafting
+pip install git+https://github.com/pzfreo/build123d-drafting-helpers.git
+```
+
+Or with uv:
+
+```
+uv add git+https://github.com/pzfreo/build123d-drafting-helpers.git
 ```
 
 Requires `build123d >= 0.7.0` and Python ≥ 3.10.
