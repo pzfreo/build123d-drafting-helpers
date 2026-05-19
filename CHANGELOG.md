@@ -13,4 +13,5 @@ Renamed from `build123d-drafting` to `build123d-drafting-helpers` to signal the 
 - `leader(tip, elbow, label, draft)` — leader annotation built from scratch; line stops cleanly before the label. Returns `LeaderResult(lines, text, label_str, tip, elbow)`.
 - `view_axes(viewport_origin, viewport_up, look_at)` — analytic world-to-page axis mapping for `project_to_viewport`.
 - `lint_drawing(items, part_bbox=None)` — structural checks (label-vs-length divergence, dim inside view, leader through label).
-- `iso_title_block(...)` and `surface_finish_mark(...)` — title-block + Ra-value mark helpers.
+- `iso_title_block(...)` — standalone title box (not a substitute for `build123d.TechnicalDrawing`, which is a whole-page chrome; this is the title box alone, positionable anywhere, with separate `lines`/`text` `Compound`s for SVG layer routing and additional `material` / `general_tolerance` fields).
+- `surface_finish_mark(ra_value, position, ...)` — ISO 1302 Ra-value check-mark symbol; build123d does not ship one.

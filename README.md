@@ -12,6 +12,8 @@ from build123d_drafting import dim_linear, leader, view_axes, lint_drawing
 
 The install name is `build123d-drafting-helpers`; the import name is `build123d_drafting`.
 
+> **Not to be confused with [`baverman/build123d_draft`](https://github.com/baverman/build123d_draft)** — that project is *modelling shortcuts* (slot helpers, rotation aliases, `build_line` wrappers), not drafting/annotation. Different scope despite the similar name.
+
 ## Installation
 
 ```
@@ -91,6 +93,19 @@ issues = lint_drawing([dim1, dim2, lea1])
 for issue in issues:
     print(issue.severity, issue.message)
 ```
+
+---
+
+### `iso_title_block(...)` and `surface_finish_mark(...)`
+
+`iso_title_block` is a **standalone title box** (170 × 16 mm by default), positioned by the caller. It is *not* a substitute for `build123d.TechnicalDrawing`, which is a whole-page chrome — page-sized border + grid ticks + embedded title box, returned as a single `Sketch`. Use `TechnicalDrawing` when you want the full drawing-sheet frame; reach for `iso_title_block` when you want just the title box, positionable anywhere, with separate `lines`/`text` `Compound`s for SVG layer routing, and with `material` / `general_tolerance` fields that `TechnicalDrawing` does not carry.
+
+`surface_finish_mark` produces an ISO 1302 Ra-value check-mark symbol — build123d does not ship one.
+
+## Status against upstream
+
+- `lint_drawing` is a prototype of rule-based drawing checks that build123d's roadmap mentions as future work. If upstream ships its own linter later, this one can be deprecated.
+- `dim_linear` is a thin convenience wrapper over `ExtensionLine` — it does not replace the underlying class, it just lets you write `side="above"` instead of computing the right-hand-normal signed offset by hand. If upstream adds a named-side parameter, this helper becomes redundant.
 
 ## Development
 

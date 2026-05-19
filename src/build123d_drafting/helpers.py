@@ -526,7 +526,17 @@ def iso_title_block(
     width: float = 170.0,
     draft: Draft | None = None,
 ) -> TitleBlockResult:
-    """ISO-style 2-row title block built at the origin.
+    """ISO-style 2-row title block built at the origin — standalone title box only.
+
+    Differs from `build123d.TechnicalDrawing`:
+
+    - `TechnicalDrawing` is a whole-page chrome (page-sized border + grid ticks +
+      embedded title box) returning a single `Sketch`. Use it when you want the
+      complete drawing-sheet frame.
+    - `iso_title_block` is the title box alone — smaller, positionable anywhere,
+      with separate `lines` and `text` `Compound`s so each can be routed to its
+      own SVG layer (text needs `fill_color`, lines don't). Adds `material` and
+      `general_tolerance` fields that `TechnicalDrawing` does not carry.
 
     The block is 170 × 16 mm by default (width × 2 rows) and is placed with
     its bottom-left corner at (0, 0).  Move it with `.lines.moved(loc)` and
