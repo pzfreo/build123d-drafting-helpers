@@ -144,6 +144,26 @@ class TestLeader:
         combined = res.shape
         assert isinstance(combined, Compound)
 
+    def test_lines_do_not_extend_into_text(self, draft):
+        # Regression for issue #120: shelf must stop before text starts.
+        res = leader((0, 0, 0), (20, 0, 0), "⌀8.00 H7", draft)
+        lb = res.lines.bounding_box()
+        tb = res.text.bounding_box()
+        assert lb.max.X <= tb.min.X + 0.01, (
+            f"lines extend to {lb.max.X:.2f} but text starts at {tb.min.X:.2f} "
+            f"— shelf passes through label text"
+        )
+
+    def test_lines_do_not_extend_into_text_left_going(self, draft):
+        # Same check for the left-going (tip to the right of elbow) case.
+        res = leader((30, 0, 0), (10, 0, 0), "⌀8.00 H7", draft)
+        lb = res.lines.bounding_box()
+        tb = res.text.bounding_box()
+        assert lb.min.X >= tb.max.X - 0.01, (
+            f"lines start at {lb.min.X:.2f} but text ends at {tb.max.X:.2f} "
+            f"— shelf passes through label text (left-going)"
+        )
+
 
 # ---------------------------------------------------------------------------
 # view_axes
