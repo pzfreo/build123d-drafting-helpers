@@ -531,6 +531,83 @@ def view_axes(
 
 
 # ---------------------------------------------------------------------------
+# place_labels
+# ---------------------------------------------------------------------------
+
+def _compute_label_offset_x(
+    dim: "DimResult",
+    centerlines: list,
+    gap: float,
+) -> float:
+    """Return the cumulative label_offset_x needed to clear all crossing vertical centerlines."""
+    if dim.label_bbox is None:
+        return 0.0
+    lmin_x, _lmin_y, lmax_x, _lmax_y = dim.label_bbox
+    label_cx = (lmin_x + lmax_x) / 2.0
+    half_w = (lmax_x - lmin_x) / 2.0
+    total = 0.0
+    for cl in centerlines:
+        if not isinstance(cl, CenterlineResult):
+            continue
+        try:
+            cl_bb = cl.bbox()
+        except Exception:
+            continue
+        if cl_bb.max.X - cl_bb.min.X >= 0.1:
+            continue  # not a vertical centerline
+        cl_x = (cl_bb.min.X + cl_bb.max.X) / 2.0
+        eff_lmin = lmin_x + total
+        eff_lmax = lmax_x + total
+        if not (eff_lmin < cl_x < eff_lmax):
+            continue
+        eff_cx = label_cx + total
+        shift_right = cl_x + half_w + gap - eff_cx
+        shift_left = cl_x - half_w - gap - eff_cx
+        total += shift_right if abs(shift_right) <= abs(shift_left) else shift_left
+    return total
+
+
+def place_labels(
+    specs: list[tuple],
+    draft: "Draft",
+    centerlines: list,
+    gap: float = 1.0,
+) -> list["DimResult"]:
+    """Build dims from specs, auto-shifting labels to clear vertical centerlines.
+
+    For each spec, builds the dim at label_offset_x=0, checks whether any
+    vertical centerline crosses the label bbox, and if so shifts the label by
+    the minimum amount left or right to clear it (choosing the shorter direction).
+    Multiple crossing centerlines are handled by accumulating offsets in order.
+
+    Only handles vertical centerlines (zero width). Horizontal centerlines and
+    non-DimResult specs are passed through unchanged.
+
+    Args:
+        specs: list of (p1, p2, side, distance, label) or
+               (p1, p2, side, distance, label, tolerance) tuples.
+        draft: Draft config.
+        centerlines: list of CenterlineResult objects to avoid.
+        gap: clearance between label edge and centerline (mm, default 1.0).
+
+    Returns:
+        list of DimResult, same length as specs.
+    """
+    results = []
+    for spec in specs:
+        p1, p2, side, distance, label = spec[:5]
+        tolerance = spec[5] if len(spec) > 5 else None
+        dim = dim_linear(p1, p2, side, distance, draft, label=label,
+                         tolerance=tolerance)
+        offset_x = _compute_label_offset_x(dim, centerlines, gap)
+        if offset_x != 0.0:
+            dim = dim_linear(p1, p2, side, distance, draft, label=label,
+                             tolerance=tolerance, label_offset_x=offset_x)
+        results.append(dim)
+    return results
+
+
+# ---------------------------------------------------------------------------
 # lint_drawing
 # ---------------------------------------------------------------------------
 
