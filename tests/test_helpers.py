@@ -248,11 +248,26 @@ class TestLintDrawing:
         assert leader_issues == []
 
     def test_mixed_items_checked(self, draft):
+        # Dim above a segment; leader placed well to the right — no spatial overlap.
         dim = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
-        lea = leader((0, 0, 0), (20, 10, 0), "Ra 1.6", draft)
+        lea = leader((50, 0, 0), (70, 10, 0), "Ra 1.6", draft)
         issues = lint_drawing([dim, lea])
-        # No issues expected for clean inputs
         assert issues == []
+
+    def test_overlapping_dims_flagged(self, draft):
+        # Two identical dims occupy the same space — should be flagged.
+        a = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        b = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        issues = lint_drawing([a, b])
+        assert any("overlap" in i.message.lower() for i in issues)
+
+    def test_stacked_dims_not_flagged(self, draft):
+        # Stacked at distinct offsets — must not be flagged as overlapping.
+        inner = dim_linear((-10, 0, 0), (10, 0, 0), "above",  8, draft, label="20")
+        outer = dim_linear((-10, 0, 0), (10, 0, 0), "above", 18, draft, label="20")
+        issues = lint_drawing([inner, outer])
+        overlap_issues = [i for i in issues if "overlap" in i.message.lower()]
+        assert overlap_issues == []
 
 
 # ---------------------------------------------------------------------------

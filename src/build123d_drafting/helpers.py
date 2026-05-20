@@ -69,6 +69,7 @@ class DimResult:
     shape: Compound
     label_str: str
     measured_length: float
+    dim_level_y: float | None = None  # Y coord of the dim line (for stacking checks)
 
     def bbox(self):
         return self.shape.bounding_box()
@@ -201,7 +202,10 @@ def dim_linear(
     )
     measured = shape.dimension  # set by ExtensionLine: length of the border path
     label_str = label if label is not None else _format_label(measured, draft, tolerance)
-    return DimResult(shape=shape, label_str=label_str, measured_length=measured)
+    bb = shape.bounding_box()
+    dim_level_y = bb.max.Y if abs(bb.max.Y) >= abs(bb.min.Y) else bb.min.Y
+    return DimResult(shape=shape, label_str=label_str, measured_length=measured,
+                     dim_level_y=dim_level_y)
 
 
 def _format_label(
@@ -465,6 +469,35 @@ def lint_drawing(
             _lint_dim(item, part_bbox, issues)
         elif isinstance(item, LeaderResult):
             _lint_leader(item, issues)
+
+    # Pairwise overlap check: any two annotations whose bboxes intersect by
+    # more than 0.5 mm in both axes are likely visually colliding.
+    # Use dim_level_y to skip stacked dims that share an X range but are
+    # at different Y levels (their extension lines overlap in bbox but not visually).
+    for i, item_a in enumerate(items):
+        for item_b in items[i + 1:]:
+            try:
+                level_a = getattr(item_a, "dim_level_y", None)
+                level_b = getattr(item_b, "dim_level_y", None)
+                if (level_a is not None and level_b is not None
+                        and abs(level_a - level_b) > 3.0):
+                    continue  # different Y levels → stacked, not colliding
+                ba = item_a.bbox()
+                bb = item_b.bbox()
+                ox = max(0.0, min(ba.max.X, bb.max.X) - max(ba.min.X, bb.min.X))
+                oy = max(0.0, min(ba.max.Y, bb.max.Y) - max(ba.min.Y, bb.min.Y))
+                if ox > 0.5 and oy > 0.5:
+                    la = getattr(item_a, "label_str", "?")
+                    lb = getattr(item_b, "label_str", "?")
+                    issues.append(LintIssue(
+                        severity="warning",
+                        message=(
+                            f"annotations '{la}' and '{lb}' overlap by "
+                            f"{ox:.1f}×{oy:.1f} mm — increase offset or spacing"
+                        ),
+                    ))
+            except Exception:
+                pass
 
     return issues
 
