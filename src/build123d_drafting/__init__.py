@@ -8,11 +8,13 @@ Import directly in your drawing scripts — no MCP server required:
     )
 """
 from build123d_drafting.helpers import (
+    CenterlineResult,
     DimResult,
     LeaderResult,
     LintIssue,
     SurfaceFinishResult,
     TitleBlockResult,
+    centerline,
     dim_linear,
     iso_title_block,
     leader,
@@ -23,11 +25,13 @@ from build123d_drafting.helpers import (
 )
 
 __all__ = [
+    "CenterlineResult",
     "DimResult",
     "LeaderResult",
     "LintIssue",
     "SurfaceFinishResult",
     "TitleBlockResult",
+    "centerline",
     "dim_linear",
     "iso_title_block",
     "leader",

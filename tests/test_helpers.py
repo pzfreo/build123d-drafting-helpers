@@ -3,8 +3,9 @@ import pytest
 from build123d import Draft, Compound, Edge, Vector
 
 from build123d_drafting import (
-    DimResult, LeaderResult, LintIssue, TitleBlockResult, SurfaceFinishResult,
-    dim_linear, iso_title_block, leader, lint_drawing, safe_dim_line,
+    CenterlineResult, DimResult, LeaderResult, LintIssue, TitleBlockResult,
+    SurfaceFinishResult,
+    centerline, dim_linear, iso_title_block, leader, lint_drawing, safe_dim_line,
     surface_finish_mark, view_axes,
 )
 
@@ -68,6 +69,37 @@ class TestDimLinear:
     def test_tolerance_accepted(self, draft):
         res = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, tolerance=0.1)
         assert res.shape is not None
+
+    def test_label_offset_x_shifts_label(self, draft):
+        """label_offset_x=10 should place label_bbox min_x > midpoint_x."""
+        res = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft,
+                         label="Ø5.0 H8", label_offset_x=10)
+        assert res.label_bbox is not None
+        midpoint_x = 0.0  # midpoint of -10 to 10
+        lmin_x, _lmin_y, _lmax_x, _lmax_y = res.label_bbox
+        assert lmin_x > midpoint_x, (
+            f"label_bbox min_x={lmin_x:.2f} should be > midpoint {midpoint_x}"
+        )
+
+    def test_centerline_overlap_flagged(self, draft):
+        """Vertical centerline through x=0 should collide with dim label at midpoint."""
+        dim = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="Ø5.0 H8")
+        cl = centerline((0, 0, 0), (0, 20, 0))
+        issues = lint_drawing([dim, cl])
+        assert any("centerline" in i.message.lower() for i in issues), (
+            f"Expected label_centerline_overlap; got: {[i.message for i in issues]}"
+        )
+
+    def test_centerline_no_overlap_with_offset(self, draft):
+        """With label_offset_x=15 the label clears the centerline at x=0."""
+        dim = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft,
+                         label="Ø5.0 H8", label_offset_x=15)
+        cl = centerline((0, 0, 0), (0, 20, 0))
+        issues = lint_drawing([dim, cl])
+        centerline_issues = [i for i in issues if "centerline" in i.message.lower()]
+        assert centerline_issues == [], (
+            f"Unexpected centerline overlap: {[i.message for i in centerline_issues]}"
+        )
 
 
 # ---------------------------------------------------------------------------
