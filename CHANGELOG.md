@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.1.3 — 2026-05-20
+
+### Features
+
+- **`place_dims(specs, draft, base_distance=8.0, tier_spacing=None)`**: build a stack of parallel dims with automatically assigned offsets. Specs are `(p1, p2, side, label[, tolerance])` — no `distance` needed. Dims whose spans overlap are placed on successive tiers; non-overlapping dims share a tier. First spec in each group is innermost.
+- **`place_labels(specs, draft, centerlines, gap=1.0)`**: like `place_dims` but also shifts each label the minimum distance left/right to clear any crossing vertical centreline. Handles multiple centrelines in one pass.
+- **`centerline(p1, p2)` / `CenterlineResult`**: thin Edge compound representing a centreline. Pass to `place_labels` for auto-avoidance or to `lint_drawing` for `label_centerline_overlap` detection.
+- **`label_offset_x` on `dim_linear`**: shifts the label along the dim line (mm, signed) without changing the dim geometry. Used by `place_labels` internally; also available directly.
+- **`label_bbox` on `DimResult`**: precise text bounding box `(min_x, min_y, max_x, max_y)` computed from a Text probe. Used by `lint_drawing` for centreline-overlap detection.
+- **Annotation overlap detection** in `lint_drawing`: flags same-level annotation pairs overlapping by >0.5 mm in both axes. Uses `dim_level_y` to skip stacked dims at different Y levels.
+- **Centreline-label overlap detection** in `lint_drawing`: flags `(DimResult, CenterlineResult)` pairs where the label bbox crosses the centreline (`label_centerline_overlap` check).
+
+### Documentation
+
+- README updated with sections for all new helpers.
+- `docs/drafting-conventions.md` updated reach-for-what table; new section on centreline-label collision avoidance.
+
+---
+
 ## v0.1.2 — 2026-05-20
 
 ### Bug fixes
