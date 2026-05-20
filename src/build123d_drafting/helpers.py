@@ -531,6 +531,74 @@ def view_axes(
 
 
 # ---------------------------------------------------------------------------
+# place_dims
+# ---------------------------------------------------------------------------
+
+def place_dims(
+    specs: list[tuple],
+    draft: "Draft",
+    base_distance: float = 8.0,
+    tier_spacing: float | None = None,
+) -> list["DimResult"]:
+    """Build a stack of dims with automatically assigned offsets.
+
+    Takes specs *without* a distance argument and assigns offsets so that dims
+    spanning overlapping ranges are placed on successive tiers. Dims with
+    non-overlapping ranges share a tier at the same offset.
+
+    Ordering matters: specs listed first get lower tiers (closer to the part).
+
+    Args:
+        specs:         list of (p1, p2, side, label) or
+                       (p1, p2, side, label, tolerance) tuples.
+        draft:         Draft config.
+        base_distance: offset for the innermost tier (mm, default 8.0).
+        tier_spacing:  distance between successive tiers (mm).
+                       Defaults to draft.font_size * 3 + draft.arrow_length.
+
+    Returns:
+        list of DimResult, same length and order as specs.
+    """
+    if tier_spacing is None:
+        tier_spacing = draft.font_size * 3.0 + draft.arrow_length
+
+    # tier_occupancy[i] = list of (range_min, range_max) placed on tier i
+    tier_occupancy: list[list[tuple[float, float]]] = []
+
+    results = []
+    for spec in specs:
+        p1, p2, side = spec[0], spec[1], spec[2]
+        label = spec[3]
+        tolerance = spec[4] if len(spec) > 4 else None
+
+        # Primary span: X for above/below dims, Y for left/right dims.
+        toward = _SIDE_VECTORS[side] if isinstance(side, str) else tuple(side)
+        use_x = abs(toward[1]) >= abs(toward[0])  # above/below stacks in Y, spans in X
+        span = (
+            (min(p1[0], p2[0]), max(p1[0], p2[0])) if use_x
+            else (min(p1[1], p2[1]), max(p1[1], p2[1]))
+        )
+
+        # First tier whose existing spans don't overlap this one.
+        assigned = None
+        for t, occupied in enumerate(tier_occupancy):
+            if all(span[1] <= s[0] or span[0] >= s[1] for s in occupied):
+                assigned = t
+                occupied.append(span)
+                break
+        if assigned is None:
+            assigned = len(tier_occupancy)
+            tier_occupancy.append([span])
+
+        offset = base_distance + assigned * tier_spacing
+        results.append(
+            dim_linear(p1, p2, side, offset, draft, label=label, tolerance=tolerance)
+        )
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # place_labels
 # ---------------------------------------------------------------------------
 

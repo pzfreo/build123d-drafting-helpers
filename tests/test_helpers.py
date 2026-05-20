@@ -5,7 +5,8 @@ from build123d import Draft, Compound, Edge, Vector
 from build123d_drafting import (
     CenterlineResult, DimResult, LeaderResult, LintIssue, TitleBlockResult,
     SurfaceFinishResult,
-    centerline, dim_linear, iso_title_block, leader, lint_drawing, place_labels,
+    centerline, dim_linear, iso_title_block, leader, lint_drawing,
+    place_dims, place_labels,
     safe_dim_line, surface_finish_mark, view_axes,
 )
 
@@ -100,6 +101,76 @@ class TestDimLinear:
         assert centerline_issues == [], (
             f"Unexpected centerline overlap: {[i.message for i in centerline_issues]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# place_dims
+# ---------------------------------------------------------------------------
+
+class TestPlaceDims:
+    def test_single_dim_gets_base_distance(self, draft):
+        results = place_dims([((-10, 0, 0), (10, 0, 0), "above", "20")], draft,
+                             base_distance=8.0)
+        assert len(results) == 1
+        bb = results[0].shape.bounding_box()
+        # Dim line Y should be close to base_distance (plus extension stub)
+        assert bb.max.Y > 8.0
+
+    def test_overlapping_dims_on_different_tiers(self, draft):
+        # Both dims span the full x range — must be on different tiers.
+        specs = [
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+        ]
+        results = place_dims(specs, draft, base_distance=8.0)
+        bb0 = results[0].shape.bounding_box()
+        bb1 = results[1].shape.bounding_box()
+        assert bb1.max.Y > bb0.max.Y + 3.0, "Second dim should be on a higher tier"
+
+    def test_non_overlapping_dims_share_tier(self, draft):
+        # Dims on completely separate X segments share tier 0.
+        specs = [
+            ((-30, 0, 0), (-10, 0, 0), "above", "20"),
+            (( 10, 0, 0), ( 30, 0, 0), "above", "20"),
+        ]
+        results = place_dims(specs, draft, base_distance=8.0)
+        bb0 = results[0].shape.bounding_box()
+        bb1 = results[1].shape.bounding_box()
+        assert abs(bb0.max.Y - bb1.max.Y) < 1.0, "Non-overlapping dims should share a tier"
+
+    def test_three_overlapping_dims_three_tiers(self, draft):
+        specs = [
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+        ]
+        results = place_dims(specs, draft, base_distance=8.0)
+        max_ys = sorted(r.shape.bounding_box().max.Y for r in results)
+        assert max_ys[1] > max_ys[0] + 3.0
+        assert max_ys[2] > max_ys[1] + 3.0
+
+    def test_stacked_result_passes_lint(self, draft):
+        specs = [
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+        ]
+        results = place_dims(specs, draft, base_distance=8.0)
+        issues = lint_drawing(results)
+        overlap = [i for i in issues if "overlap" in i.message.lower()]
+        assert overlap == [], f"place_dims output should not overlap: {[i.message for i in overlap]}"
+
+    def test_tolerance_accepted(self, draft):
+        specs = [((-10, 0, 0), (10, 0, 0), "above", "20", 0.1)]
+        results = place_dims(specs, draft)
+        assert results[0].label_str.startswith("20")
+
+    def test_returns_dim_results(self, draft):
+        specs = [
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+            (( 10, 0, 0), (30, 0, 0), "above", "20"),
+        ]
+        results = place_dims(specs, draft)
+        assert all(isinstance(r, DimResult) for r in results)
 
 
 # ---------------------------------------------------------------------------
