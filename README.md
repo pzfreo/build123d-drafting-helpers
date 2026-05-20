@@ -7,7 +7,10 @@
 Third-party drawing-annotation helpers for [build123d](https://github.com/gumyr/build123d) — pure Python, no MCP dependency. Not affiliated with the upstream build123d project.
 
 ```python
-from build123d_drafting import dim_linear, leader, view_axes, lint_drawing
+from build123d_drafting import (
+    dim_linear, place_dims, place_labels, centerline,
+    leader, view_axes, lint_drawing,
+)
 ```
 
 The install name is `build123d-drafting-helpers`; the import name is `build123d_drafting`.
@@ -30,7 +33,7 @@ Requires `build123d >= 0.7.0` and Python ≥ 3.10.
 
 ## Helpers
 
-### `dim_linear(p1, p2, side, distance, draft, label=None, tolerance=None)`
+### `dim_linear(p1, p2, side, distance, draft, label=None, tolerance=None, label_offset_x=0.0)`
 
 `ExtensionLine` wrapper with named placement side instead of raw signed offset.
 
@@ -42,7 +45,72 @@ dim = dim_linear((-20, -10, 0), (20, -10, 0), "below", 8, draft, label="40")
 `side` accepts `"above"` / `"below"` / `"left"` / `"right"` or an explicit world-direction vector.
 The correct `offset` sign is computed from the path direction's right-hand normal — no guessing.
 
-Returns a `DimResult(shape, label_str, measured_length)`.
+`label_offset_x` shifts the label along the dim line (mm, signed). Use it to move the label away
+from a crossing centreline without changing the dim position or geometry. Positive shifts toward p2.
+
+```python
+# Label crosses bore centreline at x=0 — shift it right by 15 mm
+dim = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="Ø5.0 H8", label_offset_x=15)
+```
+
+Returns a `DimResult(shape, label_str, measured_length, dim_level_y, label_bbox)`.
+`label_bbox` is the precise text extent `(min_x, min_y, max_x, max_y)` — used by `lint_drawing`
+and `place_labels` for centreline-overlap detection.
+
+---
+
+### `place_dims(specs, draft, base_distance=8.0, tier_spacing=None)`
+
+Build a stack of parallel dims with automatically assigned offsets. No need to compute `distance` manually.
+
+```python
+dims = place_dims([
+    ((-30, 0, 0), (30, 0, 0), "above", "60"),   # full width  → tier 0 (innermost)
+    ((-10, 0, 0), (10, 0, 0), "above", "20"),   # overlaps    → tier 1
+    (( 15, 0, 0), (30, 0, 0), "above", "15"),   # non-overlap → tier 0 (shares with first)
+], draft)
+```
+
+Specs are `(p1, p2, side, label)` or `(p1, p2, side, label, tolerance)` — no `distance`.
+Dims whose X/Y spans overlap are placed on successive tiers; non-overlapping dims share a tier.
+**Order matters:** specs listed first are placed on lower (inner) tiers.
+
+`tier_spacing` defaults to `draft.font_size * 3 + draft.arrow_length`.
+
+---
+
+### `place_labels(specs, draft, centerlines, gap=1.0)`
+
+Like `place_dims` but also auto-shifts each label to clear any crossing vertical centreline.
+
+```python
+bore_cl = centerline((0, -30, 0), (0, 30, 0))   # vertical centreline at x=0
+
+dims = place_labels([
+    ((-10, 0, 0), (10, 0, 0), "above", 8, "Ø5.0 H8"),
+    ((-20, 0, 0), (20, 0, 0), "above", 18, "40"),
+], draft, centerlines=[bore_cl])
+```
+
+Specs are `(p1, p2, side, distance, label)` or `(p1, p2, side, distance, label, tolerance)`.
+For each dim whose label would cross a centreline, the minimum left/right shift is computed
+automatically. Multiple crossing centrelines are handled in one pass.
+
+---
+
+### `centerline(p1, p2)` / `CenterlineResult`
+
+Thin Edge compound representing a centreline, returned as a `CenterlineResult`.
+
+```python
+bore_cl = centerline((cx, -50, 0), (cx, 50, 0))   # vertical through bore axis
+```
+
+Pass `CenterlineResult` objects to `place_labels(..., centerlines=[bore_cl])` for auto-avoidance,
+or pass them to `lint_drawing([...] + [bore_cl])` to get `label_centerline_overlap` warnings.
+
+When working with the MCP server, register centrelines with `register_centerline(shape, name)` so
+`lint_drawing()` in session mode can also check them.
 
 ---
 
@@ -82,14 +150,19 @@ axes = view_axes((0, 0, -100), (0, 1, 0), (0, 0, 0))
 
 ### `lint_drawing(items, part_bbox=None)`
 
-Structural checks on a list of `DimResult` / `LeaderResult` objects:
+Structural checks on a list of `DimResult` / `LeaderResult` / `CenterlineResult` objects:
 
-- Label numeric value differs from measured path length by >0.5% (likely axis swap)
-- Dim bbox overlaps part outline by >10% (dim placed inside the view)
-- Leader elbow point inside label bbox (line strikes through text)
+| Check | Trigger |
+|---|---|
+| `label_vs_measured` | Label value differs from measured path length by >0.5% — likely axis swap |
+| `annotation_overlap` | Two annotations overlap by >0.5 mm in both axes at the same Y level |
+| `label_centerline_overlap` | Dim label bbox crosses a `CenterlineResult` — use `label_offset_x` or `place_labels` |
+| `dim_inside_part` | Dim bbox overlaps part outline by >10% — dim is inside the view |
+| `leader_line_through_text` | Leader elbow point inside label bbox — line strikes through text |
 
 ```python
-issues = lint_drawing([dim1, dim2, lea1])
+bore_cl = centerline((0, -30, 0), (0, 30, 0))
+issues = lint_drawing([dim1, dim2, lea1, bore_cl])
 for issue in issues:
     print(issue.severity, issue.message)
 ```

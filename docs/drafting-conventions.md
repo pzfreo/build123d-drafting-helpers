@@ -83,11 +83,15 @@ Route `lines` and `text` to separate SVG layers, both with `fill_color` set.
 | If you want… | Use |
 |---|---|
 | A linear dim outside a view | `dim_linear(p1, p2, side="below", distance=6, draft, label="40")` |
+| Stack dims without computing offsets | `place_dims(specs, draft)` |
+| Stack dims and clear centreline crossings | `place_labels(specs, draft, centerlines=[cl])` |
+| Shift a single label past a centreline | `dim_linear(..., label_offset_x=15)` |
 | A diameter / hole callout | `leader(tip, elbow, label, draft)` |
 | A dim where the label might overflow | `safe_dim_line(path, label, draft)` |
+| A centreline to use with lint / place_labels | `centerline(p1, p2)` |
 | ISO 1302 surface-finish symbol | `surface_finish_mark(ra_value, position, draft=draft)` |
 | ISO title block | `iso_title_block(part_name, drawing_number, ...)` |
-| Check label-vs-measured / line-through-text | `lint_drawing([dim1, dim2, lea1])` |
+| Check all annotation quality issues | `lint_drawing([dim1, dim2, lea1, cl])` |
 | Know which world axis maps where on the page | `view_axes(viewport_origin, viewport_up, look_at)` |
 
 ---
@@ -103,7 +107,32 @@ Catching problems at step 2 is cheaper than re-rendering and re-exporting.
 
 ---
 
-## 7. `annotate()` label limitation
+## 7. Centreline-label collision
+
+Diameter and bore dimensions placed inline often have the dim line crossing a centreline at the label midpoint — the label text ends up on top of the centreline.
+
+**Detection:** pass `CenterlineResult` objects into `lint_drawing()`. The `label_centerline_overlap` check uses the precise label bbox (not the full annotation bbox) so false positives from extension lines are avoided.
+
+**Fix options, in order of preference:**
+
+1. `place_labels(specs, draft, centerlines=[cl])` — auto-computes and applies the minimum shift.
+2. `dim_linear(..., label_offset_x=15)` — manual shift; positive = toward p2, negative = toward p1.
+3. Use a `leader()` instead — a leader always places its text to the side of the tip, never across it.
+4. Increase `distance` so the dim line clears the centreline region entirely.
+
+```python
+from build123d_drafting import centerline, place_labels, lint_drawing
+
+bore_cl = centerline((0, -50, 0), (0, 50, 0))
+dims = place_labels([
+    ((-10, 0, 0), (10, 0, 0), "above", 8, "Ø5.0 H8"),
+], draft, centerlines=[bore_cl])
+issues = lint_drawing(dims + [bore_cl])   # should be empty
+```
+
+---
+
+## 8. `annotate()` label limitation
 
 Vanilla `build123d.ExtensionLine` does not expose the constructor label string after construction — `.label` is always `''`. As a result, `annotate(el, "width")` auto-derives a label from the measured dimension length rather than from whatever custom label you passed to the `ExtensionLine` constructor.
 
