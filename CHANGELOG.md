@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.2 — 2026-05-20
+
+### Bug fixes
+
+- **`leader()` shelf no longer strikes through label text** (#4): the horizontal shelf was sized `gap + text_w + gap`, making the line extend through the full width of the label bounding box. Fixed to `shelf_len = gap` — a short stub ending exactly where the text starts. Regression tests added for both right-going and left-going leaders.
+
+---
+
 ## v0.1.1 — 2026-05-19
 
 Bug fix, two new helpers, and a drafting-conventions reference doc.
