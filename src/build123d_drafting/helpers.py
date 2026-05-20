@@ -69,6 +69,18 @@ class DimResult:
     shape: Compound
     label_str: str
     measured_length: float
+    dim_level_y: float | None = None  # Y coord of the dim line (for stacking checks)
+    label_bbox: tuple[float, float, float, float] | None = None  # (min_x, min_y, max_x, max_y)
+
+    def bbox(self):
+        return self.shape.bounding_box()
+
+
+@dataclass
+class CenterlineResult:
+    """Returned by centerline()."""
+    shape: Compound
+    label_str: str = ""
 
     def bbox(self):
         return self.shape.bounding_box()
@@ -172,6 +184,7 @@ def dim_linear(
     draft: Draft,
     label: str | None = None,
     tolerance: float | tuple[float, float] | None = None,
+    label_offset_x: float = 0.0,
 ) -> DimResult:
     """ExtensionLine wrapper with named placement side.
 
@@ -183,25 +196,78 @@ def dim_linear(
         draft:  Draft config.
         label:  override label string; if None the measured length is formatted.
         tolerance: symmetric float or (lower, upper) pair appended to the label.
+        label_offset_x: signed distance (mm) to shift the label along the dim line
+            away from the midpoint. Positive shifts toward p2; negative toward p1.
+            When 0.0 (default), behaviour is unchanged.
 
     Returns:
-        DimResult with .shape (the Compound), .label_str, and .measured_length.
+        DimResult with .shape (the Compound), .label_str, .measured_length,
+        and .label_bbox (4-tuple min_x, min_y, max_x, max_y).
     """
     toward = _SIDE_VECTORS[side] if isinstance(side, str) else tuple(side)
     sign = _offset_sign(p1, p2, toward)
     offset = sign * abs(distance)
 
+    measured_label = label  # what we pass to ExtensionLine for its built-in text
+    if label_offset_x != 0.0:
+        measured_label = ""  # suppress built-in label; we'll place our own Text
+
     shape = ExtensionLine(
         border=[p1, p2],
         offset=offset,
         draft=draft,
-        label=label,
+        label=measured_label,
         tolerance=tolerance,
         mode=Mode.PRIVATE,
     )
     measured = shape.dimension  # set by ExtensionLine: length of the border path
     label_str = label if label is not None else _format_label(measured, draft, tolerance)
-    return DimResult(shape=shape, label_str=label_str, measured_length=measured)
+
+    bb = shape.bounding_box()
+    dim_level_y = bb.max.Y if abs(bb.max.Y) >= abs(bb.min.Y) else bb.min.Y
+
+    # Compute the label position
+    midpoint_x = (p1[0] + p2[0]) / 2.0
+    label_x = midpoint_x + label_offset_x
+
+    # Probe text size for label_bbox
+    probe = Text(
+        txt=label_str,
+        font_size=draft.font_size,
+        font=draft.font,
+        align=Align.CENTER,
+        mode=Mode.PRIVATE,
+    )
+    text_bb = probe.bounding_box()
+    half_w = text_bb.size.X / 2.0
+    half_h = text_bb.size.Y / 2.0
+    label_bbox_tuple = (
+        label_x - half_w,
+        dim_level_y - half_h,
+        label_x + half_w,
+        dim_level_y + half_h,
+    )
+
+    if label_offset_x != 0.0:
+        # Place explicit Text at the shifted position
+        text_shape = Text(
+            txt=label_str,
+            font_size=draft.font_size,
+            font=draft.font,
+            align=(Align.CENTER, Align.CENTER),
+            mode=Mode.PRIVATE,
+        ).moved(Location(Vector(label_x, dim_level_y, 0.0)))
+        final_shape = Compound(children=[shape, text_shape])
+    else:
+        final_shape = shape
+
+    return DimResult(
+        shape=final_shape,
+        label_str=label_str,
+        measured_length=measured,
+        dim_level_y=dim_level_y,
+        label_bbox=label_bbox_tuple,
+    )
 
 
 def _format_label(
@@ -220,6 +286,30 @@ def _format_label(
     lo = f"{round(tolerance[0], prec):.{prec}f}"
     hi = f"{round(tolerance[1], prec):.{prec}f}"
     return f"{s} +{hi} -{lo}"
+
+
+# ---------------------------------------------------------------------------
+# centerline
+# ---------------------------------------------------------------------------
+
+def centerline(
+    p1: tuple,
+    p2: tuple,
+    draft: Draft | None = None,  # noqa: ARG001 — reserved for future dash pattern config
+) -> CenterlineResult:
+    """Create a centerline between two points.
+
+    Args:
+        p1, p2: endpoints of the centerline (3-tuple or 2-tuple).
+        draft:  Draft config (reserved; not yet used).
+
+    Returns:
+        CenterlineResult with .shape (Compound wrapping an Edge).
+    """
+    v1 = Vector(p1[0], p1[1], p1[2] if len(p1) > 2 else 0.0)
+    v2 = Vector(p2[0], p2[1], p2[2] if len(p2) > 2 else 0.0)
+    edge = Edge.make_line(v1, v2)
+    return CenterlineResult(shape=Compound(children=[edge]))
 
 
 # ---------------------------------------------------------------------------
@@ -441,17 +531,163 @@ def view_axes(
 
 
 # ---------------------------------------------------------------------------
+# place_dims
+# ---------------------------------------------------------------------------
+
+def place_dims(
+    specs: list[tuple],
+    draft: "Draft",
+    base_distance: float = 8.0,
+    tier_spacing: float | None = None,
+) -> list["DimResult"]:
+    """Build a stack of dims with automatically assigned offsets.
+
+    Takes specs *without* a distance argument and assigns offsets so that dims
+    spanning overlapping ranges are placed on successive tiers. Dims with
+    non-overlapping ranges share a tier at the same offset.
+
+    Ordering matters: specs listed first get lower tiers (closer to the part).
+
+    Args:
+        specs:         list of (p1, p2, side, label) or
+                       (p1, p2, side, label, tolerance) tuples.
+        draft:         Draft config.
+        base_distance: offset for the innermost tier (mm, default 8.0).
+        tier_spacing:  distance between successive tiers (mm).
+                       Defaults to draft.font_size * 3 + draft.arrow_length.
+
+    Returns:
+        list of DimResult, same length and order as specs.
+    """
+    if tier_spacing is None:
+        tier_spacing = draft.font_size * 3.0 + draft.arrow_length
+
+    # tier_occupancy[i] = list of (range_min, range_max) placed on tier i
+    tier_occupancy: list[list[tuple[float, float]]] = []
+
+    results = []
+    for spec in specs:
+        p1, p2, side = spec[0], spec[1], spec[2]
+        label = spec[3]
+        tolerance = spec[4] if len(spec) > 4 else None
+
+        # Primary span: X for above/below dims, Y for left/right dims.
+        toward = _SIDE_VECTORS[side] if isinstance(side, str) else tuple(side)
+        use_x = abs(toward[1]) >= abs(toward[0])  # above/below stacks in Y, spans in X
+        span = (
+            (min(p1[0], p2[0]), max(p1[0], p2[0])) if use_x
+            else (min(p1[1], p2[1]), max(p1[1], p2[1]))
+        )
+
+        # First tier whose existing spans don't overlap this one.
+        assigned = None
+        for t, occupied in enumerate(tier_occupancy):
+            if all(span[1] <= s[0] or span[0] >= s[1] for s in occupied):
+                assigned = t
+                occupied.append(span)
+                break
+        if assigned is None:
+            assigned = len(tier_occupancy)
+            tier_occupancy.append([span])
+
+        offset = base_distance + assigned * tier_spacing
+        results.append(
+            dim_linear(p1, p2, side, offset, draft, label=label, tolerance=tolerance)
+        )
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# place_labels
+# ---------------------------------------------------------------------------
+
+def _compute_label_offset_x(
+    dim: "DimResult",
+    centerlines: list,
+    gap: float,
+) -> float:
+    """Return the cumulative label_offset_x needed to clear all crossing vertical centerlines."""
+    if dim.label_bbox is None:
+        return 0.0
+    lmin_x, _lmin_y, lmax_x, _lmax_y = dim.label_bbox
+    label_cx = (lmin_x + lmax_x) / 2.0
+    half_w = (lmax_x - lmin_x) / 2.0
+    total = 0.0
+    for cl in centerlines:
+        if not isinstance(cl, CenterlineResult):
+            continue
+        try:
+            cl_bb = cl.bbox()
+        except Exception:
+            continue
+        if cl_bb.max.X - cl_bb.min.X >= 0.1:
+            continue  # not a vertical centerline
+        cl_x = (cl_bb.min.X + cl_bb.max.X) / 2.0
+        eff_lmin = lmin_x + total
+        eff_lmax = lmax_x + total
+        if not (eff_lmin < cl_x < eff_lmax):
+            continue
+        eff_cx = label_cx + total
+        shift_right = cl_x + half_w + gap - eff_cx
+        shift_left = cl_x - half_w - gap - eff_cx
+        total += shift_right if abs(shift_right) <= abs(shift_left) else shift_left
+    return total
+
+
+def place_labels(
+    specs: list[tuple],
+    draft: "Draft",
+    centerlines: list,
+    gap: float = 1.0,
+) -> list["DimResult"]:
+    """Build dims from specs, auto-shifting labels to clear vertical centerlines.
+
+    For each spec, builds the dim at label_offset_x=0, checks whether any
+    vertical centerline crosses the label bbox, and if so shifts the label by
+    the minimum amount left or right to clear it (choosing the shorter direction).
+    Multiple crossing centerlines are handled by accumulating offsets in order.
+
+    Only handles vertical centerlines (zero width). Horizontal centerlines and
+    non-DimResult specs are passed through unchanged.
+
+    Args:
+        specs: list of (p1, p2, side, distance, label) or
+               (p1, p2, side, distance, label, tolerance) tuples.
+        draft: Draft config.
+        centerlines: list of CenterlineResult objects to avoid.
+        gap: clearance between label edge and centerline (mm, default 1.0).
+
+    Returns:
+        list of DimResult, same length as specs.
+    """
+    results = []
+    for spec in specs:
+        p1, p2, side, distance, label = spec[:5]
+        tolerance = spec[5] if len(spec) > 5 else None
+        dim = dim_linear(p1, p2, side, distance, draft, label=label,
+                         tolerance=tolerance)
+        offset_x = _compute_label_offset_x(dim, centerlines, gap)
+        if offset_x != 0.0:
+            dim = dim_linear(p1, p2, side, distance, draft, label=label,
+                             tolerance=tolerance, label_offset_x=offset_x)
+        results.append(dim)
+    return results
+
+
+# ---------------------------------------------------------------------------
 # lint_drawing
 # ---------------------------------------------------------------------------
 
 def lint_drawing(
-    items: list[DimResult | LeaderResult],
+    items: list[DimResult | LeaderResult | CenterlineResult],
     part_bbox=None,
 ) -> list[LintIssue]:
     """Structural checks on a composed drawing annotation list.
 
     Args:
-        items:     list of DimResult / LeaderResult returned by this module's helpers.
+        items:     list of DimResult / LeaderResult / CenterlineResult returned by
+                   this module's helpers.
         part_bbox: optional BoundBox of the projected part outline; if provided,
                    dims whose bbox overlaps the part outline by >10% are flagged.
 
@@ -466,7 +702,116 @@ def lint_drawing(
         elif isinstance(item, LeaderResult):
             _lint_leader(item, issues)
 
+    # Pairwise overlap check: any two annotations whose bboxes intersect by
+    # more than 0.5 mm in both axes are likely visually colliding.
+    # Use dim_level_y to skip stacked dims that share an X range but are
+    # at different Y levels (their extension lines overlap in bbox but not visually).
+    for i, item_a in enumerate(items):
+        for item_b in items[i + 1:]:
+            try:
+                is_cl_a = isinstance(item_a, CenterlineResult)
+                is_cl_b = isinstance(item_b, CenterlineResult)
+
+                # Skip centerline-vs-centerline pairs
+                if is_cl_a and is_cl_b:
+                    continue
+
+                # Centerline-vs-dim: use dim's label_bbox for precision
+                if is_cl_a or is_cl_b:
+                    dim_item = item_b if is_cl_a else item_a
+                    cl_item = item_a if is_cl_a else item_b
+                    _lint_centerline_dim_overlap(dim_item, cl_item, issues)
+                    continue
+
+                # Normal pairwise overlap (dim/leader vs dim/leader)
+                level_a = getattr(item_a, "dim_level_y", None)
+                level_b = getattr(item_b, "dim_level_y", None)
+                if (level_a is not None and level_b is not None
+                        and abs(level_a - level_b) > 3.0):
+                    continue  # different Y levels → stacked, not colliding
+                ba = item_a.bbox()
+                bb = item_b.bbox()
+                ox = max(0.0, min(ba.max.X, bb.max.X) - max(ba.min.X, bb.min.X))
+                oy = max(0.0, min(ba.max.Y, bb.max.Y) - max(ba.min.Y, bb.min.Y))
+                if ox > 0.5 and oy > 0.5:
+                    la = getattr(item_a, "label_str", "?")
+                    lb = getattr(item_b, "label_str", "?")
+                    issues.append(LintIssue(
+                        severity="warning",
+                        message=(
+                            f"annotations '{la}' and '{lb}' overlap by "
+                            f"{ox:.1f}×{oy:.1f} mm — increase offset or spacing"
+                        ),
+                    ))
+            except Exception:
+                pass
+
     return issues
+
+
+def _lint_centerline_dim_overlap(
+    dim_item: DimResult | LeaderResult,
+    cl_item: CenterlineResult,
+    issues: list[LintIssue],
+) -> None:
+    """Flag label-vs-centerline overlap for a (dim, centerline) pair.
+
+    A centerline is typically a zero-width (vertical) or zero-height (horizontal)
+    edge, so we use point-in-range checks rather than standard bbox overlap.
+    The label is considered to overlap the centerline if the centerline passes
+    through the label's bounding box in both axes with > 0.5 mm penetration.
+    """
+    try:
+        cl_bb = cl_item.bbox()
+
+        # Use label_bbox when available (DimResult); fall back to full bbox
+        label_bbox = getattr(dim_item, "label_bbox", None)
+        if label_bbox is not None:
+            lmin_x, lmin_y, lmax_x, lmax_y = label_bbox
+        else:
+            db = dim_item.bbox()
+            lmin_x, lmin_y = db.min.X, db.min.Y
+            lmax_x, lmax_y = db.max.X, db.max.Y
+
+        # For a zero-width vertical centerline (max.X == min.X), the "overlap"
+        # in X is whether the centerline's X coordinate falls inside the label
+        # range.  We synthesise an overlap measure by comparing how far inside
+        # the label the centerline sits.
+        cl_w = cl_bb.max.X - cl_bb.min.X
+        cl_h = cl_bb.max.Y - cl_bb.min.Y
+
+        if cl_w < 0.1:
+            # Vertical (or near-vertical) centerline — use X penetration depth
+            cl_x = (cl_bb.min.X + cl_bb.max.X) / 2.0
+            if lmin_x < cl_x < lmax_x:
+                ox = min(cl_x - lmin_x, lmax_x - cl_x)
+            else:
+                ox = 0.0
+        else:
+            ox = max(0.0, min(lmax_x, cl_bb.max.X) - max(lmin_x, cl_bb.min.X))
+
+        if cl_h < 0.1:
+            # Horizontal (or near-horizontal) centerline — use Y penetration depth
+            cl_y = (cl_bb.min.Y + cl_bb.max.Y) / 2.0
+            if lmin_y < cl_y < lmax_y:
+                oy = min(cl_y - lmin_y, lmax_y - cl_y)
+            else:
+                oy = 0.0
+        else:
+            oy = max(0.0, min(lmax_y, cl_bb.max.Y) - max(lmin_y, cl_bb.min.Y))
+
+        if ox > 0.5 and oy > 0.5:
+            dim_label = getattr(dim_item, "label_str", "?")
+            issues.append(LintIssue(
+                severity="warning",
+                message=(
+                    f"label '{dim_label}' overlaps centerline by "
+                    f"{ox:.1f}×{oy:.1f} mm — use label_offset_x to shift "
+                    f"or increase dim offset to clear the centerline"
+                ),
+            ))
+    except Exception:
+        pass
 
 
 def _lint_dim(item: DimResult, part_bbox, issues: list[LintIssue]) -> None:

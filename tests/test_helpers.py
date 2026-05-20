@@ -3,9 +3,11 @@ import pytest
 from build123d import Draft, Compound, Edge, Vector
 
 from build123d_drafting import (
-    DimResult, LeaderResult, LintIssue, TitleBlockResult, SurfaceFinishResult,
-    dim_linear, iso_title_block, leader, lint_drawing, safe_dim_line,
-    surface_finish_mark, view_axes,
+    CenterlineResult, DimResult, LeaderResult, LintIssue, TitleBlockResult,
+    SurfaceFinishResult,
+    centerline, dim_linear, iso_title_block, leader, lint_drawing,
+    place_dims, place_labels,
+    safe_dim_line, surface_finish_mark, view_axes,
 )
 
 
@@ -68,6 +70,169 @@ class TestDimLinear:
     def test_tolerance_accepted(self, draft):
         res = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, tolerance=0.1)
         assert res.shape is not None
+
+    def test_label_offset_x_shifts_label(self, draft):
+        """label_offset_x=10 should place label_bbox min_x > midpoint_x."""
+        res = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft,
+                         label="Ø5.0 H8", label_offset_x=10)
+        assert res.label_bbox is not None
+        midpoint_x = 0.0  # midpoint of -10 to 10
+        lmin_x, _lmin_y, _lmax_x, _lmax_y = res.label_bbox
+        assert lmin_x > midpoint_x, (
+            f"label_bbox min_x={lmin_x:.2f} should be > midpoint {midpoint_x}"
+        )
+
+    def test_centerline_overlap_flagged(self, draft):
+        """Vertical centerline through x=0 should collide with dim label at midpoint."""
+        dim = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="Ø5.0 H8")
+        cl = centerline((0, 0, 0), (0, 20, 0))
+        issues = lint_drawing([dim, cl])
+        assert any("centerline" in i.message.lower() for i in issues), (
+            f"Expected label_centerline_overlap; got: {[i.message for i in issues]}"
+        )
+
+    def test_centerline_no_overlap_with_offset(self, draft):
+        """With label_offset_x=15 the label clears the centerline at x=0."""
+        dim = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft,
+                         label="Ø5.0 H8", label_offset_x=15)
+        cl = centerline((0, 0, 0), (0, 20, 0))
+        issues = lint_drawing([dim, cl])
+        centerline_issues = [i for i in issues if "centerline" in i.message.lower()]
+        assert centerline_issues == [], (
+            f"Unexpected centerline overlap: {[i.message for i in centerline_issues]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# place_dims
+# ---------------------------------------------------------------------------
+
+class TestPlaceDims:
+    def test_single_dim_gets_base_distance(self, draft):
+        results = place_dims([((-10, 0, 0), (10, 0, 0), "above", "20")], draft,
+                             base_distance=8.0)
+        assert len(results) == 1
+        bb = results[0].shape.bounding_box()
+        # Dim line Y should be close to base_distance (plus extension stub)
+        assert bb.max.Y > 8.0
+
+    def test_overlapping_dims_on_different_tiers(self, draft):
+        # Both dims span the full x range — must be on different tiers.
+        specs = [
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+        ]
+        results = place_dims(specs, draft, base_distance=8.0)
+        bb0 = results[0].shape.bounding_box()
+        bb1 = results[1].shape.bounding_box()
+        assert bb1.max.Y > bb0.max.Y + 3.0, "Second dim should be on a higher tier"
+
+    def test_non_overlapping_dims_share_tier(self, draft):
+        # Dims on completely separate X segments share tier 0.
+        specs = [
+            ((-30, 0, 0), (-10, 0, 0), "above", "20"),
+            (( 10, 0, 0), ( 30, 0, 0), "above", "20"),
+        ]
+        results = place_dims(specs, draft, base_distance=8.0)
+        bb0 = results[0].shape.bounding_box()
+        bb1 = results[1].shape.bounding_box()
+        assert abs(bb0.max.Y - bb1.max.Y) < 1.0, "Non-overlapping dims should share a tier"
+
+    def test_three_overlapping_dims_three_tiers(self, draft):
+        specs = [
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+        ]
+        results = place_dims(specs, draft, base_distance=8.0)
+        max_ys = sorted(r.shape.bounding_box().max.Y for r in results)
+        assert max_ys[1] > max_ys[0] + 3.0
+        assert max_ys[2] > max_ys[1] + 3.0
+
+    def test_stacked_result_passes_lint(self, draft):
+        specs = [
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+        ]
+        results = place_dims(specs, draft, base_distance=8.0)
+        issues = lint_drawing(results)
+        overlap = [i for i in issues if "overlap" in i.message.lower()]
+        assert overlap == [], f"place_dims output should not overlap: {[i.message for i in overlap]}"
+
+    def test_tolerance_accepted(self, draft):
+        specs = [((-10, 0, 0), (10, 0, 0), "above", "20", 0.1)]
+        results = place_dims(specs, draft)
+        assert results[0].label_str.startswith("20")
+
+    def test_returns_dim_results(self, draft):
+        specs = [
+            ((-10, 0, 0), (10, 0, 0), "above", "20"),
+            (( 10, 0, 0), (30, 0, 0), "above", "20"),
+        ]
+        results = place_dims(specs, draft)
+        assert all(isinstance(r, DimResult) for r in results)
+
+
+# ---------------------------------------------------------------------------
+# place_labels
+# ---------------------------------------------------------------------------
+
+class TestPlaceLabels:
+    def test_no_centerlines_unchanged(self, draft):
+        specs = [((-10, 0, 0), (10, 0, 0), "above", 8, "20")]
+        results = place_labels(specs, draft, centerlines=[])
+        assert len(results) == 1
+        assert isinstance(results[0], DimResult)
+        assert results[0].label_bbox is not None
+
+    def test_clears_vertical_centerline(self, draft):
+        # Centerline at x=0 crosses the label midpoint; label should shift clear.
+        specs = [((-10, 0, 0), (10, 0, 0), "above", 8, "Ø5.0 H8")]
+        cl = centerline((0, 0, 0), (0, 20, 0))
+        results = place_labels(specs, draft, centerlines=[cl])
+        dim = results[0]
+        assert dim.label_bbox is not None
+        lmin_x, _, lmax_x, _ = dim.label_bbox
+        # Centerline at x=0 must not be inside the label bbox
+        assert not (lmin_x < 0.0 < lmax_x), (
+            f"Label bbox {lmin_x:.2f}..{lmax_x:.2f} still crosses centerline at x=0"
+        )
+
+    def test_cleared_dim_passes_lint(self, draft):
+        specs = [((-10, 0, 0), (10, 0, 0), "above", 8, "Ø5.0 H8")]
+        cl = centerline((0, 0, 0), (0, 20, 0))
+        results = place_labels(specs, draft, centerlines=[cl])
+        issues = lint_drawing(results + [cl])
+        centerline_issues = [i for i in issues if "centerline" in i.message.lower()]
+        assert centerline_issues == [], f"Still overlapping: {[i.message for i in centerline_issues]}"
+
+    def test_no_shift_when_no_crossing(self, draft):
+        # Centerline at x=50 is far from the label near x=0; no shift expected.
+        specs = [((-10, 0, 0), (10, 0, 0), "above", 8, "20")]
+        cl = centerline((50, 0, 0), (50, 20, 0))
+        results = place_labels(specs, draft, centerlines=[cl])
+        original = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        # label_bbox should be approximately the same as an unshifted dim
+        assert results[0].label_bbox is not None
+        assert original.label_bbox is not None
+        assert abs(results[0].label_bbox[0] - original.label_bbox[0]) < 0.5
+
+    def test_multiple_specs(self, draft):
+        cl = centerline((0, 0, 0), (0, 30, 0))
+        specs = [
+            ((-10, 0, 0), (10, 0, 0), "above", 8, "20"),
+            ((-15, 0, 0), (15, 0, 0), "above", 18, "30"),
+        ]
+        results = place_labels(specs, draft, centerlines=[cl])
+        assert len(results) == 2
+        for dim in results:
+            lmin_x, _, lmax_x, _ = dim.label_bbox
+            assert not (lmin_x < 0.0 < lmax_x), "Label still crosses centerline"
+
+    def test_tolerance_spec_accepted(self, draft):
+        specs = [((-10, 0, 0), (10, 0, 0), "above", 8, "20", 0.1)]
+        results = place_labels(specs, draft, centerlines=[])
+        assert results[0].label_str.startswith("20")
 
 
 # ---------------------------------------------------------------------------
@@ -248,11 +413,26 @@ class TestLintDrawing:
         assert leader_issues == []
 
     def test_mixed_items_checked(self, draft):
+        # Dim above a segment; leader placed well to the right — no spatial overlap.
         dim = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
-        lea = leader((0, 0, 0), (20, 10, 0), "Ra 1.6", draft)
+        lea = leader((50, 0, 0), (70, 10, 0), "Ra 1.6", draft)
         issues = lint_drawing([dim, lea])
-        # No issues expected for clean inputs
         assert issues == []
+
+    def test_overlapping_dims_flagged(self, draft):
+        # Two identical dims occupy the same space — should be flagged.
+        a = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        b = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        issues = lint_drawing([a, b])
+        assert any("overlap" in i.message.lower() for i in issues)
+
+    def test_stacked_dims_not_flagged(self, draft):
+        # Stacked at distinct offsets — must not be flagged as overlapping.
+        inner = dim_linear((-10, 0, 0), (10, 0, 0), "above",  8, draft, label="20")
+        outer = dim_linear((-10, 0, 0), (10, 0, 0), "above", 18, draft, label="20")
+        issues = lint_drawing([inner, outer])
+        overlap_issues = [i for i in issues if "overlap" in i.message.lower()]
+        assert overlap_issues == []
 
 
 # ---------------------------------------------------------------------------
