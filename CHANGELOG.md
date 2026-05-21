@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1.4 — 2026-05-21
+
+### Bug fixes
+
+- **`dim_linear` short-path crash (#124)**: no longer raises `ValueError` when the label is wider than the dimension path — falls back to external `Text` placement automatically.
+
+### Features
+
+- **`label_offset_x` on `dim_linear`**: shifts the label along the dim line (signed mm) to clear centreline crossings without changing the dimension geometry.
+- **`CenterlineResult` / `centerline(p1, p2)`**: thin Edge compound for centrelines; accepted by `lint_drawing` and `place_labels` for collision detection.
+- **`place_dims(specs, draft, base_distance, tier_spacing)`**: greedy tier assignment — stack parallel dims without manually computing offsets. Non-overlapping dims share a tier; overlapping dims are pushed to successive tiers.
+- **`place_labels(specs, draft, centerlines, gap)`**: like `place_dims` but also auto-shifts each label the minimum distance to clear crossing vertical centrelines in one pass.
+
+---
+
 ## v0.1.3 — 2026-05-20
 
 ### Features
