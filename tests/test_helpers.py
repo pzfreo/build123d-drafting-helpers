@@ -102,6 +102,17 @@ class TestDimLinear:
             f"Unexpected centerline overlap: {[i.message for i in centerline_issues]}"
         )
 
+    def test_short_path_does_not_crash(self, draft):
+        # 4 mm path — would crash vanilla ExtensionLine
+        res = dim_linear((-2, 0, 0), (2, 0, 0), "above", 5, draft, label="4")
+        assert isinstance(res, DimResult)
+        assert res.shape is not None
+        assert res.label_str == "4"
+
+    def test_short_path_label_bbox_set(self, draft):
+        res = dim_linear((-2, 0, 0), (2, 0, 0), "above", 5, draft, label="4")
+        assert res.label_bbox is not None
+
 
 # ---------------------------------------------------------------------------
 # place_dims

@@ -212,14 +212,23 @@ def dim_linear(
     if label_offset_x != 0.0:
         measured_label = ""  # suppress built-in label; we'll place our own Text
 
-    shape = ExtensionLine(
-        border=[p1, p2],
-        offset=offset,
-        draft=draft,
-        label=measured_label,
-        tolerance=tolerance,
-        mode=Mode.PRIVATE,
-    )
+    _force_external = False
+    try:
+        shape = ExtensionLine(
+            border=[p1, p2],
+            offset=offset,
+            draft=draft,
+            label=measured_label,
+            tolerance=tolerance,
+            mode=Mode.PRIVATE,
+        )
+    except ValueError:
+        # Path too short for inline label — place label externally (outside arrows)
+        shape = ExtensionLine(border=[p1, p2], offset=offset, draft=draft,
+                              label="", tolerance=None, mode=Mode.PRIVATE)
+        label_offset_x = label_offset_x or 0.0  # ensure external text path runs below
+        _force_external = True
+
     measured = shape.dimension  # set by ExtensionLine: length of the border path
     label_str = label if label is not None else _format_label(measured, draft, tolerance)
 
@@ -248,7 +257,7 @@ def dim_linear(
         dim_level_y + half_h,
     )
 
-    if label_offset_x != 0.0:
+    if label_offset_x != 0.0 or _force_external:
         # Place explicit Text at the shifted position
         text_shape = Text(
             txt=label_str,
