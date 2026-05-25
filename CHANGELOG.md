@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.5 — 2026-05-25
+
+### Bug fixes
+
+- **`dim_linear` short-path fallback corrected (#8)**: v0.1.4's fallback retried `ExtensionLine(label="")` which still crashes. Fixed to use `label=None`, which suppresses the built-in text without triggering the empty-wire code path. Paths shorter than ~5 mm now render correctly with an externally-placed label.
+
+---
+
 ## v0.1.4 — 2026-05-21
 
 ### Bug fixes
