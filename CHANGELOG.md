@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **`leader_offset(tip, direction, length, label, draft)` (#6)**: place a leader's elbow by compass direction (`"N"`, `"NE"`, …, case-insensitive) or numeric angle (degrees CCW from +X) and a distance, instead of absolute page coords. Thin wrapper over `leader()` — useful when the drawing uses a non-1:1 scale and elbow arithmetic gets noisy.
+
+---
+
 ## v0.1.5 — 2026-05-25
 
 ### Bug fixes

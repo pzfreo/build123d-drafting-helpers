@@ -463,6 +463,60 @@ def leader(
     )
 
 
+_COMPASS_ANGLES = {
+    "E":  0.0,
+    "NE": 45.0,
+    "N":  90.0,
+    "NW": 135.0,
+    "W":  180.0,
+    "SW": 225.0,
+    "S":  270.0,
+    "SE": 315.0,
+}
+
+
+def leader_offset(
+    tip: tuple,
+    direction: str | float,
+    length: float,
+    label: str,
+    draft: Draft,
+) -> LeaderResult:
+    """Leader with the elbow placed by direction + distance instead of absolute coords.
+
+    Computes ``elbow = tip + (cos θ, sin θ) * length`` and delegates to ``leader()``.
+    Useful when laying out callouts relative to a feature ("12 mm NW of this point")
+    rather than in absolute page coordinates — especially handy when the drawing
+    uses a non-1:1 scale.
+
+    Args:
+        tip:       arrow point on the part feature (x, y[, z]).
+        direction: compass string ("N", "NE", "E", "SE", "S", "SW", "W", "NW",
+                   case-insensitive) or an angle in degrees CCW from +X
+                   (so 0 = +X, 90 = +Y, matches build123d conventions).
+        length:    distance from tip to elbow, in page mm.
+        label:     annotation text.
+        draft:     Draft config.
+
+    Returns:
+        LeaderResult — same as ``leader()``.
+    """
+    if isinstance(direction, str):
+        key = direction.strip().upper()
+        if key not in _COMPASS_ANGLES:
+            raise ValueError(
+                f"direction {direction!r} not recognised; expected one of "
+                f"{sorted(_COMPASS_ANGLES)} or a numeric angle in degrees"
+            )
+        angle_deg = _COMPASS_ANGLES[key]
+    else:
+        angle_deg = float(direction)
+
+    theta = math.radians(angle_deg)
+    elbow = (tip[0] + math.cos(theta) * length, tip[1] + math.sin(theta) * length)
+    return leader(tip=tip, elbow=elbow, label=label, draft=draft)
+
+
 # ---------------------------------------------------------------------------
 # view_axes — pure Python helpers (no OCC import)
 # ---------------------------------------------------------------------------

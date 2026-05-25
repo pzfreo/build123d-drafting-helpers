@@ -134,6 +134,14 @@ exporter.add_shape(res.text,  layer="text")   # glyphs — fill_color layer
 Returns `LeaderResult(lines, text, label_str, tip, elbow)`. Route `lines` and `text` to
 separate SVG layers, both with `fill_color` set.
 
+`leader_offset(tip, direction, length, label, draft)` is a thin wrapper that places the
+elbow by compass direction (`"N"`, `"NE"`, …) or numeric angle (degrees CCW from +X) and
+a distance, instead of absolute coords — handy when the drawing uses a non-1:1 scale.
+
+```python
+res = leader_offset((x, y), "NW", 12, "⌀6 boss", draft)
+```
+
 ---
 
 ### `view_axes(viewport_origin, viewport_up=(0,1,0), look_at=(0,0,0))`

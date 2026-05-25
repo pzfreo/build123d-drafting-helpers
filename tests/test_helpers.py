@@ -5,7 +5,7 @@ from build123d import Draft, Compound, Edge, Vector
 from build123d_drafting import (
     CenterlineResult, DimResult, LeaderResult, LintIssue, TitleBlockResult,
     SurfaceFinishResult,
-    centerline, dim_linear, iso_title_block, leader, lint_drawing,
+    centerline, dim_linear, iso_title_block, leader, leader_offset, lint_drawing,
     place_dims, place_labels,
     safe_dim_line, surface_finish_mark, view_axes,
 )
@@ -339,6 +339,37 @@ class TestLeader:
             f"lines start at {lb.min.X:.2f} but text ends at {tb.max.X:.2f} "
             f"— shelf passes through label text (left-going)"
         )
+
+
+# ---------------------------------------------------------------------------
+# leader_offset
+# ---------------------------------------------------------------------------
+
+class TestLeaderOffset:
+    def test_compass_string_matches_equivalent_angle(self, draft):
+        # "NE" should produce the same elbow as direction=45.0 → identical geometry
+        a = leader_offset((10, 10), "NE", 12.0, "label", draft)
+        b = leader_offset((10, 10), 45.0, 12.0, "label", draft)
+        assert a.elbow == pytest.approx(b.elbow)
+
+    def test_compass_string_case_insensitive(self, draft):
+        a = leader_offset((0, 0), "ne", 10.0, "x", draft)
+        b = leader_offset((0, 0), "NE", 10.0, "x", draft)
+        assert a.elbow == pytest.approx(b.elbow)
+
+    def test_east_is_positive_x(self, draft):
+        res = leader_offset((0, 0), "E", 10.0, "x", draft)
+        assert res.elbow[0] == pytest.approx(10.0)
+        assert res.elbow[1] == pytest.approx(0.0, abs=1e-9)
+
+    def test_north_is_positive_y(self, draft):
+        res = leader_offset((0, 0), "N", 10.0, "x", draft)
+        assert res.elbow[0] == pytest.approx(0.0, abs=1e-9)
+        assert res.elbow[1] == pytest.approx(10.0)
+
+    def test_unknown_direction_raises(self, draft):
+        with pytest.raises(ValueError):
+            leader_offset((0, 0), "XX", 10.0, "x", draft)
 
 
 # ---------------------------------------------------------------------------
