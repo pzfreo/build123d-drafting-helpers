@@ -223,9 +223,11 @@ def dim_linear(
             mode=Mode.PRIVATE,
         )
     except ValueError:
-        # Path too short for inline label — place label externally (outside arrows)
+        # Path too short for inline label — ExtensionLine with label="" also crashes;
+        # label=None suppresses the built-in text without triggering the empty-wire bug.
+        # Place the label externally via the Text path below.
         shape = ExtensionLine(border=[p1, p2], offset=offset, draft=draft,
-                              label="", tolerance=None, mode=Mode.PRIVATE)
+                              label=None, tolerance=None, mode=Mode.PRIVATE)
         label_offset_x = label_offset_x or 0.0  # ensure external text path runs below
         _force_external = True
 
