@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Bug fixes
+
+- **`surface_finish_mark`**: the Ra value was vertically centred on the horizontal
+  extension line, so the line struck through the digits. It now rests just above
+  the line per ISO 1302.
+
+### Features
+
+- **`add_to_layers(exporter, result, *, line_layer="lines", text_layer="text")`**:
+  routes a result's `.lines` (stroke) and `.text` (fill) onto the correct
+  ExportSVG layers. Prevents the common mistake of adding the combined `.shape`
+  to a single `fill_color` layer, which floods closed loops solid (the GD&T ⌀
+  prefix and modifier ring turn into black discs). Raises `TypeError` for
+  `.shape`-only results (e.g. `DimResult`), which carry no flood-prone loops.
+
 ## v0.1.7 — 2026-05-31
 
 ### Features

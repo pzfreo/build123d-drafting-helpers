@@ -1,4 +1,6 @@
 """Tests for build123d_drafting."""
+import math
+
 import pytest
 from build123d import Draft, Compound, Edge, Vector
 
@@ -6,6 +8,7 @@ from build123d_drafting import (
     CenterlineResult, DatumFeatureResult, DimResult, FeatureControlFrameResult,
     LeaderResult, LintIssue, TitleBlockResult,
     SurfaceFinishResult,
+    add_to_layers,
     centerline, datum_feature, dim_linear, feature_control_frame,
     iso_title_block, leader, leader_offset, lint_drawing,
     place_dims, place_labels,
@@ -599,6 +602,45 @@ class TestSurfaceFinishMark:
         res = surface_finish_mark("Ra 1.6", (5, 5), draft=draft)
         bb = res.bbox()
         assert bb is not None
+
+    def test_ra_value_sits_above_shelf(self, draft):
+        # ISO 1302: the Ra value rests above the horizontal extension line, so
+        # the shelf must not strike through the text. The shelf is at elbow_y.
+        res = surface_finish_mark("Ra 1.6", (0, 0), draft=draft)
+        elbow_y = (2.0 * draft.font_size) * math.sin(math.radians(60.0))
+        assert res.text.bounding_box().min.Y >= elbow_y - 1e-6
+
+
+# ---------------------------------------------------------------------------
+# add_to_layers (SVG routing helper)
+# ---------------------------------------------------------------------------
+
+class _FakeExporter:
+    """Records (shape-kind, layer) for each add_shape call."""
+    def __init__(self):
+        self.layers = []
+
+    def add_shape(self, shape, layer):
+        self.layers.append(layer)
+
+
+class TestAddToLayers:
+    def test_routes_lines_then_text(self, draft):
+        fcf = feature_control_frame("position", 0.5, datums=("A",), draft=draft)
+        exp = _FakeExporter()
+        add_to_layers(exp, fcf, line_layer="L", text_layer="T")
+        assert exp.layers == ["L", "T"]
+
+    def test_default_layer_names(self, draft):
+        res = surface_finish_mark("Ra 1.6", (0, 0), draft=draft)
+        exp = _FakeExporter()
+        add_to_layers(exp, res)
+        assert exp.layers == ["lines", "text"]
+
+    def test_rejects_shape_only_result(self, draft):
+        d = dim_linear((0, 0, 0), (10, 0, 0), "below", 5, draft, label="10")
+        with pytest.raises(TypeError):
+            add_to_layers(_FakeExporter(), d)
 
 
 # ---------------------------------------------------------------------------
