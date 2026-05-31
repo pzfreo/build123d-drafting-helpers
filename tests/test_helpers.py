@@ -683,6 +683,16 @@ class TestFeatureControlFrame:
         res = feature_control_frame("flatness", 0.1, (), draft)
         assert res.datums == ()
 
+    def test_datum_modifier_adds_geometry(self, draft):
+        # A per-datum modifier draws a circled letter beside the datum letter,
+        # adding ring edges and a second text glyph in that compartment.
+        plain = feature_control_frame("position", 0.5, ("A",), draft)
+        modded = feature_control_frame(
+            "position", 0.5, ("A",), draft, datum_modifiers={"A": "M"}
+        )
+        assert len(modded.lines.edges()) > len(plain.lines.edges())
+        assert len(modded.text.faces()) > len(plain.text.faces())
+
 
 # ---------------------------------------------------------------------------
 # datum_feature

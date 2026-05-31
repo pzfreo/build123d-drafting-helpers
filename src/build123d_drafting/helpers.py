@@ -1378,7 +1378,6 @@ def feature_control_frame(
 
     h = draft.font_size
     H = 2.0 * h                       # ISO: frame height = 2 × char height
-    lw = draft.line_width
     pad = 0.6 * h
     datum_modifiers = datum_modifiers or {}
 

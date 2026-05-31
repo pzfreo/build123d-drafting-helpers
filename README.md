@@ -200,6 +200,9 @@ All 14 characteristics are supported: `straightness`, `flatness`, `circularity`,
 `profile_line`, `profile_surface`, `angularity`, `perpendicularity`, `parallelism`, `position`,
 `concentricity`, `symmetry`, `circular_runout`, `total_runout`.
 
+Per-datum material-condition modifiers are available via `datum_modifiers`, e.g.
+`datum_modifiers={"A": "M"}` draws a circled M after datum A's letter.
+
 The frame is built with its bottom-left corner at the origin (height = 2 × font size, per ISO 3098).
 Returns `FeatureControlFrameResult(lines, text, characteristic, tolerance_str, datums, width, height)`.
 Route `lines` and `text` to separate SVG layers, both with `fill_color` set.
