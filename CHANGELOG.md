@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **`feature_control_frame(characteristic, tolerance, datums, draft, diameter=False, modifier=None)`**:
+  ISO 1101 feature control frame. Supports all 14 geometric characteristics (drawn geometrically — the
+  GD&T symbols are absent from CAD-safe fonts), optional ⌀ tolerance-zone prefix, MMC/LMC/projected
+  modifiers, and per-datum modifiers. Returns `FeatureControlFrameResult(lines, text, characteristic,
+  tolerance_str, datums, width, height)` with the usual lines/text layer split. Frame height = 2 ×
+  font size (ISO 3098); bottom-left corner at the origin. Compartments are laid out by explicit
+  arithmetic so symbols never depend on fragile `.center()` lookups.
+- **`datum_feature(letter, draft, filled=True)`**: ISO 5459 datum feature symbol (filled triangle +
+  leader + framed letter). Triangle tip at the origin. Returns `DatumFeatureResult(lines, text, letter)`.
+
+---
+
 ## v0.1.6 — 2026-05-25
 
 ### Features

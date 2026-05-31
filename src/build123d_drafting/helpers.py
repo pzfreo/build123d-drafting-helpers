@@ -1175,3 +1175,370 @@ def surface_finish_mark(
         label_str=ra_value,
         position=(pos_v.X, pos_v.Y),
     )
+
+
+# ---------------------------------------------------------------------------
+# GD&T — feature control frame and datum feature symbol (ISO 1101 / ISO 5459)
+# ---------------------------------------------------------------------------
+
+GDTCharacteristic = Literal[
+    "straightness", "flatness", "circularity", "cylindricity",
+    "profile_line", "profile_surface",
+    "angularity", "perpendicularity", "parallelism",
+    "position", "concentricity", "symmetry",
+    "circular_runout", "total_runout",
+]
+
+# Unicode glyphs for the 14 geometric characteristics — used in repr/labels and
+# as the fallback when a symbol cannot be drawn. Drawing is done geometrically
+# (below) because these glyphs are absent from most CAD-safe fonts.
+_GDT_GLYPHS: dict[str, str] = {
+    "straightness": "—", "flatness": "▱", "circularity": "○",
+    "cylindricity": "⌭", "profile_line": "⌒", "profile_surface": "⌓",
+    "angularity": "∠", "perpendicularity": "⊥", "parallelism": "∥",
+    "position": "⌖", "concentricity": "◎", "symmetry": "⌯",
+    "circular_runout": "↗", "total_runout": "⏍",
+}
+
+_MODIFIER_LETTER = {"M": "M", "L": "L", "P": "P"}  # circled material-condition modifiers
+
+
+@dataclass
+class FeatureControlFrameResult:
+    """Returned by feature_control_frame().
+
+    Route *lines* to a line_color SVG layer and *text* to a fill_color layer
+    (the same split as leader()/surface_finish_mark()).
+    """
+    lines: Compound          # frame box, dividers, characteristic symbol, modifier rings
+    text: Compound           # tolerance value, modifier letters, datum letters, ⌀ prefix
+    characteristic: str
+    tolerance_str: str
+    datums: tuple[str, ...]
+    width: float
+    height: float
+
+    @property
+    def shape(self) -> Compound:
+        return Compound(children=[self.lines, self.text])
+
+    def bbox(self):
+        return self.shape.bounding_box()
+
+
+@dataclass
+class DatumFeatureResult:
+    """Returned by datum_feature() — the datum triangle + framed letter (ISO 5459)."""
+    lines: Compound          # filled triangle + connector + letter box
+    text: Compound           # datum letter glyph
+    letter: str
+
+    @property
+    def shape(self) -> Compound:
+        return Compound(children=[self.lines, self.text])
+
+    def bbox(self):
+        return self.shape.bounding_box()
+
+
+def _arrowhead(tip: tuple[float, float], back: tuple[float, float], size: float) -> list[Edge]:
+    """Two short barbs forming an open arrowhead at *tip*, opening toward *back*."""
+    tx, ty = tip
+    bx, by = back
+    ang = math.atan2(by - ty, bx - tx)
+    out = []
+    for da in (math.radians(20), math.radians(-20)):
+        a = ang + da
+        out.append(Edge.make_line(
+            Vector(tx, ty, 0),
+            Vector(tx + size * math.cos(a), ty + size * math.sin(a), 0),
+        ))
+    return out
+
+
+def _characteristic_edges(name: str, h: float) -> list[Edge]:
+    """Geometric-characteristic glyph as Edges, centred on the local origin,
+    spanning roughly a square of side ~h. Drawn this way because the Unicode
+    GD&T glyphs are missing from typical engineering fonts.
+    """
+    s = 0.42 * h  # half-extent of the glyph box
+
+    if name == "straightness":
+        return [Edge.make_line(Vector(-s, 0, 0), Vector(s, 0, 0))]
+
+    if name == "flatness":
+        p1, p2 = Vector(-s, -0.5 * s, 0), Vector(0.3 * s, -0.5 * s, 0)
+        p3, p4 = Vector(s, 0.5 * s, 0), Vector(-0.3 * s, 0.5 * s, 0)
+        return [Edge.make_line(p1, p2), Edge.make_line(p2, p3),
+                Edge.make_line(p3, p4), Edge.make_line(p4, p1)]
+
+    if name == "circularity":
+        return list(Edge.make_circle(s).edges())
+
+    if name == "cylindricity":
+        ring = list(Edge.make_circle(0.55 * s).edges())
+        left = Edge.make_line(Vector(-s, -0.6 * s, 0), Vector(-0.55 * s, 0.9 * s, 0))
+        right = Edge.make_line(Vector(0.55 * s, -0.9 * s, 0), Vector(s, 0.6 * s, 0))
+        return ring + [left, right]
+
+    if name == "profile_line":
+        return list(Edge.make_circle(s, start_angle=0, end_angle=180).edges())
+
+    if name == "profile_surface":
+        arc = list(Edge.make_circle(s, start_angle=0, end_angle=180).edges())
+        chord = Edge.make_line(Vector(-s, 0, 0), Vector(s, 0, 0))
+        return arc + [chord]
+
+    if name == "angularity":
+        return [Edge.make_line(Vector(-s, -s, 0), Vector(s, s, 0)),
+                Edge.make_line(Vector(-s, -s, 0), Vector(s, -s, 0))]
+
+    if name == "perpendicularity":
+        return [Edge.make_line(Vector(0, -s, 0), Vector(0, s, 0)),
+                Edge.make_line(Vector(-s, -s, 0), Vector(s, -s, 0))]
+
+    if name == "parallelism":
+        return [Edge.make_line(Vector(-0.7 * s, -s, 0), Vector(0.1 * s, s, 0)),
+                Edge.make_line(Vector(-0.1 * s, -s, 0), Vector(0.7 * s, s, 0))]
+
+    if name == "position":
+        ring = list(Edge.make_circle(0.6 * s).edges())
+        return ring + [Edge.make_line(Vector(-s, 0, 0), Vector(s, 0, 0)),
+                       Edge.make_line(Vector(0, -s, 0), Vector(0, s, 0))]
+
+    if name == "concentricity":
+        return list(Edge.make_circle(s).edges()) + list(Edge.make_circle(0.5 * s).edges())
+
+    if name == "symmetry":
+        return [Edge.make_line(Vector(0, -s, 0), Vector(0, s, 0)),
+                Edge.make_line(Vector(-0.7 * s, 0.45 * s, 0), Vector(0.7 * s, 0.45 * s, 0)),
+                Edge.make_line(Vector(-0.7 * s, -0.45 * s, 0), Vector(0.7 * s, -0.45 * s, 0))]
+
+    if name == "circular_runout":
+        shaft = Edge.make_line(Vector(-s, -s, 0), Vector(s, s, 0))
+        return [shaft] + _arrowhead((s, s), (-s, -s), 0.5 * s)
+
+    if name == "total_runout":
+        out = []
+        for dx in (-0.25 * s, 0.35 * s):
+            out.append(Edge.make_line(Vector(-s + dx, -s, 0), Vector(s - 0.6 * s + dx, s, 0)))
+            out += _arrowhead((s - 0.6 * s + dx, s), (-s + dx, -s), 0.45 * s)
+        return out
+
+    raise ValueError(
+        f"Unknown characteristic '{name}'. Supported: {', '.join(_GDT_GLYPHS)}"
+    )
+
+
+def feature_control_frame(
+    characteristic: GDTCharacteristic,
+    tolerance: float | str,
+    datums: tuple[str, ...] | list[str] = (),
+    draft: Draft | None = None,
+    diameter: bool = False,
+    modifier: str | None = None,
+    datum_modifiers: dict[str, str] | None = None,
+) -> FeatureControlFrameResult:
+    """ISO 1101 feature control frame, e.g. ``| ⌖ | ⌀0.5 Ⓜ | A | B | C |``.
+
+    Built at the origin with its bottom-left corner at (0, 0). Move it with
+    ``.lines.moved(loc)`` and ``.text.moved(loc)`` after construction, or via
+    ``.shape``.
+
+    Args:
+        characteristic: one of the 14 geometric characteristics — "position",
+            "flatness", "perpendicularity", "parallelism", "concentricity",
+            "circularity", "cylindricity", "straightness", "angularity",
+            "symmetry", "profile_line", "profile_surface", "circular_runout",
+            "total_runout".
+        tolerance: tolerance value (float formatted to draft precision, or a
+            ready-made string like "0.05").
+        datums: ordered datum references, e.g. ("A", "B", "C"). Each becomes a
+            compartment after the tolerance.
+        draft: Draft config for font size / line width. Defaults to 2.5 mm.
+        diameter: prepend a ⌀ symbol to the tolerance (cylindrical zone).
+        modifier: material-condition modifier on the tolerance — "M" (MMC),
+            "L" (LMC), or "P" (projected). None = RFS (no modifier).
+        datum_modifiers: optional {datum_letter: "M"|"L"} modifiers drawn after
+            the datum letter in its compartment.
+
+    Returns:
+        FeatureControlFrameResult with .lines (frame + symbols) and .text
+        (values + letters). Route .lines to a line_color layer and .text to a
+        fill_color layer.
+    """
+    if draft is None:
+        draft = Draft(font_size=2.5, decimal_precision=1)
+    name = characteristic.lower()
+    if name not in _GDT_GLYPHS:
+        raise ValueError(
+            f"Unknown characteristic '{characteristic}'. "
+            f"Supported: {', '.join(_GDT_GLYPHS)}"
+        )
+
+    h = draft.font_size
+    H = 2.0 * h                       # ISO: frame height = 2 × char height
+    pad = 0.6 * h
+    datum_modifiers = datum_modifiers or {}
+
+    # tolerance string
+    if isinstance(tolerance, str):
+        tol_str = tolerance
+    else:
+        prec = draft.decimal_precision
+        tol_str = f"{round(tolerance, prec):.{prec}f}"
+
+    def _text(txt: str, fs: float) -> Text:
+        return Text(txt=txt, font_size=fs, font=draft.font,
+                    align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE)
+
+    # --- compartment widths ---
+    w_sym = H                          # leading characteristic symbol: square
+    # tolerance compartment: ⌀? + value + modifier-ring?
+    r_pre = 0.42 * h                   # ⌀ prefix glyph radius
+    mr = 0.62 * h                      # modifier ring radius
+    val_w = _text(tol_str, h).bounding_box().size.X
+    w_tol = pad + val_w + pad
+    if diameter:
+        w_tol += 2 * r_pre + pad
+    if modifier:
+        w_tol += 2 * mr + pad
+    w_dat = H                          # each datum compartment: square
+
+    widths = [w_sym, w_tol] + [w_dat] * len(datums)
+    xs = [0.0]
+    for w in widths:
+        xs.append(xs[-1] + w)
+    total_w = xs[-1]
+    cy = H / 2.0
+
+    # --- frame: outer box + interior verticals ---
+    line_edges: list[Edge] = [
+        Edge.make_line(Vector(0, 0, 0), Vector(total_w, 0, 0)),
+        Edge.make_line(Vector(total_w, 0, 0), Vector(total_w, H, 0)),
+        Edge.make_line(Vector(total_w, H, 0), Vector(0, H, 0)),
+        Edge.make_line(Vector(0, H, 0), Vector(0, 0, 0)),
+    ]
+    for x in xs[1:-1]:
+        line_edges.append(Edge.make_line(Vector(x, 0, 0), Vector(x, H, 0)))
+
+    text_faces = []
+
+    # --- characteristic symbol in compartment 0 ---
+    sym_loc = Location(Vector(xs[0] + w_sym / 2, cy, 0))
+    for e in _characteristic_edges(name, h):
+        line_edges.append(e.moved(sym_loc))
+
+    # --- tolerance compartment contents, laid out left → right ---
+    x_cursor = xs[1] + pad
+    if diameter:
+        dia_cx = x_cursor + r_pre
+        line_edges += [e.moved(Location(Vector(dia_cx, cy, 0)))
+                       for e in Edge.make_circle(r_pre).edges()]
+        line_edges.append(Edge.make_line(
+            Vector(dia_cx + 0.9 * r_pre, cy - 0.9 * r_pre, 0),
+            Vector(dia_cx - 0.9 * r_pre, cy + 0.9 * r_pre, 0)))
+        x_cursor = dia_cx + r_pre + pad
+
+    val_cx = x_cursor + val_w / 2
+    text_faces.append(_text(tol_str, h).moved(Location(Vector(val_cx, cy, 0))))
+    x_cursor = val_cx + val_w / 2 + pad
+
+    if modifier:
+        m = modifier.upper()
+        if m not in _MODIFIER_LETTER:
+            raise ValueError(f"Unknown modifier '{modifier}'. Use M, L, or P.")
+        mod_cx = x_cursor + mr
+        line_edges += [e.moved(Location(Vector(mod_cx, cy, 0)))
+                       for e in Edge.make_circle(mr).edges()]
+        text_faces.append(_text(_MODIFIER_LETTER[m], h * 0.8)
+                          .moved(Location(Vector(mod_cx, cy, 0))))
+
+    # --- datum compartments ---
+    for i, letter in enumerate(datums):
+        cx = (xs[2 + i] + xs[3 + i]) / 2
+        dm = datum_modifiers.get(letter)
+        if dm:
+            # letter + small circled modifier side by side
+            text_faces.append(_text(letter, h).moved(Location(Vector(cx - 0.35 * h, cy, 0))))
+            mod_cx = cx + 0.5 * h
+            line_edges += [e.moved(Location(Vector(mod_cx, cy, 0)))
+                           for e in Edge.make_circle(0.55 * h).edges()]
+            text_faces.append(_text(dm.upper(), h * 0.7).moved(Location(Vector(mod_cx, cy, 0))))
+        else:
+            text_faces.append(_text(letter, h).moved(Location(Vector(cx, cy, 0))))
+
+    return FeatureControlFrameResult(
+        lines=Compound(children=line_edges),
+        text=Compound(children=text_faces),
+        characteristic=name,
+        tolerance_str=tol_str,
+        datums=tuple(datums),
+        width=total_w,
+        height=H,
+    )
+
+
+def datum_feature(
+    letter: str,
+    draft: Draft | None = None,
+    filled: bool = True,
+) -> DatumFeatureResult:
+    """ISO 5459 datum feature symbol: a (filled) triangle on a short leader to
+    a framed datum letter. Built with the triangle tip at the origin pointing
+    down (-Y); move it onto the feature with ``.shape.moved(loc)``.
+
+    Args:
+        letter: the datum identifier, e.g. "A".
+        draft: Draft config for font size / line width. Defaults to 2.5 mm.
+        filled: draw the triangle as a filled face (True) or outline (False).
+            ISO datum triangles are solid-filled; outline is offered for media
+            where fill is awkward.
+
+    Returns:
+        DatumFeatureResult with .lines (triangle + connector + letter box) and
+        .text (the letter). Route .lines to a line_color layer (the filled
+        triangle also needs fill_color) and .text to a fill_color layer.
+    """
+    if draft is None:
+        draft = Draft(font_size=2.5, decimal_precision=1)
+    h = draft.font_size
+    tri = 1.4 * h                      # triangle base width ≈ 1.4 × char height
+    box = 2.0 * h                      # framed-letter box side
+
+    lines: list = []
+
+    # Triangle: tip at origin (0,0), base above it
+    apex = Vector(0, 0, 0)
+    bl = Vector(-tri / 2, tri * 0.9, 0)
+    br = Vector(tri / 2, tri * 0.9, 0)
+    if filled:
+        from build123d import Face, Wire
+        lines.append(Face(Wire.make_polygon([apex, bl, br, apex])))
+    else:
+        lines += [Edge.make_line(apex, bl), Edge.make_line(bl, br), Edge.make_line(br, apex)]
+
+    # Connector from triangle base up to the letter box
+    conn_y0 = tri * 0.9
+    conn_y1 = conn_y0 + 0.8 * h
+    lines.append(Edge.make_line(Vector(0, conn_y0, 0), Vector(0, conn_y1, 0)))
+
+    # Letter box centred on x=0, sitting on the connector
+    by0 = conn_y1
+    by1 = conn_y1 + box
+    lines += [
+        Edge.make_line(Vector(-box / 2, by0, 0), Vector(box / 2, by0, 0)),
+        Edge.make_line(Vector(box / 2, by0, 0), Vector(box / 2, by1, 0)),
+        Edge.make_line(Vector(box / 2, by1, 0), Vector(-box / 2, by1, 0)),
+        Edge.make_line(Vector(-box / 2, by1, 0), Vector(-box / 2, by0, 0)),
+    ]
+
+    glyph = Text(txt=letter, font_size=h, font=draft.font,
+                 align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE
+                 ).moved(Location(Vector(0, (by0 + by1) / 2, 0)))
+
+    return DatumFeatureResult(
+        lines=Compound(children=lines),
+        text=Compound(children=[glyph]),
+        letter=letter,
+    )

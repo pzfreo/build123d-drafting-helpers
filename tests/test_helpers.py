@@ -3,12 +3,15 @@ import pytest
 from build123d import Draft, Compound, Edge, Vector
 
 from build123d_drafting import (
-    CenterlineResult, DimResult, LeaderResult, LintIssue, TitleBlockResult,
+    CenterlineResult, DatumFeatureResult, DimResult, FeatureControlFrameResult,
+    LeaderResult, LintIssue, TitleBlockResult,
     SurfaceFinishResult,
-    centerline, dim_linear, iso_title_block, leader, leader_offset, lint_drawing,
+    centerline, datum_feature, dim_linear, feature_control_frame,
+    iso_title_block, leader, leader_offset, lint_drawing,
     place_dims, place_labels,
     safe_dim_line, surface_finish_mark, view_axes,
 )
+from build123d_drafting.helpers import _GDT_GLYPHS
 
 
 @pytest.fixture
@@ -596,3 +599,133 @@ class TestSurfaceFinishMark:
         res = surface_finish_mark("Ra 1.6", (5, 5), draft=draft)
         bb = res.bbox()
         assert bb is not None
+
+
+# ---------------------------------------------------------------------------
+# feature_control_frame
+# ---------------------------------------------------------------------------
+
+class TestFeatureControlFrame:
+    def test_returns_result(self, draft):
+        res = feature_control_frame("position", 0.5, ("A", "B", "C"), draft)
+        assert isinstance(res, FeatureControlFrameResult)
+
+    def test_lines_and_text_are_compounds(self, draft):
+        res = feature_control_frame("position", 0.5, ("A",), draft)
+        assert isinstance(res.lines, Compound)
+        assert isinstance(res.text, Compound)
+
+    def test_all_14_characteristics_draw(self, draft):
+        for c in _GDT_GLYPHS:
+            res = feature_control_frame(c, 0.1, ("A",), draft)
+            assert len(res.lines.edges()) > 4, f"{c} produced too few edges"
+
+    def test_frame_height_is_two_font_sizes(self, draft):
+        res = feature_control_frame("flatness", 0.1, (), draft)
+        assert res.height == pytest.approx(2 * draft.font_size)
+
+    def test_bottom_left_at_origin(self, draft):
+        res = feature_control_frame("position", 0.5, ("A", "B", "C"), draft)
+        bb = res.lines.bounding_box()
+        assert bb.min.X == pytest.approx(0.0, abs=0.01)
+        assert bb.min.Y == pytest.approx(0.0, abs=0.01)
+
+    def test_datums_stored(self, draft):
+        res = feature_control_frame("position", 0.5, ("A", "B", "C"), draft)
+        assert res.datums == ("A", "B", "C")
+
+    def test_float_tolerance_formatted_to_precision(self, draft):
+        res = feature_control_frame("position", 0.5, (), draft)
+        assert res.tolerance_str == "0.5"
+
+    def test_string_tolerance_passed_through(self, draft):
+        res = feature_control_frame("position", "0.05", (), draft)
+        assert res.tolerance_str == "0.05"
+
+    def test_more_datums_widens_frame(self, draft):
+        one = feature_control_frame("position", 0.5, ("A",), draft)
+        three = feature_control_frame("position", 0.5, ("A", "B", "C"), draft)
+        assert three.width > one.width
+
+    def test_diameter_widens_tolerance_compartment(self, draft):
+        plain = feature_control_frame("position", 0.5, ("A",), draft)
+        dia = feature_control_frame("position", 0.5, ("A",), draft, diameter=True)
+        assert dia.width > plain.width
+
+    def test_modifier_widens_tolerance_compartment(self, draft):
+        plain = feature_control_frame("position", 0.5, ("A",), draft)
+        mmc = feature_control_frame("position", 0.5, ("A",), draft, modifier="M")
+        assert mmc.width > plain.width
+
+    def test_datum_letters_appear_in_text(self, draft):
+        res = feature_control_frame("position", 0.5, ("A", "B", "C"), draft)
+        # tolerance value + 3 datum letters = at least 4 text glyph groups
+        assert len(res.text.faces()) >= 4
+
+    def test_unknown_characteristic_raises(self, draft):
+        with pytest.raises(ValueError):
+            feature_control_frame("bogus", 0.1, (), draft)
+
+    def test_unknown_modifier_raises(self, draft):
+        with pytest.raises(ValueError):
+            feature_control_frame("position", 0.1, (), draft, modifier="Z")
+
+    def test_default_draft_used_when_none(self):
+        res = feature_control_frame("position", 0.5, ("A",))
+        assert isinstance(res, FeatureControlFrameResult)
+
+    def test_shape_property_combines(self, draft):
+        res = feature_control_frame("position", 0.5, ("A",), draft)
+        assert isinstance(res.shape, Compound)
+
+    def test_no_datums_allowed(self, draft):
+        # form tolerances (flatness, straightness) take no datum
+        res = feature_control_frame("flatness", 0.1, (), draft)
+        assert res.datums == ()
+
+    def test_datum_modifier_adds_geometry(self, draft):
+        # A per-datum modifier draws a circled letter beside the datum letter,
+        # adding ring edges and a second text glyph in that compartment.
+        plain = feature_control_frame("position", 0.5, ("A",), draft)
+        modded = feature_control_frame(
+            "position", 0.5, ("A",), draft, datum_modifiers={"A": "M"}
+        )
+        assert len(modded.lines.edges()) > len(plain.lines.edges())
+        assert len(modded.text.faces()) > len(plain.text.faces())
+
+
+# ---------------------------------------------------------------------------
+# datum_feature
+# ---------------------------------------------------------------------------
+
+class TestDatumFeature:
+    def test_returns_result(self, draft):
+        res = datum_feature("A", draft)
+        assert isinstance(res, DatumFeatureResult)
+
+    def test_letter_stored(self, draft):
+        res = datum_feature("B", draft)
+        assert res.letter == "B"
+
+    def test_lines_and_text_are_compounds(self, draft):
+        res = datum_feature("A", draft)
+        assert isinstance(res.lines, Compound)
+        assert isinstance(res.text, Compound)
+
+    def test_tip_at_origin(self, draft):
+        res = datum_feature("A", draft)
+        bb = res.shape.bounding_box()
+        assert bb.min.Y == pytest.approx(0.0, abs=0.01)
+
+    def test_filled_triangle_has_a_face(self, draft):
+        res = datum_feature("A", draft, filled=True)
+        assert len(res.lines.faces()) >= 1
+
+    def test_outline_triangle_has_no_face(self, draft):
+        res = datum_feature("A", draft, filled=False)
+        # outline mode: triangle is three edges, the only faces come from text
+        assert len(res.lines.faces()) == 0
+
+    def test_default_draft_used_when_none(self):
+        res = datum_feature("A")
+        assert isinstance(res, DatumFeatureResult)
