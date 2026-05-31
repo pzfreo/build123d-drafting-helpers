@@ -1147,15 +1147,18 @@ def surface_finish_mark(
 
     lines_raw = Compound(children=[leg1, leg2, shelf])
 
-    # Text: left-aligned, vertically centred at shelf height
+    # Text: left-aligned, resting just ABOVE the shelf line (ISO 1302 places
+    # the Ra value over the extension line, not on it — otherwise the shelf
+    # strikes through the digits).
+    v_gap = 0.3 * draft.font_size
     text_raw = Compound(children=[
         Text(
             txt=ra_value,
             font_size=draft.font_size,
             font=draft.font,
-            align=(Align.MIN, Align.CENTER),
+            align=(Align.MIN, Align.MIN),
             mode=Mode.PRIVATE,
-        ).moved(Location(Vector(elbow_x + gap, elbow_y, 0.0)))
+        ).moved(Location(Vector(elbow_x + gap, elbow_y + v_gap, 0.0)))
     ])
 
     # Rotate around origin then translate to position
@@ -1542,3 +1545,40 @@ def datum_feature(
         text=Compound(children=[glyph]),
         letter=letter,
     )
+
+
+# ---------------------------------------------------------------------------
+# SVG export helper
+# ---------------------------------------------------------------------------
+
+def add_to_layers(exporter, result, *, line_layer="lines", text_layer="text"):
+    """Route a drafting-helper result onto two ExportSVG layers correctly.
+
+    GD&T and surface-finish results split their geometry into ``.lines`` (frame
+    box, dividers, characteristic symbol, modifier rings — must be *stroked*)
+    and ``.text`` (tolerance value, datum letters, ⌀ prefix — must be
+    *filled*). Adding the combined ``.shape`` to a single ``fill_color`` layer
+    floods every closed loop solid — the ⌀ prefix and the modifier ring turn
+    into black discs. This helper enforces the correct split so callers don't
+    have to remember it::
+
+        exp.add_layer("lines", line_color=Color(0, 0, 0))                       # stroke only
+        exp.add_layer("text", line_color=Color(0, 0, 0), fill_color=Color(0, 0, 0))
+        add_to_layers(exp, fcf, line_layer="lines", text_layer="text")
+
+    Results without a ``.lines``/``.text`` split (e.g. ``DimResult``) carry no
+    flood-prone loops; add their ``.shape`` to a single stroked-and-filled
+    layer directly instead of using this helper.
+
+    Raises:
+        TypeError: if *result* has no ``.lines``/``.text`` split.
+    """
+    lines = getattr(result, "lines", None)
+    text = getattr(result, "text", None)
+    if lines is None or text is None:
+        raise TypeError(
+            f"{type(result).__name__} has no .lines/.text split; add its "
+            ".shape to a single stroked-and-filled layer directly."
+        )
+    exporter.add_shape(lines, layer=line_layer)
+    exporter.add_shape(text, layer=text_layer)
