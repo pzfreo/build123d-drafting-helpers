@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "build123d-drafting-helpers"
-version = "0.1.1"
+version = "0.1.7"
 description = "Third-party drawing-annotation helpers for build123d — dim_linear, leader, view_axes, lint_drawing"
 readme = "README.md"
 license = { file = "LICENSE" }
