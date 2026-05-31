@@ -177,6 +177,55 @@ for issue in issues:
 
 ---
 
+### `feature_control_frame(characteristic, tolerance, datums, draft, diameter=False, modifier=None)`
+
+ISO 1101 feature control frame — the boxed GD&T callout. build123d ships no GD&T primitives, and the
+geometric-characteristic symbols (⌖ ⊥ ∥ ◎ …) are absent from CAD-safe fonts, so each is drawn
+geometrically rather than as a glyph.
+
+```python
+draft = Draft(font_size=2.5, decimal_precision=1)
+
+# | ⌖ | ⌀0.5 Ⓜ | A | B | C |
+fcf = feature_control_frame(
+    "position", 0.5, ("A", "B", "C"), draft,
+    diameter=True,     # prepend ⌀ (cylindrical tolerance zone)
+    modifier="M",      # circled M = MMC ("L" = LMC, "P" = projected; None = RFS)
+)
+exporter.add_shape(fcf.lines, layer="dims")   # frame + symbols — line_color layer
+exporter.add_shape(fcf.text,  layer="text")   # values + letters — fill_color layer
+```
+
+All 14 characteristics are supported: `straightness`, `flatness`, `circularity`, `cylindricity`,
+`profile_line`, `profile_surface`, `angularity`, `perpendicularity`, `parallelism`, `position`,
+`concentricity`, `symmetry`, `circular_runout`, `total_runout`.
+
+The frame is built with its bottom-left corner at the origin (height = 2 × font size, per ISO 3098).
+Returns `FeatureControlFrameResult(lines, text, characteristic, tolerance_str, datums, width, height)`.
+Route `lines` and `text` to separate SVG layers, both with `fill_color` set.
+
+> **Why drawn, not typed:** a frequent failure mode (see build123d-mcp Discord) is building these
+> symbols ad-hoc from circles + lines and positioning each by `someRect.center()` — if a referenced
+> rectangle resolves to the wrong centre, a symbol silently lands off-frame and "disappears". This
+> helper lays out every compartment by explicit arithmetic so nothing depends on fragile lookups.
+
+---
+
+### `datum_feature(letter, draft, filled=True)`
+
+ISO 5459 datum feature symbol: a filled triangle on a short leader to a framed datum letter.
+Built with the triangle tip at the origin (pointing −Y); move it onto the feature with `.shape.moved(loc)`.
+
+```python
+dat = datum_feature("A", draft)
+exporter.add_shape(dat.lines, layer="dims")   # triangle (filled) + box — fill_color layer
+exporter.add_shape(dat.text,  layer="text")   # the letter — fill_color layer
+```
+
+Returns `DatumFeatureResult(lines, text, letter)`.
+
+---
+
 ### `iso_title_block(...)` and `surface_finish_mark(...)`
 
 `iso_title_block` is a **standalone title box** (170 × 16 mm by default), positioned by the caller. It is *not* a substitute for `build123d.TechnicalDrawing`, which is a whole-page chrome — page-sized border + grid ticks + embedded title box, returned as a single `Sketch`. Use `TechnicalDrawing` when you want the full drawing-sheet frame; reach for `iso_title_block` when you want just the title box, positionable anywhere, with separate `lines`/`text` `Compound`s for SVG layer routing, and with `material` / `general_tolerance` fields that `TechnicalDrawing` does not carry.
