@@ -22,7 +22,7 @@ from build123d import (
     LineType, Location, Mode, Plane, RegularPolygon, Text, extrude,
 )
 from build123d_drafting import (
-    LintIssue, dim_linear, draft_preset, find_interferences, iso_title_block, leader,
+    dim_linear, draft_preset, find_interferences, iso_title_block, leader,
 )
 
 DRAFT = draft_preset(font_size=2.2, decimal_precision=1)
@@ -35,12 +35,7 @@ D = 800.0                                    # camera distance
 border, part_v, hidden_v, dims_l, text_l = [], [], [], [], []
 lint_items: list = []
 view_labels: list = []   # FRONT/TOP/SIDE/ISO labels — linted against the dim lines
-view_boxes: list = []    # bbox of each projected view — leader labels must clear them
-
-
-def _overlap(a, b, m=0.5):
-    return (min(a[2], b[2]) - max(a[0], b[0]) > m
-            and min(a[3], b[3]) - max(a[1], b[1]) > m)
+view_boxes: list = []    # bbox of each projected view — labels must clear them
 
 
 def _label_box(t, name="text"):
@@ -167,7 +162,7 @@ _leader((fb.center().X + DIA / 2, y0 + 8, 0),
 # --- nut: views + dimensions (front view) -----------------------------------
 nb = _draw_part(_nut(), NUT_T / 2, 34.0, 6.0)
 _dim((nb.min.X, nb.max.Y, 0), (nb.max.X, nb.max.Y, 0), "above", 8, str(NUT_AF))   # A/F
-_dim((nb.max.X, nb.min.Y, 0), (nb.max.X, nb.max.Y, 0), "right", 10, str(NUT_T))   # thickness
+_dim((nb.max.X, nb.min.Y, 0), (nb.max.X, nb.max.Y, 0), "right", 8, str(NUT_T))   # thickness
 _leader((nb.center().X, nb.min.Y, 0), (nb.center().X - 24, nb.min.Y - 14, 0),
         f"⌀{BORE} thru (M{int(DIA)})")
 
@@ -181,21 +176,14 @@ def lint():
     """Lint the drawing's annotations with find_interferences() before export.
 
     Checks the dim/leader lines + labels against each other and against the
-    FRONT/TOP/SIDE/ISO view labels (the title block text is intentionally not a
-    forbidden zone — the iso_title_block leader is *meant* to point at it), plus
-    a domain check that no leader *callout label* lands over a projected view
-    (find_interferences sees annotations, not the views themselves).
+    FRONT/TOP/SIDE/ISO view labels, and — via ``obstacles`` — that no label lands
+    over a projected view (the title block text is intentionally not a forbidden
+    zone, since the iso_title_block leader is *meant* to point at it).
     """
-    issues = list(find_interferences(lint_items + [_label_box(v) for v in view_labels]))
-    for it in lint_items:
-        box = getattr(it, "label_bbox", None)
-        if box is None or not hasattr(it, "elbow"):   # leaders only
-            continue
-        if any(_overlap(box, vb) for vb in view_boxes):
-            issues.append(LintIssue(
-                severity="error", code="label_over_view",
-                message=f'leader label "{it.label_str}" overlaps a projected view'))
-    return issues
+    return find_interferences(
+        lint_items + [_label_box(v) for v in view_labels],
+        obstacles=view_boxes,
+    )
 
 
 def write_part_drawing(svg_path: str = "part_drawing.svg") -> str:

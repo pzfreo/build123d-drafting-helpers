@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **`find_interferences(..., obstacles=[...])`**: labels are tested against arbitrary
+  obstacle boxes (`BoundBox` or `(min_x, min_y, max_x, max_y)`), e.g. the projected views
+  of a multi-view drawing — flags `label_over_geometry`. Label-only by design (leader lines
+  are meant to point *into* geometry). `examples/part_drawing.py` now uses it instead of a
+  hand-rolled loop.
+
+### Bug fixes
+
+- **`dim_linear` label_bbox wrong for vertical dims**: for a left/right (vertical) dim the
+  label box was computed at the path X and the dim-line Y, but the label actually sits at
+  the offset dim-line X and the path-midpoint Y (and is rotated 90°). Fixed — the box now
+  matches the rendered label for any orientation. Improves every lint check that reads
+  `label_bbox` (centreline overlap, interference) on vertical dims. Surfaced by the new
+  obstacle check.
+
 ## v0.1.12 — 2026-06-01
 
 ### Examples

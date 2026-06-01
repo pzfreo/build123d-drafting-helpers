@@ -913,3 +913,35 @@ class TestLeaderLabelBbox:
                          label_bbox=(0, 0, 10, 2))
         codes = {i.code for i in lint_drawing([r])}
         assert "leader_line_through_text" in codes
+
+
+class TestFindInterferencesObstacles:
+    def test_label_over_obstacle_flagged(self, draft):
+        d = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        lb = d.label_bbox
+        obstacle = (lb[0] - 1, lb[1] - 1, lb[2] + 1, lb[3] + 1)   # covers the label
+        issues = find_interferences([d], obstacles=[obstacle])
+        assert any(i.code == "label_over_geometry" for i in issues)
+
+    def test_clear_label_not_flagged(self, draft):
+        d = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        far = (100, 100, 120, 120)
+        issues = find_interferences([d], obstacles=[far])
+        assert not any(i.code == "label_over_geometry" for i in issues)
+
+    def test_accepts_boundbox(self, draft):
+        from build123d import Box, Pos
+        d = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        lb = d.label_bbox
+        cx, cy = (lb[0] + lb[2]) / 2, (lb[1] + lb[3]) / 2
+        bb = (Pos(cx, cy, 0) * Box(lb[2] - lb[0] + 2, lb[3] - lb[1] + 2, 1)).bounding_box()
+        issues = find_interferences([d], obstacles=[bb])
+        assert any(i.code == "label_over_geometry" for i in issues)
+
+    def test_obstacles_are_label_only(self, draft):
+        # A leader line entering an obstacle (its tip is on the geometry) must
+        # NOT be flagged — only labels are tested against obstacles.
+        ld = leader((0, 0, 0), (20, 12, 0), "Ø5", draft)
+        tip_box = (-2, -2, 2, 2)   # around the leader tip / line, not the label
+        issues = find_interferences([ld], obstacles=[tip_box])
+        assert not any(i.code == "label_over_geometry" for i in issues)

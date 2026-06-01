@@ -277,11 +277,20 @@ def dim_linear(
     bb = shape.bounding_box()
     dim_level_y = bb.max.Y if abs(bb.max.Y) >= abs(bb.min.Y) else bb.min.Y
 
-    # Compute the label position
-    midpoint_x = (p1[0] + p2[0]) / 2.0
-    label_x = midpoint_x + label_offset_x
+    # The label sits on the dim line at the path midpoint, shifted along the dim
+    # line by label_offset_x. Compute it from the path geometry so it is correct
+    # for any orientation — for a vertical (left/right) dim the label is at the
+    # offset X and the path-midpoint Y, not the path X and the dim-line Y.
+    mid_x = (p1[0] + p2[0]) / 2.0
+    mid_y = (p1[1] + p2[1]) / 2.0
+    dxp, dyp = p2[0] - p1[0], p2[1] - p1[1]
+    plen = math.hypot(dxp, dyp) or 1.0
+    ux, uy = dxp / plen, dyp / plen        # path direction
+    nx, ny = uy, -ux                       # right-hand normal (see _offset_sign)
+    label_cx = mid_x + nx * offset + ux * label_offset_x
+    label_cy = mid_y + ny * offset + uy * label_offset_x
+    vertical = abs(dyp) > abs(dxp)         # label is rotated 90° for vertical dims
 
-    # Probe text size for label_bbox
     probe = Text(
         txt=label_str,
         font_size=draft.font_size,
@@ -292,22 +301,19 @@ def dim_linear(
     text_bb = probe.bounding_box()
     half_w = text_bb.size.X / 2.0
     half_h = text_bb.size.Y / 2.0
-    label_bbox_tuple = (
-        label_x - half_w,
-        dim_level_y - half_h,
-        label_x + half_w,
-        dim_level_y + half_h,
-    )
+    hx, hy = (half_h, half_w) if vertical else (half_w, half_h)
+    label_bbox_tuple = (label_cx - hx, label_cy - hy, label_cx + hx, label_cy + hy)
 
     if label_offset_x != 0.0 or _force_external:
-        # Place explicit Text at the shifted position
+        # Place explicit Text at the computed position (rotated for vertical dims)
         text_shape = Text(
             txt=label_str,
             font_size=draft.font_size,
             font=draft.font,
             align=(Align.CENTER, Align.CENTER),
             mode=Mode.PRIVATE,
-        ).moved(Location(Vector(label_x, dim_level_y, 0.0)))
+        ).moved(Location(Vector(label_cx, label_cy, 0.0),
+                         Vector(0, 0, 1), 90.0 if vertical else 0.0))
         final_shape = Compound(children=[shape, text_shape])
     else:
         final_shape = shape
@@ -1718,6 +1724,13 @@ def _box_inside(inner, outer):
             and inner[2] <= outer[2] and inner[3] <= outer[3])
 
 
+def _as_box(o):
+    """Normalise a BoundBox or a (min_x, min_y, max_x, max_y) tuple to a tuple."""
+    if hasattr(o, "min") and hasattr(o, "max"):
+        return (o.min.X, o.min.Y, o.max.X, o.max.Y)
+    return tuple(o)
+
+
 def _collinear_overlap(seg_a, seg_b, tol=0.15):
     """Length (mm) over which two segments lie on the same line and overlap.
 
@@ -1741,7 +1754,7 @@ def _collinear_overlap(seg_a, seg_b, tol=0.15):
     return max(0.0, hi - lo)
 
 
-def find_interferences(items, *, part_bbox=None, page_bbox=None,
+def find_interferences(items, *, part_bbox=None, page_bbox=None, obstacles=None,
                        min_overlap=0.5, pad=0.2, min_run=1.5):
     """Geometry-precise interference detection between drafting annotations.
 
@@ -1758,6 +1771,10 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
       the drawing frame.
     - **label↔part** (when ``part_bbox`` is given) — a label sits on top of the
       part outline.
+    - **label↔geometry** (when ``obstacles`` is given) — a label lands over any
+      of the supplied boxes, e.g. a leader callout dropped onto a projected view
+      in a multi-view sheet. Only *labels* are tested against obstacles, never
+      the dim/leader *lines* — leaders are meant to point *into* geometry.
     - **line↔line (redundant)** — structural lines from two annotations that lie
       on the same line and overlap, e.g. two stacked dims that share an endpoint
       each drawing the shared witness line (the duplicate could be avoided by
@@ -1774,6 +1791,9 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
             is handled.
         part_bbox, page_bbox: optional ``BoundBox`` for the part outline / page
             frame checks.
+        obstacles: optional iterable of ``BoundBox`` or
+            ``(min_x, min_y, max_x, max_y)`` boxes that labels must clear — e.g.
+            the projected views of a multi-view drawing. Checked label-only.
         min_overlap: mm of bbox overlap (both axes) before two labels collide.
         pad: mm tolerance when testing a line against a label box.
         min_run: mm of collinear overlap before two lines are flagged as
@@ -1814,6 +1834,13 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
                     severity="error",
                     message=f'label "{name_i}" sits on the part outline',
                     code="label_on_part",
+                ))
+        if obstacles:
+            if any(_box_overlap(box_i, _as_box(o), min_overlap) for o in obstacles):
+                issues.append(LintIssue(
+                    severity="error",
+                    message=f'label "{name_i}" lands over drawing geometry',
+                    code="label_over_geometry",
                 ))
 
     for i, (_, segs_i, name_i) in enumerate(geoms):
