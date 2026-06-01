@@ -22,7 +22,7 @@ from build123d import (
     LineType, Location, Mode, Plane, RegularPolygon, Text, extrude,
 )
 from build123d_drafting import (
-    dim_linear, draft_preset, find_interferences, iso_title_block, leader,
+    LintIssue, dim_linear, draft_preset, find_interferences, iso_title_block, leader,
 )
 
 DRAFT = draft_preset(font_size=2.2, decimal_precision=1)
@@ -35,6 +35,12 @@ D = 800.0                                    # camera distance
 border, part_v, hidden_v, dims_l, text_l = [], [], [], [], []
 lint_items: list = []
 view_labels: list = []   # FRONT/TOP/SIDE/ISO labels — linted against the dim lines
+view_boxes: list = []    # bbox of each projected view — leader labels must clear them
+
+
+def _overlap(a, b, m=0.5):
+    return (min(a[2], b[2]) - max(a[0], b[0]) > m
+            and min(a[3], b[3]) - max(a[1], b[1]) > m)
 
 
 def _label_box(t, name="text"):
@@ -86,6 +92,7 @@ def _add_view(vis, hid, cx, cy, label):
                ).moved(Location((cx, bb.min.Y - 3.0, 0)))
     text_l.append(lbl)
     view_labels.append(lbl)
+    view_boxes.append((bb.min.X, bb.min.Y, bb.max.X, bb.max.Y))
     return bb
 
 
@@ -151,8 +158,11 @@ y0, y_head, y_top = fb.min.Y, fb.max.Y - HEAD_H, fb.max.Y
 xL, xR = fb.center().X - AF / 2, fb.center().X + AF / 2
 _dim((xL - DIA / 2, y0, 0), (xL - DIA / 2, y_head, 0), "left", 12, str(LEN))   # thread length
 _dim((xL, y_top, 0), (xR, y_top, 0), "above", 8, str(AF))                      # head A/F
-_leader((fb.center().X + DIA / 2, (y0 + y_head) / 2, 0),
-        (fb.center().X + 26, (y0 + y_head) / 2 - 10, 0), f"M{int(DIA)} × 1.5")
+# thread designation: leader from the shaft down into the clear area below the
+# views (its label must not land over the SIDE view, which the annotation lint
+# can't see — part geometry isn't a label).
+_leader((fb.center().X + DIA / 2, y0 + 8, 0),
+        (fb.center().X + 30, y0 - 20, 0), f"M{int(DIA)} × 1.5")
 
 # --- nut: views + dimensions (front view) -----------------------------------
 nb = _draw_part(_nut(), NUT_T / 2, 34.0, 6.0)
@@ -172,9 +182,20 @@ def lint():
 
     Checks the dim/leader lines + labels against each other and against the
     FRONT/TOP/SIDE/ISO view labels (the title block text is intentionally not a
-    forbidden zone — the iso_title_block leader is *meant* to point at it).
+    forbidden zone — the iso_title_block leader is *meant* to point at it), plus
+    a domain check that no leader *callout label* lands over a projected view
+    (find_interferences sees annotations, not the views themselves).
     """
-    return find_interferences(lint_items + [_label_box(v) for v in view_labels])
+    issues = list(find_interferences(lint_items + [_label_box(v) for v in view_labels]))
+    for it in lint_items:
+        box = getattr(it, "label_bbox", None)
+        if box is None or not hasattr(it, "elbow"):   # leaders only
+            continue
+        if any(_overlap(box, vb) for vb in view_boxes):
+            issues.append(LintIssue(
+                severity="error", code="label_over_view",
+                message=f'leader label "{it.label_str}" overlaps a projected view'))
+    return issues
 
 
 def write_part_drawing(svg_path: str = "part_drawing.svg") -> str:
