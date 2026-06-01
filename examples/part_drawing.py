@@ -6,8 +6,8 @@ Unlike the specimen sheet (a catalogue of symbols), this shows how you actually
     build the 3D part  ->  project_to_viewport() views (front / top / side / iso)
     ->  dimension with the helpers  ->  lint with find_interferences()  ->  export
 
-It's an A4 frame with an iso_title_block(); each part gets front/top/side views
-plus an isometric, dimensioned with dim_linear()/leader()
+It's an A4 frame with a TitleBlock; each part gets front/top/side views
+plus an isometric, dimensioned with Dimension()/Leader()
 (drafts from draft_preset()). The layout is verified collision-free by lint()
 before export.
 
@@ -22,7 +22,7 @@ from build123d import (
     LineType, Location, Mode, Plane, RegularPolygon, Text, extrude,
 )
 from build123d_drafting import (
-    dim_linear, draft_preset, find_interferences, iso_title_block, leader,
+    Dimension, draft_preset, find_interferences, Leader, TitleBlock,
 )
 
 DRAFT = draft_preset(font_size=2.2, decimal_precision=1)
@@ -41,7 +41,7 @@ view_boxes: list = []    # bbox of each projected view — labels must clear the
 def _label_box(t, name="text"):
     bb = t.bounding_box()
     return SimpleNamespace(label_bbox=(bb.min.X, bb.min.Y, bb.max.X, bb.max.Y),
-                           label_str=name, lines=None, shape=None)
+                           label=name, segments=[], elbow=None)
 
 
 # --- 3D parts (simplified — ISO 6410 style, no modelled threads) ------------
@@ -92,15 +92,14 @@ def _add_view(vis, hid, cx, cy, label):
 
 
 def _dim(p1, p2, side, dist, label):
-    d = dim_linear(p1, p2, side, dist, DRAFT, label=label)
-    dims_l.append(d.shape)
+    d = Dimension(p1, p2, side, dist, DRAFT, label=label)
+    dims_l.append(d)
     lint_items.append(d)
 
 
 def _leader(tip, elbow, label):
-    ld = leader(tip, elbow, label, DRAFT)
-    dims_l.append(ld.lines)
-    text_l.append(ld.text)
+    ld = Leader(tip, elbow, label, DRAFT)
+    dims_l.append(ld)
     lint_items.append(ld)
 
 
@@ -138,14 +137,13 @@ border.extend(_rect_edges(PW - 2 * MARGIN, PH - 2 * MARGIN))
 border.extend(_rect_edges(PW, PH))
 
 TB_W = 118.0
-tb = iso_title_block(
+tb = TitleBlock(
     "M10 HEX BOLT & NUT", "B3D-DH-2", scale="1:1", material="Steel 8.8",
     general_tolerance="ISO 2768-m", designed_by="build123d-drafting-helpers",
     date="2026-06-01", width=TB_W, draft=draft_preset(font_size=2.4, decimal_precision=1),
 )
 tb_loc = Location((PW / 2 - MARGIN - TB_W, -PH / 2 + MARGIN, 0))
-part_v.append(tb.lines.moved(tb_loc))
-text_l.append(tb.text.moved(tb_loc))
+dims_l.append(tb.moved(tb_loc))
 
 # --- bolt: views + dimensions (front view) ----------------------------------
 fb = _draw_part(_bolt(), LEN / 2, -104.0, 6.0)
@@ -167,9 +165,10 @@ _leader((nb.center().X, nb.min.Y, 0), (nb.center().X - 24, nb.min.Y - 14, 0),
         f"⌀{BORE} thru (M{int(DIA)})")
 
 # the title block is a labelled feature too
-_leader((tb_loc.position.X + 40, -PH / 2 + MARGIN + tb.bbox["height"], 0),
-        (tb_loc.position.X + 30, -PH / 2 + MARGIN + tb.bbox["height"] + 16, 0),
-        "iso_title_block")
+tb_h = tb.bounding_box().size.Y
+_leader((tb_loc.position.X + 40, -PH / 2 + MARGIN + tb_h, 0),
+        (tb_loc.position.X + 30, -PH / 2 + MARGIN + tb_h + 16, 0),
+        "TitleBlock")
 
 
 def lint():
@@ -178,7 +177,7 @@ def lint():
     Checks the dim/leader lines + labels against each other and against the
     FRONT/TOP/SIDE/ISO view labels, and — via ``obstacles`` — that no label lands
     over a projected view (the title block text is intentionally not a forbidden
-    zone, since the iso_title_block leader is *meant* to point at it).
+    zone, since the TitleBlock leader is *meant* to point at it).
     """
     return find_interferences(
         lint_items + [_label_box(v) for v in view_labels],

@@ -15,10 +15,16 @@ and labelled by the helpers it documents ([`examples/specimen_sheet.py`](example
 
 ```python
 from build123d_drafting import (
-    dim_linear, place_dims, place_labels, centerline,
-    leader, view_axes, lint_drawing,
+    Dimension, place_dims, place_labels, Centerline,
+    Leader, view_axes, lint_drawing, find_interferences, find_overlaps,
 )
 ```
+
+Every annotation builder is a native build123d `BaseSketchObject` subclass — the
+returned object **is** a `Sketch`. It composes inside a `BuildSketch`, combines with
+`+` / `-`, can be `.moved()`, exports directly, and is queried with `.faces()` /
+`.bounding_box()`. All geometry — frame boxes, witness lines, GD&T glyphs, and text —
+is rendered as thin filled *faces* on a single ink layer (no `.lines` / `.text` split).
 
 The install name is `build123d-drafting-helpers`; the import name is `build123d_drafting`.
 
@@ -57,13 +63,13 @@ draft = draft_preset(font_size=3.0, line_width=0.15)      # override any field
 
 ---
 
-### `dim_linear(p1, p2, side, distance, draft, label=None, tolerance=None, label_offset_x=0.0)`
+### `Dimension(p1, p2, side, distance, draft, label=None, tolerance=None, label_offset_x=0.0, basic=False)`
 
 `ExtensionLine` wrapper with named placement side instead of raw signed offset.
 
 ```python
 draft = Draft(font_size=2.5, decimal_precision=1)
-dim = dim_linear((-20, -10, 0), (20, -10, 0), "below", 8, draft, label="40")
+dim = Dimension((-20, -10, 0), (20, -10, 0), "below", 8, draft, label="40")
 ```
 
 `side` accepts `"above"` / `"below"` / `"left"` / `"right"` or an explicit world-direction vector.
@@ -74,12 +80,16 @@ from a crossing centreline without changing the dim position or geometry. Positi
 
 ```python
 # Label crosses bore centreline at x=0 — shift it right by 15 mm
-dim = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="Ø5.0 H8", label_offset_x=15)
+dim = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="Ø5.0 H8", label_offset_x=15)
 ```
 
-Returns a `DimResult(shape, label_str, measured_length, dim_level_y, label_bbox)`.
-`label_bbox` is the precise text extent `(min_x, min_y, max_x, max_y)` — used by `lint_drawing`
-and `place_labels` for centreline-overlap detection.
+`basic=True` draws a rectangle around the value, marking it a *basic* (theoretically-exact)
+dimension per ISO 1101 / ASME Y14.5.
+
+The object is a `Sketch` with metadata attributes `.label`, `.measured_length`,
+`.dim_level_y`, `.is_basic`, `.segments`, and `.label_bbox` — the precise text extent
+`(min_x, min_y, max_x, max_y)` used by `lint_drawing` / `find_interferences` and
+`place_labels` for centreline-overlap detection.
 
 ---
 
@@ -108,7 +118,7 @@ Dims whose X/Y spans overlap are placed on successive tiers; non-overlapping dim
 Like `place_dims` but also auto-shifts each label to clear any crossing vertical centreline.
 
 ```python
-bore_cl = centerline((0, -30, 0), (0, 30, 0))   # vertical centreline at x=0
+bore_cl = Centerline((0, -30, 0), (0, 30, 0))   # vertical centreline at x=0
 
 dims = place_labels([
     ((-10, 0, 0), (10, 0, 0), "above", 8, "Ø5.0 H8"),
@@ -122,48 +132,45 @@ automatically. Multiple crossing centrelines are handled in one pass.
 
 ---
 
-### `centerline(p1, p2)` / `CenterlineResult`
+### `Centerline(p1, p2, draft=None)`
 
-Thin Edge compound representing a centreline, returned as a `CenterlineResult`.
+A centreline between two points — a single thin line rendered as a face, with
+`.is_centerline = True` and a zero-width `.segments` rail for lint.
 
 ```python
-bore_cl = centerline((cx, -50, 0), (cx, 50, 0))   # vertical through bore axis
+bore_cl = Centerline((cx, -50, 0), (cx, 50, 0))   # vertical through bore axis
 ```
 
-Pass `CenterlineResult` objects to `place_labels(..., centerlines=[bore_cl])` for auto-avoidance,
+Pass `Centerline` objects to `place_labels(..., centerlines=[bore_cl])` for auto-avoidance,
 or pass them to `lint_drawing([...] + [bore_cl])` to get `label_centerline_overlap` warnings.
-
-When working with the MCP server, register centrelines with `register_centerline(shape, name)` so
-`lint_drawing()` in session mode can also check them.
 
 ---
 
-### `safe_dim_line(path, label, draft, fallback_label=None)`
+### `SafeDimension(path, label, draft, fallback_label=None)`
 
 `DimensionLine` wrapper that won't raise `ValueError` when the label is wider than the dim path.
 Truncates gracefully and retries.
 
 ---
 
-### `leader(tip, elbow, label, draft)`
+### `Leader(tip, elbow, label, draft, all_around=False, all_over=False)`
 
 Leader annotation built from scratch. The line stops cleanly before the label text.
 
 ```python
-res = leader((5, 5, 0), (20, 12, 0), "⌀7.93 H7", draft)
-exporter.add_shape(res.lines, layer="dims")   # arrowhead + shelf — fill_color layer
-exporter.add_shape(res.text,  layer="text")   # glyphs — fill_color layer
+ld = Leader((5, 5, 0), (20, 12, 0), "⌀7.93 H7", draft)
+exporter.add_shape(ld, layer="ink")   # arrowhead + shelf + glyphs — one ink layer
 ```
 
-Returns `LeaderResult(lines, text, label_str, tip, elbow)`. Route `lines` and `text` to
-separate SVG layers, both with `fill_color` set.
+The object is a `Sketch` with metadata `.label`, `.tip`, `.elbow`, `.label_bbox`, `.segments`.
+`all_around=True` / `all_over=True` draw the ISO 1101 all-around / all-over circles at the kink.
 
 `leader_offset(tip, direction, length, label, draft)` is a thin wrapper that places the
 elbow by compass direction (`"N"`, `"NE"`, …) or numeric angle (degrees CCW from +X) and
 a distance, instead of absolute coords — handy when the drawing uses a non-1:1 scale.
 
 ```python
-res = leader_offset((x, y), "NW", 12, "⌀6 boss", draft)
+ld = leader_offset((x, y), "NW", 12, "⌀6 boss", draft)   # returns a Leader
 ```
 
 ---
@@ -182,18 +189,19 @@ axes = view_axes((0, 0, -100), (0, 1, 0), (0, 0, 0))
 
 ### `lint_drawing(items, part_bbox=None)`
 
-Structural checks on a list of `DimResult` / `LeaderResult` / `CenterlineResult` objects:
+Duck-typed structural checks on a list of annotation objects (`Dimension`, `Leader`,
+`Centerline`, …). Dispatch is by attribute presence, not type:
 
 | Check | Trigger |
 |---|---|
 | `label_vs_measured` | Label value differs from measured path length by >0.5% — likely axis swap |
 | `annotation_overlap` | Two annotations overlap by >0.5 mm in both axes at the same Y level |
-| `label_centerline_overlap` | Dim label bbox crosses a `CenterlineResult` — use `label_offset_x` or `place_labels` |
+| `label_centerline_overlap` | Dim label bbox crosses a `Centerline` — use `label_offset_x` or `place_labels` |
 | `dim_inside_part` | Dim bbox overlaps part outline by >10% — dim is inside the view |
 | `leader_line_through_text` | Leader elbow point inside label bbox — line strikes through text |
 
 ```python
-bore_cl = centerline((0, -30, 0), (0, 30, 0))
+bore_cl = Centerline((0, -30, 0), (0, 30, 0))
 issues = lint_drawing([dim1, dim2, lea1, bore_cl])
 for issue in issues:
     print(issue.severity, issue.message)
@@ -201,7 +209,34 @@ for issue in issues:
 
 ---
 
-### `feature_control_frame(characteristic, tolerance, datums, draft, diameter=False, modifier=None)`
+### `find_interferences(items, *, part_bbox=None, page_bbox=None, obstacles=None)`
+
+Geometry-precise interference detection between annotation objects. Each item is
+decomposed into a **label box** (`.label_bbox` or its own face bbox) and **structural
+line segments** (`.segments` or straight edges), then checked for `labels_overlap`,
+`label_out_of_frame`, `label_on_part`, `label_over_geometry`, `line_pierces_label`, and
+`redundant_lines`. Works on the native objects and on lightweight `SimpleNamespace`
+stand-ins exposing `label_bbox` / `label` / `segments` (e.g. a raw view-label `Text`).
+
+```python
+issues = find_interferences([dim1, dim2, leader1], obstacles=view_boxes)
+```
+
+---
+
+### `find_overlaps(sketches, min_area=0.01)`
+
+A generic, zero-metadata geometric collision check: returns the pairs of `Sketch`es whose
+filled faces actually intersect (boolean `a & b`) with area above `min_area`. Useful for a
+final once-over of *any* drawing, not just helper objects.
+
+```python
+issues = find_overlaps([sketch_a, sketch_b, sketch_c])   # code: "faces_overlap"
+```
+
+---
+
+### `FeatureControlFrame(characteristic, tolerance, datums=(), draft=None, diameter=False, modifier=None, datum_modifiers=None)`
 
 ISO 1101 feature control frame — the boxed GD&T callout. build123d ships no GD&T primitives, and the
 geometric-characteristic symbols (⌖ ⊥ ∥ ◎ …) are absent from CAD-safe fonts, so each is drawn
@@ -211,13 +246,12 @@ geometrically rather than as a glyph.
 draft = Draft(font_size=2.5, decimal_precision=1)
 
 # | ⌖ | ⌀0.5 Ⓜ | A | B | C |
-fcf = feature_control_frame(
+fcf = FeatureControlFrame(
     "position", 0.5, ("A", "B", "C"), draft,
     diameter=True,     # prepend ⌀ (cylindrical tolerance zone)
     modifier="M",      # circled M = MMC ("L" = LMC, "P" = projected; None = RFS)
 )
-exporter.add_shape(fcf.lines, layer="dims")   # frame + symbols — line_color layer
-exporter.add_shape(fcf.text,  layer="text")   # values + letters — fill_color layer
+exporter.add_shape(fcf, layer="ink")   # frame + symbols + values — one ink layer
 ```
 
 All 14 characteristics are supported: `straightness`, `flatness`, `circularity`, `cylindricity`,
@@ -228,8 +262,10 @@ Per-datum material-condition modifiers are available via `datum_modifiers`, e.g.
 `datum_modifiers={"A": "M"}` draws a circled M after datum A's letter.
 
 The frame is built with its bottom-left corner at the origin (height = 2 × font size, per ISO 3098).
-Returns `FeatureControlFrameResult(lines, text, characteristic, tolerance_str, datums, width, height)`.
-Route `lines` and `text` to separate SVG layers, both with `fill_color` set.
+The object is a `Sketch` with metadata `.characteristic`, `.tolerance_str`, `.datums`, `.segments`.
+A `CompositeFeatureControlFrame(characteristic, rows, draft=None)` stacks two or more tolerance
+rows sharing one characteristic cell — each `row` is a dict with `tolerance` (required) plus
+optional `datums` / `diameter` / `modifier` / `datum_modifiers`.
 
 > **Why drawn, not typed:** a frequent failure mode (see build123d-mcp Discord) is building these
 > symbols ad-hoc from circles + lines and positioning each by `someRect.center()` — if a referenced
@@ -238,38 +274,41 @@ Route `lines` and `text` to separate SVG layers, both with `fill_color` set.
 
 ---
 
-### `datum_feature(letter, draft, filled=True)`
+### `DatumFeature(letter, draft=None, filled=True)`
 
 ISO 5459 datum feature symbol: a filled triangle on a short leader to a framed datum letter.
-Built with the triangle tip at the origin (pointing −Y); move it onto the feature with `.shape.moved(loc)`.
+Built with the triangle tip at the origin (pointing −Y); move it onto the feature with `.moved(loc)`.
 
 ```python
-dat = datum_feature("A", draft)
-exporter.add_shape(dat.lines, layer="dims")   # triangle (filled) + box — fill_color layer
-exporter.add_shape(dat.text,  layer="text")   # the letter — fill_color layer
+dat = DatumFeature("A", draft)
+exporter.add_shape(dat, layer="ink")   # triangle + box + letter — one ink layer
 ```
 
-Returns `DatumFeatureResult(lines, text, letter)`.
+A `DatumTarget(identifier, area_label=None, draft=None)` draws the companion ISO 5459
+datum-target circle (upper compartment = target-area size, lower = identifier).
 
 ---
 
-### `iso_title_block(...)` and `surface_finish_mark(...)`
+### `TitleBlock(...)`, `SurfaceFinish(...)` and `HoleCallout(...)`
 
-`iso_title_block` is a **standalone title box** (170 × 16 mm by default), positioned by the caller. It is *not* a substitute for `build123d.TechnicalDrawing`, which is a whole-page chrome — page-sized border + grid ticks + embedded title box, returned as a single `Sketch`. Use `TechnicalDrawing` when you want the full drawing-sheet frame; reach for `iso_title_block` when you want just the title box, positionable anywhere, with separate `lines`/`text` `Compound`s for SVG layer routing, and with `material` / `general_tolerance` fields that `TechnicalDrawing` does not carry.
+`TitleBlock` is a **standalone title box** (170 × 16 mm by default), positioned by the caller. It is *not* a substitute for `build123d.TechnicalDrawing`, which is a whole-page chrome — page-sized border + grid ticks + embedded title box. Use `TechnicalDrawing` when you want the full drawing-sheet frame; reach for `TitleBlock` when you want just the title box, positionable anywhere, with `material` / `general_tolerance` fields that `TechnicalDrawing` does not carry. It is a `Sketch` — for its overall height use `tb.bounding_box().size.Y`.
 
-`surface_finish_mark` produces an ISO 1302 Ra-value check-mark symbol — build123d does not ship one.
+`SurfaceFinish(ra_value, position, angle=0.0, draft=None, size=None)` produces an ISO 1302 Ra-value
+check-mark symbol (build123d does not ship one); its tip is exposed as `.mark_position`.
+`HoleCallout(diameter, *, count=None, through=False, depth=None, cbore_dia=None, …)` builds a
+single-line hole note, e.g. `4× ⌀8.5 THRU`.
 
 ## Status against upstream
 
 - `lint_drawing` is a prototype of rule-based drawing checks that build123d's roadmap mentions as future work. If upstream ships its own linter later, this one can be deprecated.
-- `dim_linear` is a thin convenience wrapper over `ExtensionLine` — it does not replace the underlying class, it just lets you write `side="above"` instead of computing the right-hand-normal signed offset by hand. If upstream adds a named-side parameter, this helper becomes redundant.
+- `Dimension` is a thin convenience wrapper over `ExtensionLine` — it does not replace the underlying class, it just lets you write `side="above"` instead of computing the right-hand-normal signed offset by hand. If upstream adds a named-side parameter, this helper becomes redundant.
 
 ## Examples
 
 [`examples/specimen_sheet.py`](examples/specimen_sheet.py) — the catalogue **shown at the top
 of this page** — is an **A3 technical drawing that catalogues the helpers using the helpers
-themselves**: a real drawing frame, an `iso_title_block()` title block, every specimen called
-out by a `leader()` carrying the helper's name, all drafted with `draft_preset()`, and each
+themselves**: a real drawing frame, a `TitleBlock` title block, every specimen called
+out by a `Leader` carrying the helper's name, all drafted with `draft_preset()`, and each
 cell captioned with the exact snippet that produced it.
 
 Run `python examples/specimen_sheet.py` to write `specimen_sheet.svg`, then rasterise it
@@ -280,8 +319,8 @@ is build123d geometry — text included — it also exports to DXF and scales li
 
 Where the specimen sheet is a *catalogue*, this shows the **end-to-end workflow on a real
 part** (an M10 hex bolt + nut): build the 3D part → `project_to_viewport()` views →
-dimension with `dim_linear()` / `leader()` → **lint with `find_interferences()`** → export.
-An A4 frame, an `iso_title_block()`, **front / top / side views plus an isometric** for each
+dimension with `Dimension` / `Leader` → **lint with `find_interferences()`** → export.
+An A4 frame, a `TitleBlock`, **front / top / side views plus an isometric** for each
 part (with dashed hidden lines), and the layout is verified collision-free by `lint()` before
 it's written.
 

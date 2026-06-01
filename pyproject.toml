@@ -4,14 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "build123d-drafting-helpers"
-version = "0.1.13"
-description = "Third-party drawing-annotation helpers for build123d — dim_linear, leader, view_axes, lint_drawing"
+version = "0.2.0"
+description = "Third-party drawing-annotation helpers for build123d — native BaseSketchObject dimensions, leaders, GD&T frames"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Paul Fremantle", email = "pzfreo@gmail.com" }]
 requires-python = ">=3.10"
 dependencies = [
-    "build123d>=0.7.0",
+    # 0.2.0 builds on trace() and BaseSketchObject; verified against 0.10.0.
+    "build123d>=0.9.0",
 ]
 keywords = ["build123d", "cad", "drafting", "engineering-drawing", "dimensions"]
 classifiers = [
