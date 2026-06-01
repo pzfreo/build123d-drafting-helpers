@@ -3,12 +3,13 @@
 Unlike the specimen sheet (a catalogue of symbols), this shows how you actually
 *make a drawing* with the helpers:
 
-    build the 3D part  ->  project_to_viewport() views  ->  dimension with the
-    helpers  ->  lint with find_interferences()  ->  export SVG/DXF
+    build the 3D part  ->  project_to_viewport() views (front / top / side / iso)
+    ->  dimension with the helpers  ->  lint with find_interferences()  ->  export
 
-It's an A4 frame with an iso_title_block(), the bolt and nut as projected front
-views, dimensioned with dim_linear()/leader() (drafts from draft_preset()), and
-the layout is verified collision-free by lint() before export.
+It's an A3 frame with an iso_title_block(); each part gets a third-angle set of
+front/top/side views plus an isometric, dimensioned with dim_linear()/leader()
+(drafts from draft_preset()). The layout is verified collision-free by lint()
+before export.
 
     python examples/part_drawing.py            # writes part_drawing.svg
 """
@@ -18,19 +19,28 @@ from types import SimpleNamespace
 
 from build123d import (
     Align, BuildPart, BuildSketch, Circle, Color, Compound, Edge, ExportSVG,
-    LineType, Location, Plane, RegularPolygon, Text, extrude,
+    LineType, Location, Mode, Plane, RegularPolygon, Text, extrude,
 )
 from build123d_drafting import (
     dim_linear, draft_preset, find_interferences, iso_title_block, leader,
 )
 
 DRAFT = draft_preset(font_size=2.5, decimal_precision=1)
-PW, PH, MARGIN = 297.0, 210.0, 6.0          # A4 landscape
+PW, PH, MARGIN = 420.0, 297.0, 6.0          # A3 landscape
 AF, HEAD_H, DIA, LEN = 16.0, 6.4, 10.0, 40.0
 NUT_AF, NUT_T, BORE = 16.0, 8.0, 8.5
+SANS = "Liberation Sans"
+D = 800.0                                    # camera distance
 
-part_v, hidden_v, dims_l, text_l, border = [], [], [], [], []
+border, part_v, hidden_v, dims_l, text_l = [], [], [], [], []
 lint_items: list = []
+view_labels: list = []   # FRONT/TOP/SIDE/ISO labels — linted against the dim lines
+
+
+def _label_box(t, name="text"):
+    bb = t.bounding_box()
+    return SimpleNamespace(label_bbox=(bb.min.X, bb.min.Y, bb.max.X, bb.max.Y),
+                           label_str=name, lines=None, shape=None)
 
 
 # --- 3D parts (simplified — ISO 6410 style, no modelled threads) ------------
@@ -52,22 +62,31 @@ def _nut():
         extrude(amount=NUT_T)
         with BuildSketch():
             Circle(BORE / 2)
-        extrude(amount=NUT_T, mode=__import__("build123d").Mode.SUBTRACT)
+        extrude(amount=NUT_T, mode=Mode.SUBTRACT)
     return p.part
 
 
-def _front_view(part, look_z, page_xy):
-    """Project a front view (look along -Y) and move its centre to page_xy.
-    Returns (translation_dx, translation_dy) so feature coords can be placed."""
-    vis, hid = part.project_to_viewport((0, -200, look_z), (0, 0, 1), (0, 0, look_z))
-    v = Compound(children=list(vis))
-    ctr = v.bounding_box().center()
-    dx, dy = page_xy[0] - ctr.X, page_xy[1] - ctr.Y
-    loc = Location((dx, dy, 0))
-    part_v.append(v.moved(loc))
-    if hid:
-        hidden_v.append(Compound(children=list(hid)).moved(loc))
-    return dx, dy, look_z
+def _project(part, origin, up, look):
+    vis, hid = part.project_to_viewport(origin, up, look)
+    return Compound(children=list(vis)), (Compound(children=list(hid)) if hid else None)
+
+
+def _place(comp, cx, cy):
+    ctr = comp.bounding_box().center()
+    return comp.moved(Location((cx - ctr.X, cy - ctr.Y, 0)))
+
+
+def _add_view(vis, hid, cx, cy, label):
+    v = _place(vis, cx, cy)
+    part_v.append(v)
+    if hid is not None:
+        hidden_v.append(_place(hid, cx, cy))
+    bb = v.bounding_box()
+    lbl = Text(label, font_size=2.6, font=SANS, align=(Align.CENTER, Align.MAX)
+               ).moved(Location((cx, bb.min.Y - 3.0, 0)))
+    text_l.append(lbl)
+    view_labels.append(lbl)
+    return bb
 
 
 def _dim(p1, p2, side, dist, label):
@@ -83,11 +102,23 @@ def _leader(tip, elbow, label):
     lint_items.append(ld)
 
 
-def _note_item(shapes, name):
-    bb = Compound(children=shapes).bounding_box()
-    lint_items.append(SimpleNamespace(
-        label_bbox=(bb.min.X, bb.min.Y, bb.max.X, bb.max.Y),
-        label_str=name, lines=None, shape=None))
+def _draw_part(part, cz, gx, gy):
+    """Third-angle front/top/side + isometric. Returns the placed FRONT bbox."""
+    front = _project(part, (0, -D, cz), (0, 0, 1), (0, 0, cz))
+    top = _project(part, (0, 0, D), (0, 1, 0), (0, 0, cz))
+    side = _project(part, (D, 0, cz), (0, 0, 1), (0, 0, cz))
+    iso = _project(part, (D, D, D), (0, 0, 1), (0, 0, cz))
+
+    fb = front[0].bounding_box()
+    fw, fh = fb.size.X, fb.size.Y
+    sw = side[0].bounding_box().size.X
+    th = top[0].bounding_box().size.Y
+
+    f_bb = _add_view(*front, gx, gy, "FRONT")
+    _add_view(*top, gx, gy + fh / 2 + 30 + th / 2, "TOP")          # above front
+    _add_view(*side, gx + fw / 2 + 30 + sw / 2, gy, "SIDE")         # right of front
+    _add_view(*iso, gx + fw / 2 + 30 + sw / 2, gy + fh / 2 + 40, "ISO")
+    return f_bb
 
 
 # --- page frame + title block -----------------------------------------------
@@ -110,39 +141,36 @@ tb_loc = Location((PW / 2 - MARGIN - TB_W, -PH / 2 + MARGIN, 0))
 part_v.append(tb.lines.moved(tb_loc))
 text_l.append(tb.text.moved(tb_loc))
 
-# --- bolt: front view + dimensions ------------------------------------------
-bx, by = -62.0, 10.0
-bdx, bdy, _ = _front_view(_bolt(), LEN / 2, (bx, by))
-# placed page_y = world_z - LEN/2 + bdy ; world z: shaft 0..LEN, head LEN..LEN+HEAD_H
-y0 = -LEN / 2 + bdy                 # shaft start (world z = 0)
-y_head = LEN / 2 + bdy             # head start (world z = LEN)
-y_top = y_head + HEAD_H
-xL, xR = bx - AF / 2, bx + AF / 2   # head spans across-flats
-_dim((bx - DIA / 2, y0, 0), (bx - DIA / 2, y_head, 0), "left", 14, str(LEN))      # thread length
-_dim((xL, y_top, 0), (xR, y_top, 0), "above", 8, str(AF))                         # head A/F
-_leader((bx + DIA / 2, (y0 + y_head) / 2, 0), (bx + 34, (y0 + y_head) / 2 + 10, 0),
-        f"M{int(DIA)} × 1.5")
-_leader((xR, y_top - HEAD_H / 2, 0), (xR + 30, y_top + 6, 0), f"head {HEAD_H} thk")
+# --- bolt: views + dimensions (front view) ----------------------------------
+fb = _draw_part(_bolt(), LEN / 2, -118.0, 20.0)
+y0, y_head, y_top = fb.min.Y, fb.max.Y - HEAD_H, fb.max.Y
+xL, xR = fb.center().X - AF / 2, fb.center().X + AF / 2
+_dim((xL - DIA / 2, y0, 0), (xL - DIA / 2, y_head, 0), "left", 12, str(LEN))   # thread length
+_dim((xL, y_top, 0), (xR, y_top, 0), "above", 8, str(AF))                      # head A/F
+_leader((fb.center().X + DIA / 2, (y0 + y_head) / 2, 0),
+        (fb.center().X + 26, (y0 + y_head) / 2 - 10, 0), f"M{int(DIA)} × 1.5")
 
-# --- nut: front view + dimensions -------------------------------------------
-nx, ny = 52.0, 10.0
-ndx, ndy, _ = _front_view(_nut(), NUT_T / 2, (nx, ny))
-ny0 = -NUT_T / 2 + ndy
-ny1 = NUT_T / 2 + ndy
-nxL, nxR = nx - NUT_AF / 2, nx + NUT_AF / 2
-_dim((nxL, ny1, 0), (nxR, ny1, 0), "above", 8, str(NUT_AF))                       # A/F
-_dim((nxR, ny0, 0), (nxR, ny1, 0), "right", 12, str(NUT_T))                       # thickness
-_leader((nx, ny0, 0), (nx - 30, ny0 - 14, 0), f"⌀{BORE} thru (M{int(DIA)})")
+# --- nut: views + dimensions (front view) -----------------------------------
+nb = _draw_part(_nut(), NUT_T / 2, 70.0, 20.0)
+_dim((nb.min.X, nb.max.Y, 0), (nb.max.X, nb.max.Y, 0), "above", 8, str(NUT_AF))   # A/F
+_dim((nb.max.X, nb.min.Y, 0), (nb.max.X, nb.max.Y, 0), "right", 10, str(NUT_T))   # thickness
+_leader((nb.center().X, nb.min.Y, 0), (nb.center().X - 24, nb.min.Y - 14, 0),
+        f"⌀{BORE} thru (M{int(DIA)})")
 
-# title block is a labelled feature too
+# the title block is a labelled feature too
 _leader((tb_loc.position.X + 40, -PH / 2 + MARGIN + tb.bbox["height"], 0),
-        (tb_loc.position.X + 30, -PH / 2 + MARGIN + tb.bbox["height"] + 14, 0),
+        (tb_loc.position.X + 30, -PH / 2 + MARGIN + tb.bbox["height"] + 16, 0),
         "iso_title_block")
 
 
 def lint():
-    """Lint the drawing's annotations with find_interferences() before export."""
-    return find_interferences(lint_items)
+    """Lint the drawing's annotations with find_interferences() before export.
+
+    Checks the dim/leader lines + labels against each other and against the
+    FRONT/TOP/SIDE/ISO view labels (the title block text is intentionally not a
+    forbidden zone — the iso_title_block leader is *meant* to point at it).
+    """
+    return find_interferences(lint_items + [_label_box(v) for v in view_labels])
 
 
 def write_part_drawing(svg_path: str = "part_drawing.svg") -> str:
@@ -161,8 +189,7 @@ def write_part_drawing(svg_path: str = "part_drawing.svg") -> str:
 
 if __name__ == "__main__":
     import sys
-    issues = lint()
-    for i in issues:
+    for i in lint():
         print(f"[{i.severity}] {i.code}: {i.message}")
-    print(f"lint: {sum(i.severity == 'error' for i in issues)} error(s)")
+    print(f"lint: {sum(i.severity == 'error' for i in lint())} error(s)")
     print("wrote", write_part_drawing(sys.argv[1] if len(sys.argv) > 1 else "part_drawing.svg"))

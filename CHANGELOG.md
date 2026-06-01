@@ -5,9 +5,9 @@
 ### Examples
 
 - **`examples/part_drawing.py`**: a worked M10 hex bolt + nut drawing demonstrating the
-  end-to-end workflow — build the 3D part, `project_to_viewport()` views, dimension with the
-  helpers, `lint()` with `find_interferences()`, then export. Complements the specimen-sheet
-  catalogue.
+  end-to-end workflow — build the 3D part, `project_to_viewport()` into a third-angle set of
+  front/top/side views plus an isometric per part, dimension with the helpers, `lint()` with
+  `find_interferences()`, then export. Complements the specimen-sheet catalogue.
 
 ## v0.1.11 — 2026-06-01
 
