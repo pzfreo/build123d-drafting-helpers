@@ -257,6 +257,14 @@ Returns `DatumFeatureResult(lines, text, letter)`.
 - `lint_drawing` is a prototype of rule-based drawing checks that build123d's roadmap mentions as future work. If upstream ships its own linter later, this one can be deprecated.
 - `dim_linear` is a thin convenience wrapper over `ExtensionLine` — it does not replace the underlying class, it just lets you write `side="above"` instead of computing the right-hand-normal signed offset by hand. If upstream adds a named-side parameter, this helper becomes redundant.
 
+## Examples
+
+- [`examples/specimen_sheet.py`](examples/specimen_sheet.py) — a self-documenting
+  legend of every annotation helper. Each cell renders a symbol with the exact
+  snippet that produced it as the caption. Run `python examples/specimen_sheet.py`
+  to write `specimen_sheet.svg`. Because the whole sheet is build123d geometry
+  (text included), it also exports to DXF — it is itself a valid technical drawing.
+
 ## Development
 
 ```

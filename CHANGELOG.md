@@ -9,6 +9,17 @@
   `line_width = 0.1`, instead of build123d's heavy defaults (`arrow_length=3.0`,
   `line_width=0.5`) which look clumsy at small font sizes. Any field can be
   overridden by keyword.
+- **`find_interferences(items, *, part_bbox=None, page_bbox=None)`**: geometry-precise
+  interference detection between drafting annotations. Decomposes each annotation into
+  its label box and its structural line segments (witness lines, dim lines, leader
+  shafts) and tests actual crossings — catching cases `lint_drawing`'s whole-bbox checks
+  miss, e.g. a stacked dim's extension line spearing a neighbouring dim's value. Reports
+  `line↔label`, `label↔label`, **`line↔line` redundant collinear overlap** (two stacked
+  dims sharing an endpoint each draw the shared witness line), and (when
+  `page_bbox`/`part_bbox` are supplied) `label↔frame` and `label↔part`. Generic line↔line
+  *crossings* are intentionally not flagged — only collinear overlap. Real collisions are
+  severity `"error"`; redundant collinear overlaps are `"warning"` (chain dimensioning
+  legitimately shares witness lines, so they are advisory). Returns `list[LintIssue]`.
 
 ## v0.1.8 — 2026-06-01
 
