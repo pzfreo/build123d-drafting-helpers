@@ -1,11 +1,11 @@
 """Specimen sheet — an A3 technical drawing that catalogues the helpers.
 
-The sheet is itself a real drawing: an A3 frame, an ``iso_title_block()`` title
-block, and every specimen pointed at by a ``leader()`` carrying the helper's
-name — i.e. it is laid out and annotated *with the helpers it documents*. Symbol
-drafts come from ``draft_preset()``, and each cell is captioned with the exact
-snippet that drew it. All geometry, so it exports to SVG *and* DXF and scales
-like any technical drawing.
+The sheet is itself a real drawing: an A3 frame, a ``TitleBlock`` title block,
+and every specimen pointed at by a ``Leader`` carrying the helper's name — i.e.
+it is laid out and annotated *with the helpers it documents*. Symbol drafts come
+from ``draft_preset()``, and each cell is captioned with the exact snippet that
+drew it. All geometry, so it exports to SVG *and* DXF and scales like any
+technical drawing.
 
     python examples/specimen_sheet.py            # writes specimen_sheet.svg
     python examples/specimen_sheet.py out.svg
@@ -18,8 +18,8 @@ from build123d import (
     Align, Color, Compound, Edge, ExportSVG, LineType, Location, Pos, Rectangle, Text,
 )
 from build123d_drafting import (
-    centerline, datum_feature, dim_linear, draft_preset, feature_control_frame,
-    find_interferences, iso_title_block, leader, place_dims, surface_finish_mark,
+    Centerline, DatumFeature, Dimension, draft_preset, FeatureControlFrame,
+    find_interferences, Leader, place_dims, SurfaceFinish, TitleBlock,
 )
 
 MONO, SANS = "Liberation Mono", "Liberation Sans"
@@ -33,37 +33,36 @@ PW, PH, MARGIN = 420.0, 297.0, 6.0
 # 4-column × 3-row grid (12 slots). Columns at x = -150 / -50 / 50 / 150; rows at
 # y = 102 / 30 / -44. The rightmost column's name labels point *left* so they stay
 # inside the frame. place_dims fills the col2/row3 slot; the rest are SPECS below.
-# (name, snippet, var, routing-kind, (cell_x, cell_y))
+# (name, snippet, var, (cell_x, cell_y))
 SPECS = [
-    ("dim_linear",
-     'd = dim_linear(\n    (0,0,0), (30,0,0),\n    "below", 6, draft,\n    label="30.0")', "d", "shape_ink", (-150, 102)),
-    ("leader",
-     'ld = leader(\n    (0,0,0), (9,7,0),\n    "Ø7.93 H7", draft)', "ld", "lines_ink", (-50, 102)),
-    ("centerline",
-     'cl = centerline(\n    (-12,0,0),\n    (12,0,0), draft)', "cl", "shape_line", (50, 102)),
-    ("datum_feature",
-     'dt = datum_feature("A",\n    draft)', "dt", "lines_ink", (150, 102)),
-    ("feature_control_frame",
-     'fcf = feature_control_frame(\n    "position", 0.5,\n    ("A","B","C"), draft,\n    diameter=True, modifier="M")', "fcf", "lines_str", (-150, 30)),
-    ("surface_finish_mark",
-     'm = surface_finish_mark(\n    "1.6", (0,0,0),\n    draft=draft)', "m", "lines_str", (-50, 30)),
-    ("datum_target",
-     'dt2 = datum_target(\n    "A1", area_label="Ø6",\n    draft=draft)', "dt2", "lines_str", (50, 30)),
-    ("hole_callout",
-     'hc = hole_callout(\n    8.5, count=4,\n    through=True,\n    draft=draft)', "hc", "lines_str", (150, 30)),
-    ("composite_feature_control_frame",
-     'cfcf = composite_feature_control_frame(\n    "position",\n    [{"tolerance":0.25,\n      "datums":("A","B","C"),\n      "diameter":True},\n     {"tolerance":0.1,\n      "datums":("A",), "diameter":True}],\n    draft)', "cfcf", "lines_str", (-150, -44)),
-    ("dim_linear basic",
-     'db = dim_linear(\n    (0,0,0), (24,0,0),\n    "below", 6, draft,\n    label="24", basic=True)', "db", "shape_ink", (50, -44)),
-    ("leader all-around",
-     'la = leader(\n    (0,0,0), (9,7,0),\n    "0.2", draft,\n    all_around=True)', "la", "lines_ink", (150, -44)),
+    ("Dimension",
+     'd = Dimension(\n    (0,0,0), (30,0,0),\n    "below", 6, draft,\n    label="30.0")', "d", (-150, 102)),
+    ("Leader",
+     'ld = Leader(\n    (0,0,0), (9,7,0),\n    "Ø7.93 H7", draft)', "ld", (-50, 102)),
+    ("Centerline",
+     'cl = Centerline(\n    (-12,0,0),\n    (12,0,0), draft)', "cl", (50, 102)),
+    ("DatumFeature",
+     'dt = DatumFeature("A",\n    draft)', "dt", (150, 102)),
+    ("FeatureControlFrame",
+     'fcf = FeatureControlFrame(\n    "position", 0.5,\n    ("A","B","C"), draft,\n    diameter=True, modifier="M")', "fcf", (-150, 30)),
+    ("SurfaceFinish",
+     'm = SurfaceFinish(\n    "1.6", (0,0,0),\n    draft=draft)', "m", (-50, 30)),
+    ("DatumTarget",
+     'dt2 = DatumTarget(\n    "A1", area_label="Ø6",\n    draft=draft)', "dt2", (50, 30)),
+    ("HoleCallout",
+     'hc = HoleCallout(\n    8.5, count=4,\n    through=True,\n    draft=draft)', "hc", (150, 30)),
+    ("CompositeFeatureControlFrame",
+     'cfcf = CompositeFeatureControlFrame(\n    "position",\n    [{"tolerance":0.25,\n      "datums":("A","B","C"),\n      "diameter":True},\n     {"tolerance":0.1,\n      "datums":("A",), "diameter":True}],\n    draft)', "cfcf", (-150, -44)),
+    ("Dimension basic",
+     'db = Dimension(\n    (0,0,0), (24,0,0),\n    "below", 6, draft,\n    label="24", basic=True)', "db", (50, -44)),
+    ("Leader all-around",
+     'la = Leader(\n    (0,0,0), (9,7,0),\n    "0.2", draft,\n    all_around=True)', "la", (150, -44)),
 ]
 
 PRE = ("from build123d import *\nfrom build123d_drafting import *\n"
        "draft = draft_preset(font_size=2.4, decimal_precision=1)\n")
 
 border, stroke, ink, fill, code = [], [], [], [], []
-BUCKET = {"stroke": stroke, "ink": ink, "fill": fill}
 
 # Page-level annotations to lint with find_interferences: the leader callouts
 # (which carry lines + a label) and the code/note text blocks (label boxes).
@@ -75,25 +74,13 @@ def _text_box_item(shapes, name):
     bb = Compound(children=shapes).bounding_box()
     lint_items.append(SimpleNamespace(
         label_bbox=(bb.min.X, bb.min.Y, bb.max.X, bb.max.Y),
-        label_str=name, lines=None, shape=None))
+        label=name, segments=[], elbow=None))
 
 
 def run(snippet, var):
     ns: dict = {}
     exec(PRE + snippet, ns)  # noqa: S102 — trusted in-repo snippets
     return ns[var]
-
-
-def route(res, kind):
-    if kind == "shape_ink":
-        return [(res.shape, "ink")]
-    if kind == "shape_line":
-        return [(res.shape, "stroke")]
-    if kind == "lines_str":
-        return [(res.lines, "stroke"), (res.text, "fill")]
-    if kind == "lines_ink":
-        return [(res.lines, "ink"), (res.text, "fill")]
-    raise ValueError(kind)
 
 
 def place_code(snippet, cx, top_y):
@@ -107,28 +94,26 @@ def place_code(snippet, cx, top_y):
 
 
 def label_with_leader(bb, name, left=False):
-    """Dogfood leader(): point at the specimen and label it with the helper name.
+    """Dogfood Leader(): point at the specimen and label it with the helper name.
 
     For the rightmost column pass ``left=True`` so the label hangs to the left of
     the cell and stays inside the sheet frame.
     """
     if left:
-        lab = leader((bb.min.X, bb.max.Y, 0), (bb.min.X - 9, bb.max.Y + 8, 0), name, LBL_DRAFT)
+        lab = Leader((bb.min.X, bb.max.Y, 0), (bb.min.X - 9, bb.max.Y + 8, 0), name, LBL_DRAFT)
     else:
-        lab = leader((bb.max.X, bb.max.Y, 0), (bb.max.X + 9, bb.max.Y + 8, 0), name, LBL_DRAFT)
-    ink.append(lab.lines)   # arrow + shelf are faces
-    fill.append(lab.text)
+        lab = Leader((bb.max.X, bb.max.Y, 0), (bb.max.X + 9, bb.max.Y + 8, 0), name, LBL_DRAFT)
+    ink.append(lab)   # arrow + shelf + text are all faces on one sketch
     lint_items.append(lab)
 
 
-def add_cell(name, snippet, var, kind, cx, cy):
-    pieces = route(run(snippet, var), kind)
-    spec = Compound(children=[s for s, _ in pieces])
-    ctr = spec.bounding_box().center()
+def add_cell(name, snippet, var, cx, cy):
+    obj = run(snippet, var)
+    ctr = obj.bounding_box().center()
     tx, ty = cx - ctr.X, cy - ctr.Y
-    for s, b in pieces:
-        BUCKET[b].append(s.moved(Location((tx, ty, 0))))
-    bb = spec.moved(Location((tx, ty, 0))).bounding_box()
+    placed = obj.moved(Location((tx, ty, 0)))
+    ink.append(placed)
+    bb = placed.bounding_box()
     label_with_leader(bb, name, left=cx > 90)   # rightmost column labels point left
     place_code(snippet, cx, bb.min.Y - 5)
 
@@ -143,27 +128,25 @@ def _rect_edges(w, h, cx=0.0, cy=0.0):
 border.extend(_rect_edges(PW - 2 * MARGIN, PH - 2 * MARGIN))           # inner frame
 border.extend(_rect_edges(PW, PH))                                     # sheet edge
 
-# --- iso_title_block (our helper) in the bottom-right corner ---
+# --- TitleBlock (our helper) in the bottom-right corner ---
 TB_W = 180.0
-tb = iso_title_block(
+tb = TitleBlock(
     "SPECIMEN SHEET", "B3D-DH-1", scale="1:1", material="—",
     designed_by="build123d-drafting-helpers", date="2026-06-01",
     width=TB_W, draft=draft_preset(font_size=2.6, decimal_precision=1),
 )
 TB_X0, TB_Y0 = PW / 2 - MARGIN - TB_W, -PH / 2 + MARGIN
 tb_loc = Location((TB_X0, TB_Y0, 0))
-stroke.append(tb.lines.moved(tb_loc))
-fill.append(tb.text.moved(tb_loc))
+ink.append(tb.moved(tb_loc))
 
 # the title block is itself a specimen — call it out with a leader too, and
 # note *why* it exists (the nuance vs build123d's TechnicalDrawing title box).
 # The leader runs up the left; the name + note sit to its right so the leader
 # line never crosses the text (verified by lint() below).
-tb_top = TB_Y0 + tb.bbox["height"]
-tb_lab = leader((TB_X0 + 44, tb_top, 0), (TB_X0 + 46, tb_top + 15, 0),
-                "iso_title_block", LBL_DRAFT)
-ink.append(tb_lab.lines)
-fill.append(tb_lab.text)
+tb_top = TB_Y0 + tb.bounding_box().size.Y
+tb_lab = Leader((TB_X0 + 44, tb_top, 0), (TB_X0 + 46, tb_top + 15, 0),
+                "TitleBlock", LBL_DRAFT)
+ink.append(tb_lab)
 lint_items.append(tb_lab)
 note = []
 for k, ln in enumerate((
@@ -177,8 +160,8 @@ for k, ln in enumerate((
 _text_box_item(note, "title-block note")
 
 # --- specimens ---
-for name, snippet, var, kind, (cx, cy) in SPECS:
-    add_cell(name, snippet, var, kind, cx, cy)
+for name, snippet, var, (cx, cy) in SPECS:
+    add_cell(name, snippet, var, cx, cy)
 
 # --- place_dims composite, grid col2 / row3 ---
 pd = ("part = Rectangle(36,20) - Pos(0,-10)*Rectangle(16,8)\n"
@@ -190,7 +173,7 @@ pd = ("part = Rectangle(36,20) - Pos(0,-10)*Rectangle(16,8)\n"
 ns: dict = {}
 exec(PRE + pd, ns)  # noqa: S102
 outline = Compound(children=list(ns["part"].edges()))
-dims = Compound(children=[d.shape for d in ns["dims"]])
+dims = Compound(children=list(ns["dims"]))
 whole = Compound(children=[outline, dims])
 ctr = whole.bounding_box().center()
 loc = Location((-50 - ctr.X, -44 - ctr.Y, 0))

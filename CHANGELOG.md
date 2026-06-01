@@ -1,5 +1,63 @@
 # Changelog
 
+## v0.2.0 — 2026-06-01
+
+### Changed (breaking)
+
+- **Builders are now native build123d `BaseSketchObject` subclasses.** Every
+  annotation builder returns a real `Sketch`: it composes inside a
+  `BuildSketch`, can be `.moved()` / `.rotate()`d, exported directly, and
+  queried with `.faces()` / `.bounding_box()`. The old functions-returning-
+  `@dataclass`-`*Result` model is gone (clean break, no aliases).
+- **`*Result` dataclasses removed.** `DimResult`, `CenterlineResult`,
+  `LeaderResult`, `TitleBlockResult`, `SurfaceFinishResult`,
+  `FeatureControlFrameResult`, `CompositeFeatureControlFrameResult`,
+  `DatumFeatureResult`, `DatumTargetResult`, `HoleCalloutResult` are all
+  deleted.
+- **`add_to_layers()` removed.** Lines now render as thin filled *faces*, so
+  there is a single ink layer — no `.lines` / `.text` split, no flooding of
+  closed loops (the `⌀` prefix, modifier rings, GD&T glyphs all stroke
+  cleanly). Render/export is one call: `exporter.add_shape(obj, layer="ink")`.
+- **Function → class renames** (PascalCase, native build123d style):
+  - `dim_linear()` → `Dimension`
+  - `safe_dim_line()` → `SafeDimension`
+  - `centerline()` → `Centerline`
+  - `leader()` → `Leader`
+  - `iso_title_block()` → `TitleBlock`
+  - `surface_finish_mark()` → `SurfaceFinish`
+  - `feature_control_frame()` → `FeatureControlFrame`
+  - `composite_feature_control_frame()` → `CompositeFeatureControlFrame`
+  - `datum_feature()` → `DatumFeature`
+  - `datum_target()` → `DatumTarget`
+  - `hole_callout()` → `HoleCallout`
+- **Metadata moved onto the objects.** Each object carries `.label`,
+  `.label_bbox`, `.segments`, plus type-specific attrs (`.measured_length`,
+  `.dim_level_y`, `.is_basic`, `.elbow`, `.tip`, `.is_centerline`,
+  `.characteristic`, `.tolerance_str`, `.datums`, `.identifier`, `.letter`,
+  `.mark_position`, `.block_bbox`, …). `SurfaceFinish` exposes its tip via
+  `.mark_position` (not `.position`, which is a read-only `Shape` property).
+- **Kept as functions** (orchestrators / pure math): `place_dims()` and
+  `place_labels()` now return `list[Dimension]`; `leader_offset()` returns a
+  `Leader`; `view_axes()` and `draft_preset()` are unchanged.
+
+### Changed
+
+- **`lint_drawing()` is now generic and duck-typed.** Dispatch is by attribute
+  presence (`.elbow`, `.measured_length`, `.is_centerline`), not `isinstance`,
+  so it works on the new objects and on lightweight `SimpleNamespace`
+  stand-ins. All existing `LintIssue` codes are preserved.
+- **`find_interferences()` is now duck-typed.** Each item is decomposed via
+  `getattr(item, "label_bbox", …)` and `getattr(item, "segments", …)`, falling
+  back to the item's own face bbox and straight LINE edges. Same checks and
+  codes as before.
+
+### Added
+
+- **`find_overlaps(sketches, *, min_area=0.01)`** — pure-geometry collision
+  detection: flags pairs of sketches whose *filled faces* actually intersect
+  (boolean `a & b`, area threshold). Works on any build123d `Sketch` with zero
+  metadata. Code `faces_overlap` (warning).
+
 ## v0.1.13 — 2026-06-01
 
 ### Features
