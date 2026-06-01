@@ -20,7 +20,7 @@ from build123d_drafting import (
     iso_title_block, leader, place_dims, surface_finish_mark,
 )
 
-MONO = "Liberation Mono"
+MONO, SANS = "Liberation Mono", "Liberation Sans"
 SYM_DRAFT = draft_preset(font_size=2.4, decimal_precision=1)
 LBL_DRAFT = draft_preset(font_size=3.4, decimal_precision=1)
 CODE_FS, LINE_DY, BLUE = 2.2, 3.0, Color(0.10, 0.16, 0.55)
@@ -118,12 +118,19 @@ tb_loc = Location((TB_X0, TB_Y0, 0))
 stroke.append(tb.lines.moved(tb_loc))
 fill.append(tb.text.moved(tb_loc))
 
-# the title block is itself a specimen — call it out with a leader too
+# the title block is itself a specimen — call it out with a leader too, and
+# note *why* it exists (the nuance vs build123d's TechnicalDrawing title box)
 tb_top = TB_Y0 + tb.bbox["height"]
-tb_lab = leader((TB_X0 + 50, tb_top, 0), (TB_X0 + 66, tb_top + 17, 0),
+tb_lab = leader((TB_X0 + 50, tb_top, 0), (TB_X0 + 66, tb_top + 21, 0),
                 "iso_title_block", LBL_DRAFT)
 ink.append(tb_lab.lines)
 fill.append(tb_lab.text)
+for k, ln in enumerate((
+        "standalone alternative to TechnicalDrawing's title box —",
+        "positionable, layer-routable, with ISO 7200 fields",
+        "(material + general tolerance)")):
+    fill.append(Text(ln, font_size=2.3, font=SANS, align=(Align.CENTER, Align.MAX))
+                .moved(Location((TB_X0 + 66, tb_top + 14 - k * 3.1, 0))))
 
 # --- specimens ---
 for name, snippet, var, kind, (cx, cy) in SPECS:
