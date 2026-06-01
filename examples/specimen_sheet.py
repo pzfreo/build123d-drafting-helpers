@@ -24,26 +24,39 @@ from build123d_drafting import (
 
 MONO, SANS = "Liberation Mono", "Liberation Sans"
 SYM_DRAFT = draft_preset(font_size=2.4, decimal_precision=1)
-LBL_DRAFT = draft_preset(font_size=3.4, decimal_precision=1)
-CODE_FS, LINE_DY, BLUE = 2.2, 3.0, Color(0.10, 0.16, 0.55)
+LBL_DRAFT = draft_preset(font_size=3.0, decimal_precision=1)
+CODE_FS, LINE_DY, BLUE = 2.1, 2.9, Color(0.10, 0.16, 0.55)
 
 # A3 landscape, 420 x 297, centred on the origin.
 PW, PH, MARGIN = 420.0, 297.0, 6.0
 
+# 4-column × 3-row grid (12 slots). Columns at x = -150 / -50 / 50 / 150; rows at
+# y = 102 / 30 / -44. The rightmost column's name labels point *left* so they stay
+# inside the frame. place_dims fills the col2/row3 slot; the rest are SPECS below.
 # (name, snippet, var, routing-kind, (cell_x, cell_y))
 SPECS = [
     ("dim_linear",
-     'd = dim_linear(\n    (0,0,0), (30,0,0),\n    "below", 6, draft,\n    label="30.0")', "d", "shape_ink", (-135, 100)),
+     'd = dim_linear(\n    (0,0,0), (30,0,0),\n    "below", 6, draft,\n    label="30.0")', "d", "shape_ink", (-150, 102)),
     ("leader",
-     'ld = leader(\n    (0,0,0), (9,7,0),\n    "Ø7.93 H7", draft)', "ld", "lines_ink", (0, 100)),
+     'ld = leader(\n    (0,0,0), (9,7,0),\n    "Ø7.93 H7", draft)', "ld", "lines_ink", (-50, 102)),
     ("centerline",
-     'cl = centerline(\n    (-12,0,0),\n    (12,0,0), draft)', "cl", "shape_line", (135, 100)),
-    ("feature_control_frame",
-     'fcf = feature_control_frame(\n    "position", 0.5,\n    ("A","B","C"), draft,\n    diameter=True, modifier="M")', "fcf", "lines_str", (-135, 34)),
+     'cl = centerline(\n    (-12,0,0),\n    (12,0,0), draft)', "cl", "shape_line", (50, 102)),
     ("datum_feature",
-     'dt = datum_feature("A", draft)', "dt", "lines_ink", (0, 34)),
+     'dt = datum_feature("A",\n    draft)', "dt", "lines_ink", (150, 102)),
+    ("feature_control_frame",
+     'fcf = feature_control_frame(\n    "position", 0.5,\n    ("A","B","C"), draft,\n    diameter=True, modifier="M")', "fcf", "lines_str", (-150, 30)),
     ("surface_finish_mark",
-     'm = surface_finish_mark(\n    "1.6", (0,0,0),\n    draft=draft)', "m", "lines_str", (135, 34)),
+     'm = surface_finish_mark(\n    "1.6", (0,0,0),\n    draft=draft)', "m", "lines_str", (-50, 30)),
+    ("datum_target",
+     'dt2 = datum_target(\n    "A1", area_label="Ø6",\n    draft=draft)', "dt2", "lines_str", (50, 30)),
+    ("hole_callout",
+     'hc = hole_callout(\n    8.5, count=4,\n    through=True,\n    draft=draft)', "hc", "lines_str", (150, 30)),
+    ("composite_feature_control_frame",
+     'cfcf = composite_feature_control_frame(\n    "position",\n    [{"tolerance":0.25,\n      "datums":("A","B","C"),\n      "diameter":True},\n     {"tolerance":0.1,\n      "datums":("A",), "diameter":True}],\n    draft)', "cfcf", "lines_str", (-150, -44)),
+    ("dim_linear basic",
+     'db = dim_linear(\n    (0,0,0), (24,0,0),\n    "below", 6, draft,\n    label="24", basic=True)', "db", "shape_ink", (50, -44)),
+    ("leader all-around",
+     'la = leader(\n    (0,0,0), (9,7,0),\n    "0.2", draft,\n    all_around=True)', "la", "lines_ink", (150, -44)),
 ]
 
 PRE = ("from build123d import *\nfrom build123d_drafting import *\n"
@@ -93,9 +106,16 @@ def place_code(snippet, cx, top_y):
     _text_box_item(placed, "code")
 
 
-def label_with_leader(bb, name):
-    """Dogfood leader(): point at the specimen and label it with the helper name."""
-    lab = leader((bb.max.X, bb.max.Y, 0), (bb.max.X + 9, bb.max.Y + 8, 0), name, LBL_DRAFT)
+def label_with_leader(bb, name, left=False):
+    """Dogfood leader(): point at the specimen and label it with the helper name.
+
+    For the rightmost column pass ``left=True`` so the label hangs to the left of
+    the cell and stays inside the sheet frame.
+    """
+    if left:
+        lab = leader((bb.min.X, bb.max.Y, 0), (bb.min.X - 9, bb.max.Y + 8, 0), name, LBL_DRAFT)
+    else:
+        lab = leader((bb.max.X, bb.max.Y, 0), (bb.max.X + 9, bb.max.Y + 8, 0), name, LBL_DRAFT)
     ink.append(lab.lines)   # arrow + shelf are faces
     fill.append(lab.text)
     lint_items.append(lab)
@@ -109,7 +129,7 @@ def add_cell(name, snippet, var, kind, cx, cy):
     for s, b in pieces:
         BUCKET[b].append(s.moved(Location((tx, ty, 0))))
     bb = spec.moved(Location((tx, ty, 0))).bounding_box()
-    label_with_leader(bb, name)
+    label_with_leader(bb, name, left=cx > 90)   # rightmost column labels point left
     place_code(snippet, cx, bb.min.Y - 5)
 
 
@@ -160,7 +180,7 @@ _text_box_item(note, "title-block note")
 for name, snippet, var, kind, (cx, cy) in SPECS:
     add_cell(name, snippet, var, kind, cx, cy)
 
-# --- place_dims composite, lower-left (clear of the title block) ---
+# --- place_dims composite, grid col2 / row3 ---
 pd = ("part = Rectangle(36,20) - Pos(0,-10)*Rectangle(16,8)\n"
       "dims = place_dims([\n"
       '    ((-8,-10,0),(8,-10,0),"below","16"),\n'
@@ -173,12 +193,12 @@ outline = Compound(children=list(ns["part"].edges()))
 dims = Compound(children=[d.shape for d in ns["dims"]])
 whole = Compound(children=[outline, dims])
 ctr = whole.bounding_box().center()
-loc = Location((-128 - ctr.X, -58 - ctr.Y, 0))
+loc = Location((-50 - ctr.X, -44 - ctr.Y, 0))
 stroke.append(outline.moved(loc))
 ink.append(dims.moved(loc))
 bb = whole.moved(loc).bounding_box()
 label_with_leader(bb, "place_dims")
-place_code(pd, -128, bb.min.Y - 5)
+place_code(pd, -50, bb.min.Y - 5)
 
 
 def lint():

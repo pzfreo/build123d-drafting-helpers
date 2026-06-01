@@ -31,6 +31,15 @@
   are meant to point *into* geometry). `examples/part_drawing.py` now uses it instead of a
   hand-rolled loop.
 
+### Examples
+
+- **Specimen sheet** now catalogues all twelve helpers (added `datum_target`,
+  `composite_feature_control_frame`, `hole_callout`, `dim_linear(basic=True)` and
+  `leader(all_around=True)`). Re-laid as a 4-column × 3-row grid on the same A3 sheet — the
+  rightmost column's name leaders point left so labels stay inside the frame — and it still
+  lints clean (`find_interferences`, 0 errors). `docs/specimen_sheet.png` (the README hero)
+  regenerated.
+
 ### Bug fixes
 
 - **`dim_linear` label_bbox wrong for vertical dims**: for a left/right (vertical) dim the
