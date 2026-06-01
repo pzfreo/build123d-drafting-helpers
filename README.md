@@ -271,6 +271,16 @@ Run `python examples/specimen_sheet.py` to write `specimen_sheet.svg`, then rast
 (resvg, Inkscape, or a browser) to refresh `docs/specimen_sheet.png`. Because the whole sheet
 is build123d geometry — text included — it also exports to DXF and scales like any drawing.
 
+### A worked drawing — [`examples/part_drawing.py`](examples/part_drawing.py)
+
+Where the specimen sheet is a *catalogue*, this shows the **end-to-end workflow on a real
+part** (an M10 hex bolt + nut): build the 3D part → `project_to_viewport()` views →
+dimension with `dim_linear()` / `leader()` → **lint with `find_interferences()`** → export.
+An A4 frame, an `iso_title_block()`, projected front views with hidden lines, and the layout
+is verified collision-free by `lint()` before it's written.
+
+![M10 bolt and nut drawing](docs/part_drawing.png)
+
 ## Development
 
 ```
