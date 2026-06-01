@@ -5,11 +5,12 @@ import pytest
 from build123d import Draft, Compound, Edge, Vector
 
 from build123d_drafting import (
-    CenterlineResult, DatumFeatureResult, DimResult, FeatureControlFrameResult,
+    CenterlineResult, DatumFeatureResult, DatumTargetResult, DimResult,
+    FeatureControlFrameResult,
     LeaderResult, LintIssue, TitleBlockResult,
     SurfaceFinishResult,
     add_to_layers,
-    centerline, datum_feature, dim_linear, feature_control_frame,
+    centerline, datum_feature, datum_target, dim_linear, feature_control_frame,
     find_interferences,
     iso_title_block, leader, leader_offset, lint_drawing,
     place_dims, place_labels,
@@ -772,6 +773,101 @@ class TestDatumFeature:
     def test_default_draft_used_when_none(self):
         res = datum_feature("A")
         assert isinstance(res, DatumFeatureResult)
+
+
+class TestDatumTarget:
+    def test_returns_result(self, draft):
+        res = datum_target("A1", draft=draft)
+        assert isinstance(res, DatumTargetResult)
+
+    def test_identifier_stored(self, draft):
+        res = datum_target("B2", draft=draft)
+        assert res.identifier == "B2"
+
+    def test_lines_and_text_are_compounds(self, draft):
+        res = datum_target("A1", draft=draft)
+        assert isinstance(res.lines, Compound)
+        assert isinstance(res.text, Compound)
+
+    def test_circle_centred_on_origin(self, draft):
+        res = datum_target("A1", draft=draft)
+        bb = res.lines.bounding_box()
+        assert bb.center().X == pytest.approx(0.0, abs=0.01)
+        assert bb.center().Y == pytest.approx(0.0, abs=0.01)
+
+    def test_identifier_only_one_text_glyph_group(self, draft):
+        res = datum_target("A1", draft=draft)
+        assert len(res.text.faces()) >= 1   # the identifier renders
+
+    def test_area_label_adds_upper_text(self, draft):
+        without = datum_target("A1", draft=draft)
+        withlab = datum_target("A1", area_label="⌀6", draft=draft)
+        assert len(withlab.text.faces()) > len(without.text.faces())
+        assert withlab.area_label == "⌀6"
+
+    def test_no_area_label_is_blank(self, draft):
+        res = datum_target("A1", draft=draft)
+        assert res.area_label == ""
+
+    def test_divider_splits_circle(self, draft):
+        # circle edges + one horizontal divider line
+        res = datum_target("A1", draft=draft)
+        lines = res.lines.edges()
+        horizontals = [e for e in lines
+                       if abs(e.start_point().Y) < 0.01 and abs(e.end_point().Y) < 0.01]
+        assert len(horizontals) >= 1
+
+    def test_lines_have_no_faces(self, draft):
+        # the symbol must stroke, not flood — no faces on the .lines compound
+        res = datum_target("A1", draft=draft)
+        assert len(res.lines.faces()) == 0
+
+    def test_default_draft_used_when_none(self):
+        res = datum_target("A1")
+        assert isinstance(res, DatumTargetResult)
+
+    def test_add_to_layers_accepts_result(self, draft):
+        from build123d import Color, ExportSVG
+        res = datum_target("A1", area_label="⌀6", draft=draft)
+        exp = ExportSVG()
+        exp.add_layer("lines", line_color=Color(0, 0, 0))
+        exp.add_layer("text", fill_color=Color(0, 0, 0))
+        add_to_layers(exp, res)   # must not raise
+
+
+class TestBasicDimension:
+    def test_basic_flag_sets_is_basic(self, draft):
+        res = dim_linear((0, 0, 0), (20, 0, 0), "above", 8, draft, basic=True)
+        assert res.is_basic is True
+
+    def test_default_is_not_basic(self, draft):
+        res = dim_linear((0, 0, 0), (20, 0, 0), "above", 8, draft)
+        assert res.is_basic is False
+
+    def test_basic_box_adds_four_edges_around_label(self, draft):
+        plain = dim_linear((0, 0, 0), (20, 0, 0), "above", 8, draft)
+        boxed = dim_linear((0, 0, 0), (20, 0, 0), "above", 8, draft, basic=True)
+        assert len(boxed.shape.edges()) >= len(plain.shape.edges()) + 4
+
+    def test_basic_box_encloses_label(self, draft):
+        res = dim_linear((0, 0, 0), (20, 0, 0), "above", 8, draft, basic=True)
+        x0, y0, x1, y1 = res.label_bbox
+        # the four box edges all lie on the bbox rectangle
+        box_edges = [e for e in res.shape.edges()
+                     if e.length == pytest.approx(x1 - x0, abs=0.05)
+                     or e.length == pytest.approx(y1 - y0, abs=0.05)]
+        assert len(box_edges) >= 4
+
+    def test_basic_box_strokes_not_floods(self, draft):
+        # box must be four separate edges (no closed wire) → no extra faces vs plain
+        plain = dim_linear((0, 0, 0), (20, 0, 0), "above", 8, draft)
+        boxed = dim_linear((0, 0, 0), (20, 0, 0), "above", 8, draft, basic=True)
+        assert len(boxed.shape.faces()) == len(plain.shape.faces())
+
+    def test_basic_vertical_dim(self, draft):
+        res = dim_linear((0, 0, 0), (0, 20, 0), "left", 8, draft, basic=True)
+        assert res.is_basic is True
+        assert len(res.shape.edges()) >= 4
 
 
 class TestDraftPreset:
