@@ -12,8 +12,9 @@
   `line↔label`, `label↔label`, **`line↔line` redundant collinear overlap** (two stacked
   dims sharing an endpoint each draw the shared witness line), and (when
   `page_bbox`/`part_bbox` are supplied) `label↔frame` and `label↔part`. Generic line↔line
-  *crossings* are intentionally not flagged — only collinear overlap. Returns
-  `list[LintIssue]`.
+  *crossings* are intentionally not flagged — only collinear overlap. Real collisions are
+  severity `"error"`; redundant collinear overlaps are `"warning"` (chain dimensioning
+  legitimately shares witness lines, so they are advisory). Returns `list[LintIssue]`.
 
 ## v0.1.8 — 2026-06-01
 

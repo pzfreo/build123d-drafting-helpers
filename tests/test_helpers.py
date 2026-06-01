@@ -841,3 +841,18 @@ class TestFindInterferencesRedundantLines:
         issues = find_interferences(dims)
         assert not any("redundant" in i.message for i in issues), \
             " | ".join(i.message for i in issues)
+
+
+class TestFindInterferencesSeverity:
+    def test_pierce_is_error_redundant_is_warning(self, draft):
+        # Layout with both a pierce ("18" line through "36") and a shared
+        # witness line (redundant) — verify the severity split.
+        dims = place_dims([
+            ((-18, -10, 0), (18, -10, 0), "below", "36"),
+            ((-18, -10, 0), (0, -10, 0), "below", "18"),
+        ], draft, base_distance=5)
+        issues = find_interferences(dims)
+        errors = [i for i in issues if i.severity == "error"]
+        warnings = [i for i in issues if i.severity == "warning"]
+        assert any("pierces" in i.message for i in errors)
+        assert any("redundant" in i.message for i in warnings)

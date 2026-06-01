@@ -1727,7 +1727,11 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
             redundant (shorter overlaps are treated as lines merely touching).
 
     Returns:
-        list[LintIssue], all severity ``"warning"``.
+        list[LintIssue]. Real collisions (label↔label, line↔label, label↔frame,
+        label↔part) are severity ``"error"``. Redundant collinear overlaps are
+        severity ``"warning"`` — chain/baseline dimensioning legitimately shares
+        witness lines, so these are advisory and an author/LLM can choose to
+        reduce them without it being a hard failure.
     """
     geoms = [_annotation_geom(it) for it in items]
     issues: list[LintIssue] = []
@@ -1738,21 +1742,21 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
         for box_j, _, name_j in geoms[i + 1:]:
             if box_j is not None and _box_overlap(box_i, box_j, min_overlap):
                 issues.append(LintIssue(
-                    severity="warning",
+                    severity="error",
                     message=f'labels "{name_i}" and "{name_j}" overlap',
                 ))
         if page_bbox is not None:
             pb = (page_bbox.min.X, page_bbox.min.Y, page_bbox.max.X, page_bbox.max.Y)
             if not _box_inside(box_i, pb):
                 issues.append(LintIssue(
-                    severity="warning",
+                    severity="error",
                     message=f'label "{name_i}" extends outside the drawing frame',
                 ))
         if part_bbox is not None:
             pb = (part_bbox.min.X, part_bbox.min.Y, part_bbox.max.X, part_bbox.max.Y)
             if _box_overlap(box_i, pb, min_overlap):
                 issues.append(LintIssue(
-                    severity="warning",
+                    severity="error",
                     message=f'label "{name_i}" sits on the part outline',
                 ))
 
@@ -1762,7 +1766,7 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
                 continue
             if any(_seg_hits_box(p, q, box_j, pad) for (p, q) in segs_i):
                 issues.append(LintIssue(
-                    severity="warning",
+                    severity="error",
                     message=f'a line from "{name_i}" pierces label "{name_j}"',
                 ))
 
