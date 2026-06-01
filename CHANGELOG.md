@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.12 — 2026-06-01
 
 ### Examples
 
