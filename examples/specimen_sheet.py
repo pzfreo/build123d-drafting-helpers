@@ -113,9 +113,17 @@ tb = iso_title_block(
     designed_by="build123d-drafting-helpers", date="2026-06-01",
     width=TB_W, draft=draft_preset(font_size=2.6, decimal_precision=1),
 )
-tb_loc = Location((PW / 2 - MARGIN - TB_W, -PH / 2 + MARGIN, 0))
+TB_X0, TB_Y0 = PW / 2 - MARGIN - TB_W, -PH / 2 + MARGIN
+tb_loc = Location((TB_X0, TB_Y0, 0))
 stroke.append(tb.lines.moved(tb_loc))
 fill.append(tb.text.moved(tb_loc))
+
+# the title block is itself a specimen — call it out with a leader too
+tb_top = TB_Y0 + tb.bbox["height"]
+tb_lab = leader((TB_X0 + 50, tb_top, 0), (TB_X0 + 66, tb_top + 17, 0),
+                "iso_title_block", LBL_DRAFT)
+ink.append(tb_lab.lines)
+fill.append(tb_lab.text)
 
 # --- specimens ---
 for name, snippet, var, kind, (cx, cy) in SPECS:
