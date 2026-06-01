@@ -33,6 +33,23 @@ Requires `build123d >= 0.7.0` and Python ≥ 3.10.
 
 ## Helpers
 
+### `draft_preset(font_size=2.5, decimal_precision=2, **overrides)`
+
+A `Draft` tuned for clean output. build123d's `Draft` defaults draw heavy arrowheads
+(`arrow_length=3.0` mm) and thick dimension lines (`line_width=0.5` mm) that look clumsy at
+small fonts; this scales the arrowhead to the font (`0.9 * font_size`) and thins the line
+(`0.1` mm). Use it as the starting point for every helper that takes a `draft`.
+
+```python
+draft = draft_preset(font_size=1.6)                       # light, font-scaled arrows
+draft = draft_preset(font_size=3.0, line_width=0.15)      # override any field
+```
+
+(On-screen/SVG stroke thickness is separate — set it on the exporter via
+`ExportSVG.add_layer(line_weight=...)`.)
+
+---
+
 ### `dim_linear(p1, p2, side, distance, draft, label=None, tolerance=None, label_offset_x=0.0)`
 
 `ExtensionLine` wrapper with named placement side instead of raw signed offset.

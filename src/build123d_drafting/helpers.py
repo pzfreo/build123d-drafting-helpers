@@ -144,6 +144,43 @@ class SurfaceFinishResult:
 
 
 # ---------------------------------------------------------------------------
+# Draft preset
+# ---------------------------------------------------------------------------
+
+def draft_preset(font_size: float = 2.5, decimal_precision: int = 2,
+                 **overrides) -> Draft:
+    """A ``Draft`` tuned for clean technical-drawing output.
+
+    build123d's ``Draft`` defaults render heavy arrowheads
+    (``arrow_length=3.0`` mm) and thick dimension lines (``line_width=0.5`` mm),
+    which look clumsy at the small font sizes typical of multi-view sheets. This
+    preset scales the arrowhead to the font and uses a thin line, closer to ISO
+    drawing weights::
+
+        arrow_length = 0.9 * font_size
+        line_width   = 0.1
+
+    Use it as the starting point for every helper that takes a ``draft``; any
+    field can be overridden by keyword::
+
+        draft = draft_preset(font_size=1.6)
+        draft = draft_preset(font_size=3.0, line_width=0.15, arrow_length=2.0)
+
+    Note that on-screen/SVG stroke thickness is a separate concern set by the
+    exporter (``ExportSVG.add_layer(line_weight=...)``); this only controls the
+    geometry build123d generates.
+    """
+    params = dict(
+        font_size=font_size,
+        decimal_precision=decimal_precision,
+        arrow_length=0.9 * font_size,
+        line_width=0.1,
+    )
+    params.update(overrides)
+    return Draft(**params)
+
+
+# ---------------------------------------------------------------------------
 # dim_linear
 # ---------------------------------------------------------------------------
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **`draft_preset(font_size=2.5, decimal_precision=2, **overrides)`**: returns a
+  `Draft` tuned for clean drawing output — `arrow_length = 0.9 * font_size` and
+  `line_width = 0.1`, instead of build123d's heavy defaults (`arrow_length=3.0`,
+  `line_width=0.5`) which look clumsy at small font sizes. Any field can be
+  overridden by keyword.
+
 ## v0.1.8 — 2026-06-01
 
 ### Bug fixes
