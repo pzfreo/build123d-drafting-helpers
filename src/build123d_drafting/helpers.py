@@ -101,6 +101,7 @@ class LeaderResult:
     label_str: str
     tip: tuple[float, float]
     elbow: tuple[float, float]
+    label_bbox: tuple[float, float, float, float] | None = None  # (min_x, min_y, max_x, max_y)
 
     @property
     def shape(self) -> Compound:
@@ -492,6 +493,7 @@ def leader(
     ).moved(Location(Vector(text_x, elbow_v.Y, 0.0)))
 
     text = Compound(children=[text_shape])
+    _tb = text.bounding_box()
 
     return LeaderResult(
         lines=lines,
@@ -499,6 +501,7 @@ def leader(
         label_str=label,
         tip=(tip_v.X, tip_v.Y),
         elbow=(elbow_v.X, elbow_v.Y),
+        label_bbox=(_tb.min.X, _tb.min.Y, _tb.max.X, _tb.max.Y),
     )
 
 
@@ -962,12 +965,19 @@ def _lint_dim(item: DimResult, part_bbox, issues: list[LintIssue]) -> None:
 
 
 def _lint_leader(item: LeaderResult, issues: list[LintIssue]) -> None:
-    # Check: does the elbow point fall inside the text bbox?
-    # If so, the leader line strikes through the label.
+    # Check: does the elbow point fall inside the label bbox?
+    # If so, the leader line strikes through the label. Prefer the stored
+    # label_bbox (so a reconstructed result without .text geometry still works);
+    # fall back to measuring the text compound.
     try:
-        tb = item.text.bounding_box()
+        box = getattr(item, "label_bbox", None)
+        if box is not None:
+            minx, miny, maxx, maxy = box
+        else:
+            tb = item.text.bounding_box()
+            minx, miny, maxx, maxy = tb.min.X, tb.min.Y, tb.max.X, tb.max.Y
         ex, ey = item.elbow
-        if tb.min.X <= ex <= tb.max.X and tb.min.Y <= ey <= tb.max.Y:
+        if minx <= ex <= maxx and miny <= ey <= maxy:
             issues.append(LintIssue(
                 severity="error",
                 message=(

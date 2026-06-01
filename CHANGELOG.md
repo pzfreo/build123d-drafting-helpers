@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.11 — 2026-06-01
+
+### Features
+
+- **`LeaderResult.label_bbox`**: `leader()` now records the label text bbox, and
+  `lint_drawing`'s leader-through-text check prefers it (falling back to measuring
+  `.text`). Lets a reconstructed leader without live text geometry still be linted
+  (e.g. the MCP server delegating its leader check). Backward-compatible.
+
 ## v0.1.10 — 2026-06-01
 
 ### Features

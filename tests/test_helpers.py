@@ -895,3 +895,21 @@ class TestLintIssueCode:
         d = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="999")
         codes = {i.code for i in lint_drawing([d])}
         assert "label_vs_measured" in codes
+
+
+class TestLeaderLabelBbox:
+    def test_leader_sets_label_bbox(self, draft):
+        ld = leader((0, 0, 0), (10, 8, 0), "Ø7.93 H7", draft)
+        assert ld.label_bbox is not None
+        tb = ld.text.bounding_box()
+        bx = ld.label_bbox
+        assert bx[0] <= tb.min.X + 1e-6 and bx[2] >= tb.max.X - 1e-6
+
+    def test_lint_leader_uses_label_bbox_without_text(self):
+        # Reconstruct a leader with only label_bbox + elbow (no text geometry).
+        # Elbow inside the label box -> still flags leader_line_through_text.
+        r = LeaderResult(lines=Compound(children=[]), text=Compound(children=[]),
+                         label_str="X", tip=(0, 0), elbow=(5, 1),
+                         label_bbox=(0, 0, 10, 2))
+        codes = {i.code for i in lint_drawing([r])}
+        assert "leader_line_through_text" in codes
