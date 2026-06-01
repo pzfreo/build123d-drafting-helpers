@@ -1,4 +1,4 @@
-"""The examples/specimen_sheet.py legend builds and exports a valid SVG."""
+"""The examples/specimen_sheet.py A3 drawing builds and exports a valid SVG."""
 import importlib.util
 from pathlib import Path
 
@@ -11,26 +11,25 @@ _EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "specimen_sheet
 def sheet_module():
     spec = importlib.util.spec_from_file_location("specimen_sheet", _EXAMPLE)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    spec.loader.exec_module(mod)   # builds the drawing at import
     return mod
 
 
-def test_builds_without_error(sheet_module):
-    sheet = sheet_module.build_sheet()
-    # every logical layer received geometry
-    assert sheet.border and sheet.stroke and sheet.ink and sheet.fill and sheet.code
+def test_all_layers_received_geometry(sheet_module):
+    # frame, stroked geometry, filled ink, text, and code captions all present
+    assert sheet_module.border and sheet_module.stroke
+    assert sheet_module.ink and sheet_module.fill and sheet_module.code
 
 
 def test_writes_nonempty_svg(sheet_module, tmp_path):
     out = tmp_path / "sheet.svg"
     sheet_module.write_specimen_sheet(str(out))
-    assert out.exists()
     text = out.read_text(encoding="utf-8")
     assert text.lstrip().startswith("<?xml") and "<svg" in text
     assert len(text) > 2000  # real geometry, not an empty canvas
 
 
-def test_all_helper_layers_present(sheet_module, tmp_path):
+def test_all_layers_present(sheet_module, tmp_path):
     out = tmp_path / "sheet.svg"
     sheet_module.write_specimen_sheet(str(out))
     svg = out.read_text(encoding="utf-8")
