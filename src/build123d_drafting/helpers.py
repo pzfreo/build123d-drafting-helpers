@@ -1665,8 +1665,31 @@ def _box_inside(inner, outer):
             and inner[2] <= outer[2] and inner[3] <= outer[3])
 
 
+def _collinear_overlap(seg_a, seg_b, tol=0.15):
+    """Length (mm) over which two segments lie on the same line and overlap.
+
+    Returns 0 when the segments are not collinear or merely touch at a point.
+    """
+    (ax0, ay0), (ax1, ay1) = seg_a
+    (bx0, by0), (bx1, by1) = seg_b
+    dax, day = ax1 - ax0, ay1 - ay0
+    la = math.hypot(dax, day)
+    if la < 1e-9:
+        return 0.0
+    ux, uy = dax / la, day / la
+    # both endpoints of b must lie on the infinite line through a
+    if (abs((bx0 - ax0) * uy - (by0 - ay0) * ux) > tol
+            or abs((bx1 - ax0) * uy - (by1 - ay0) * ux) > tol):
+        return 0.0
+    pb0 = (bx0 - ax0) * ux + (by0 - ay0) * uy
+    pb1 = (bx1 - ax0) * ux + (by1 - ay0) * uy
+    lo = max(0.0, min(pb0, pb1))
+    hi = min(la, max(pb0, pb1))
+    return max(0.0, hi - lo)
+
+
 def find_interferences(items, *, part_bbox=None, page_bbox=None,
-                       min_overlap=0.5, pad=0.2):
+                       min_overlap=0.5, pad=0.2, min_run=1.5):
     """Geometry-precise interference detection between drafting annotations.
 
     Where ``lint_drawing`` compares whole-annotation bounding boxes (and so
@@ -1682,10 +1705,14 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
       the drawing frame.
     - **label↔part** (when ``part_bbox`` is given) — a label sits on top of the
       part outline.
+    - **line↔line (redundant)** — structural lines from two annotations that lie
+      on the same line and overlap, e.g. two stacked dims that share an endpoint
+      each drawing the shared witness line (the duplicate could be avoided by
+      choosing dims that do not share a corner, or sharing one witness line).
 
-    Collinear extension lines shared by stacked dims, and an annotation's own
-    (gapped) label, are not flagged. Generic line↔line crossings are *not*
-    reported — witness lines legitimately cross dim lines and centerlines.
+    Generic line↔line *crossings* are still not reported — witness lines
+    legitimately cross dim lines and centerlines; only collinear overlap is
+    flagged. An annotation's own (gapped) label is never flagged against itself.
 
     Args:
         items: result objects from this module (``DimResult``, ``LeaderResult``,
@@ -1696,6 +1723,8 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
             frame checks.
         min_overlap: mm of bbox overlap (both axes) before two labels collide.
         pad: mm tolerance when testing a line against a label box.
+        min_run: mm of collinear overlap before two lines are flagged as
+            redundant (shorter overlaps are treated as lines merely touching).
 
     Returns:
         list[LintIssue], all severity ``"warning"``.
@@ -1735,6 +1764,17 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
                 issues.append(LintIssue(
                     severity="warning",
                     message=f'a line from "{name_i}" pierces label "{name_j}"',
+                ))
+
+    for i, (_, segs_i, name_i) in enumerate(geoms):
+        for j in range(i + 1, len(geoms)):
+            _, segs_j, name_j = geoms[j]
+            if any(_collinear_overlap(a, b) > min_run
+                   for a in segs_i for b in segs_j):
+                issues.append(LintIssue(
+                    severity="warning",
+                    message=(f'redundant overlapping lines between "{name_i}" '
+                             f'and "{name_j}" — shared witness/edge drawn twice'),
                 ))
 
     return issues

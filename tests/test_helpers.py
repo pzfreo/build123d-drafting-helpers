@@ -819,3 +819,25 @@ class TestFindInterferences:
 
     def test_empty_list_is_safe(self):
         assert find_interferences([]) == []
+
+
+class TestFindInterferencesRedundantLines:
+    def test_shared_endpoint_witness_lines_flagged(self, draft):
+        # "36" (-18..18) and "18" (-18..0) share the x=-18 witness line.
+        dims = place_dims([
+            ((-18, -10, 0), (18, -10, 0), "below", "36"),
+            ((-18, -10, 0), (0, -10, 0), "below", "18"),
+        ], draft, base_distance=5)
+        issues = find_interferences(dims)
+        assert any("redundant" in i.message for i in issues), \
+            " | ".join(i.message for i in issues)
+
+    def test_no_shared_endpoints_is_clean(self, draft):
+        # "16" (-8..8) and "36" (-18..18) share no endpoint -> no duplicate lines.
+        dims = place_dims([
+            ((-8, -10, 0), (8, -10, 0), "below", "16"),
+            ((-18, -10, 0), (18, -10, 0), "below", "36"),
+        ], draft, base_distance=5)
+        issues = find_interferences(dims)
+        assert not any("redundant" in i.message for i in issues), \
+            " | ".join(i.message for i in issues)
