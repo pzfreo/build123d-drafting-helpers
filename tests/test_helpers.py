@@ -774,6 +774,27 @@ class TestDatumFeature:
         assert isinstance(res, DatumFeatureResult)
 
 
+class TestDraftPreset:
+    def test_scales_arrow_to_font_and_thins_line(self):
+        from build123d_drafting import draft_preset
+        d = draft_preset(font_size=2.0)
+        assert d.font_size == pytest.approx(2.0)
+        assert d.arrow_length == pytest.approx(1.8)   # 0.9 * font_size
+        assert d.line_width == pytest.approx(0.1)
+
+    def test_lighter_than_build123d_default(self):
+        from build123d import Draft
+        from build123d_drafting import draft_preset
+        assert draft_preset(font_size=2.5).arrow_length < Draft().arrow_length
+        assert draft_preset(font_size=2.5).line_width < Draft().line_width
+
+    def test_overrides_win(self):
+        from build123d_drafting import draft_preset
+        d = draft_preset(font_size=2.0, arrow_length=5.0, line_width=0.3)
+        assert d.arrow_length == pytest.approx(5.0)
+        assert d.line_width == pytest.approx(0.3)
+
+
 # ---------------------------------------------------------------------------
 # find_interferences (geometry-precise)
 # ---------------------------------------------------------------------------
