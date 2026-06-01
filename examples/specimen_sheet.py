@@ -1,132 +1,77 @@
-"""Specimen sheet — a self-documenting legend of the drafting helpers.
+"""Specimen sheet — an A3 technical drawing that catalogues the helpers.
 
-Renders every annotation helper as a labelled cell whose caption is the *exact*
-snippet that drew the symbol above it, so the picture can never drift from the
-code. Everything is build123d geometry (text included), so the sheet exports to
-SVG *and* DXF — it is itself a valid technical drawing, in line with the
-project's CLAUDE.md invariant.
-
-Run it::
+The sheet is itself a real drawing: an A3 frame, an ``iso_title_block()`` title
+block, and every specimen pointed at by a ``leader()`` carrying the helper's
+name — i.e. it is laid out and annotated *with the helpers it documents*. Symbol
+drafts come from ``draft_preset()``, and each cell is captioned with the exact
+snippet that drew it. All geometry, so it exports to SVG *and* DXF and scales
+like any technical drawing.
 
     python examples/specimen_sheet.py            # writes specimen_sheet.svg
-    python examples/specimen_sheet.py out.svg    # writes to out.svg
-
-To rasterise the SVG to PNG, use any SVG renderer (resvg, Inkscape, a browser);
-this script keeps to build123d only and emits vector output.
+    python examples/specimen_sheet.py out.svg
 """
 from __future__ import annotations
 
-import math
+from types import SimpleNamespace
 
 from build123d import (
-    Align, Color, Compound, Draft, Edge, ExportSVG, LineType, Location,
-    Rectangle, Text,
+    Align, Color, Compound, Edge, ExportSVG, LineType, Location, Pos, Rectangle, Text,
 )
 from build123d_drafting import (
-    centerline, datum_feature, dim_linear, feature_control_frame, iso_title_block,
-    leader, place_dims, surface_finish_mark,
+    centerline, datum_feature, dim_linear, draft_preset, feature_control_frame,
+    find_interferences, iso_title_block, leader, place_dims, surface_finish_mark,
 )
 
-# Geometry text falls back gracefully if these exact fonts are absent.
-SANS, MONO = "Liberation Sans", "Liberation Mono"
-GRID_PRE = (
-    "from build123d import Draft\n"
-    "from build123d_drafting import *\n"
-    "draft = Draft(font_size=2.5, decimal_precision=2)\n"
-)
-BAND_PRE = (
-    "from build123d import *\n"
-    "from build123d_drafting import *\n"
-    "draft = Draft(font_size=2.5, decimal_precision=2)\n"
-)
+MONO, SANS = "Liberation Mono", "Liberation Sans"
+SYM_DRAFT = draft_preset(font_size=2.4, decimal_precision=1)
+LBL_DRAFT = draft_preset(font_size=3.4, decimal_precision=1)
+CODE_FS, LINE_DY, BLUE = 2.2, 3.0, Color(0.10, 0.16, 0.55)
 
-# (name, snippet, result-var, routing-kind). routing-kind chooses SVG layers so
-# closed loops stay hollow (FCF rings) while faces fill (leader arrow, datum
-# triangle): shape_ink = .shape stroked+filled; shape_line = .shape stroked;
-# lines_str = .lines stroked + .text filled; lines_ink = .lines stroked+filled.
-GRID = [
-    ("dim_linear", 'd = dim_linear(\n    (0, 0, 0), (30, 0, 0),\n    "below", 6, draft,\n    label="30.0")', "d", "shape_ink"),
-    ("leader", 'ld = leader(\n    tip=(0, 0, 0),\n    elbow=(9, 7, 0),\n    label="Ø7.93 H7",\n    draft=draft)', "ld", "lines_ink"),
-    ("centerline", 'cl = centerline(\n    (-12, 0, 0),\n    (12, 0, 0),\n    draft=draft)', "cl", "shape_line"),
-    ("feature_control_frame", 'fcf = feature_control_frame(\n    "position", 0.5,\n    datums=("A", "B", "C"),\n    draft=draft,\n    diameter=True, modifier="M")', "fcf", "lines_str"),
-    ("datum_feature", 'dt = datum_feature(\n    "A",\n    draft=draft)', "dt", "lines_ink"),
-    ("surface_finish_mark", 'm = surface_finish_mark(\n    "1.6",\n    position=(0, 0, 0),\n    draft=draft)', "m", "lines_str"),
+# A3 landscape, 420 x 297, centred on the origin.
+PW, PH, MARGIN = 420.0, 297.0, 6.0
+
+# (name, snippet, var, routing-kind, (cell_x, cell_y))
+SPECS = [
+    ("dim_linear",
+     'd = dim_linear(\n    (0,0,0), (30,0,0),\n    "below", 6, draft,\n    label="30.0")', "d", "shape_ink", (-135, 100)),
+    ("leader",
+     'ld = leader(\n    (0,0,0), (9,7,0),\n    "Ø7.93 H7", draft)', "ld", "lines_ink", (0, 100)),
+    ("centerline",
+     'cl = centerline(\n    (-12,0,0),\n    (12,0,0), draft)', "cl", "shape_line", (135, 100)),
+    ("feature_control_frame",
+     'fcf = feature_control_frame(\n    "position", 0.5,\n    ("A","B","C"), draft,\n    diameter=True, modifier="M")', "fcf", "lines_str", (-135, 34)),
+    ("datum_feature",
+     'dt = datum_feature("A", draft)', "dt", "lines_ink", (0, 34)),
+    ("surface_finish_mark",
+     'm = surface_finish_mark(\n    "1.6", (0,0,0),\n    draft=draft)', "m", "lines_str", (135, 34)),
 ]
 
-COLS = 3
-W, H, GAP, VGAP = 88.0, 45.0, 10.0, 11.0
-BAND_H, BAND_GAP = 66.0, 12.0
-GCFG = dict(title_fs=3.2, code_fs=1.9, line_dy=2.7, spec_y=31.0, code_top=19.5)
-BCFG = dict(title_fs=3.4, code_fs=1.9, line_dy=2.8, spec_y=40.0, code_top=23.0)
+PRE = ("from build123d import *\nfrom build123d_drafting import *\n"
+       "draft = draft_preset(font_size=2.4, decimal_precision=1)\n")
+
+border, stroke, ink, fill, code = [], [], [], [], []
+BUCKET = {"stroke": stroke, "ink": ink, "fill": fill}
+
+# Page-level annotations to lint with find_interferences: the leader callouts
+# (which carry lines + a label) and the code/note text blocks (label boxes).
+lint_items: list = []
 
 
-def _run(preamble: str, snippet: str, var: str):
+def _text_box_item(shapes, name):
+    """A lint item carrying just a label box (no lines) for a block of text."""
+    bb = Compound(children=shapes).bounding_box()
+    lint_items.append(SimpleNamespace(
+        label_bbox=(bb.min.X, bb.min.Y, bb.max.X, bb.max.Y),
+        label_str=name, lines=None, shape=None))
+
+
+def run(snippet, var):
     ns: dict = {}
-    exec(preamble + snippet, ns)  # noqa: S102 — trusted, in-repo snippets
+    exec(PRE + snippet, ns)  # noqa: S102 — trusted in-repo snippets
     return ns[var]
 
 
-def _arrow(x0, y0, x1, y1):
-    """Leader line with an arrowhead at (x1, y1) oriented along the line."""
-    segs = [Edge.make_line((x0, y0, 0), (x1, y1, 0))]
-    dx, dy = x1 - x0, y1 - y0
-    n = math.hypot(dx, dy) or 1.0
-    ux, uy = -dx / n, -dy / n
-    length, ang = 1.6, math.radians(22)
-    for s in (+1, -1):
-        th = s * ang
-        rx = ux * math.cos(th) - uy * math.sin(th)
-        ry = ux * math.sin(th) + uy * math.cos(th)
-        segs.append(Edge.make_line((x1, y1, 0), (x1 + length * rx, y1 + length * ry, 0)))
-    return segs
-
-
-class _Sheet:
-    """Accumulates geometry into five logical layers."""
-
-    def __init__(self):
-        self.border, self.stroke, self.ink, self.fill, self.code = [], [], [], [], []
-
-    def cell(self, cx, base_y, cw, ch, name, snippet, pieces, *,
-             title_fs, code_fs, line_dy, spec_y, code_top):
-        mid = cx + cw / 2
-        self.border.append(Rectangle(cw, ch).moved(Location((mid, base_y + ch / 2, 0))))
-        self.fill.append(
-            Text(name, font_size=title_fs, font=SANS, align=(Align.CENTER, Align.MAX))
-            .moved(Location((mid, base_y + ch - 4.5, 0)))
-        )
-
-        spec = Compound(children=[s for s, _ in pieces])
-        ctr = spec.bounding_box().center()
-        tx, ty = mid - ctr.X, base_y + spec_y - ctr.Y
-        for s, bucket in pieces:
-            getattr(self, bucket).append(s.moved(Location((tx, ty, 0))))
-        spec_bottom = spec.moved(Location((tx, ty, 0))).bounding_box().min.Y
-
-        lines = [ln for ln in snippet.split("\n") if ln.strip()]
-        texts = [Text(ln, font_size=code_fs, font=MONO, align=(Align.MIN, Align.MAX))
-                 for ln in lines]
-        maxw = max((t.bounding_box().size.X for t in texts), default=0.0)
-        left_x = mid - maxw / 2.0
-        for j, t in enumerate(texts):
-            self.code.append(t.moved(Location((left_x, base_y + code_top - j * line_dy, 0))))
-
-        self.stroke.extend(_arrow(mid, base_y + code_top + 1.2, mid, spec_bottom - 0.5))
-
-    def export(self, svg_path: str):
-        exp = ExportSVG(margin=10)
-        exp.add_layer("border", line_color=Color(0.62, 0.62, 0.62), line_weight=0.3, line_type=LineType.CONTINUOUS)
-        exp.add_layer("stroke", line_color=Color(0, 0, 0), line_weight=0.18, line_type=LineType.CONTINUOUS)
-        exp.add_layer("ink", line_color=Color(0, 0, 0), fill_color=Color(0, 0, 0), line_weight=0.18, line_type=LineType.CONTINUOUS)
-        exp.add_layer("fill", line_color=Color(0, 0, 0), fill_color=Color(0, 0, 0), line_weight=0.0, line_type=LineType.CONTINUOUS)
-        exp.add_layer("code", line_color=Color(0.10, 0.16, 0.55), fill_color=Color(0.10, 0.16, 0.55), line_weight=0.0, line_type=LineType.CONTINUOUS)
-        for bucket, layer in [(self.border, "border"), (self.stroke, "stroke"),
-                              (self.ink, "ink"), (self.fill, "fill"), (self.code, "code")]:
-            exp.add_shape(Compound(children=bucket), layer=layer)
-        exp.write(svg_path)
-
-
-def _route(res, kind):
+def route(res, kind):
     if kind == "shape_ink":
         return [(res.shape, "ink")]
     if kind == "shape_line":
@@ -138,69 +83,131 @@ def _route(res, kind):
     raise ValueError(kind)
 
 
-def build_sheet() -> _Sheet:
-    sheet = _Sheet()
+def place_code(snippet, cx, top_y):
+    lines = [ln for ln in snippet.split("\n") if ln.strip()]
+    texts = [Text(ln, font_size=CODE_FS, font=MONO, align=(Align.MIN, Align.MAX)) for ln in lines]
+    maxw = max((t.bounding_box().size.X for t in texts), default=0.0)
+    placed = [t.moved(Location((cx - maxw / 2.0, top_y - j * LINE_DY, 0)))
+              for j, t in enumerate(texts)]
+    code.extend(placed)
+    _text_box_item(placed, "code")
 
-    # --- grid: the core annotation symbols (3 x 2) ---
-    for i, (name, snippet, var, kind) in enumerate(GRID):
-        col, row = i % COLS, i // COLS
-        base_y = BAND_H + BAND_GAP + (1 - row) * (H + VGAP)
-        res = _run(GRID_PRE, snippet, var)
-        sheet.cell(col * (W + GAP), base_y, W, H, name, snippet, _route(res, kind), **GCFG)
 
-    band_w = (COLS * W + (COLS - 1) * GAP - GAP) / 2.0
+def label_with_leader(bb, name):
+    """Dogfood leader(): point at the specimen and label it with the helper name."""
+    lab = leader((bb.max.X, bb.max.Y, 0), (bb.max.X + 9, bb.max.Y + 8, 0), name, LBL_DRAFT)
+    ink.append(lab.lines)   # arrow + shelf are faces
+    fill.append(lab.text)
+    lint_items.append(lab)
 
-    # --- band cell 1: place_dims on a part outline ---
-    pd_snip = ('dft = Draft(font_size=1.6, decimal_precision=1,\n'
-               '            arrow_length=1.5, line_width=0.1)\n'
-               'part = Rectangle(36, 20) - Pos(0, -10) * Rectangle(16, 8)\n'
-               'dims = place_dims([\n'
-               '    ((-8, -10, 0), (8, -10, 0), "below", "16"),   # notch\n'
-               '    ((-18, -10, 0), (18, -10, 0), "below", "36"),  # overall\n'
-               '    ((18, -10, 0), (18, 10, 0), "right", "20"),    # height\n'
-               '], dft, base_distance=5)')
-    ns: dict = {}
-    exec(BAND_PRE + pd_snip, ns)  # noqa: S102
-    pd_pieces = [
-        (Compound(children=list(ns["part"].edges())), "stroke"),
-        (Compound(children=[d.shape for d in ns["dims"]]), "ink"),
-    ]
-    sheet.cell(0.0, 0.0, band_w, BAND_H, "place_dims", pd_snip, pd_pieces, **BCFG)
 
-    # --- band cell 2: iso_title_block ---
-    tb_snip = ('tb = iso_title_block(\n'
-               '    "BRACKET", "DWG-014",\n'
-               '    scale="1:2", material="AL 6061",\n'
-               '    designed_by="P. Fremantle",\n'
-               '    date="2026-06-01", width=135,\n'
-               '    draft=Draft(font_size=2.0,\n'
-               '                decimal_precision=2))')
-    tb = _run(BAND_PRE, tb_snip, "tb")
-    sheet.cell(band_w + GAP, 0.0, band_w, BAND_H, "iso_title_block", tb_snip,
-               [(tb.lines, "stroke"), (tb.text, "fill")], **BCFG)
+def add_cell(name, snippet, var, kind, cx, cy):
+    pieces = route(run(snippet, var), kind)
+    spec = Compound(children=[s for s, _ in pieces])
+    ctr = spec.bounding_box().center()
+    tx, ty = cx - ctr.X, cy - ctr.Y
+    for s, b in pieces:
+        BUCKET[b].append(s.moved(Location((tx, ty, 0))))
+    bb = spec.moved(Location((tx, ty, 0))).bounding_box()
+    label_with_leader(bb, name)
+    place_code(snippet, cx, bb.min.Y - 5)
 
-    # --- header ---
-    top = BAND_H + BAND_GAP + 2 * H + VGAP
-    sheet.fill.append(
-        Text("build123d drafting helpers — specimen sheet", font_size=4.6, font=SANS,
-             align=(Align.MIN, Align.MAX)).moved(Location((0, top + 15.0, 0)))
-    )
-    for k, ln in enumerate(GRID_PRE.strip().split("\n")):
-        sheet.code.append(
-            Text(ln, font_size=1.8, font=MONO, align=(Align.MIN, Align.MAX))
-            .moved(Location((2.0, top + 9.0 - k * 2.5, 0)))
-        )
-    return sheet
+
+# --- page frame ---
+def _rect_edges(w, h, cx=0.0, cy=0.0):
+    x0, x1, y0, y1 = cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2
+    pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+    return [Edge.make_line((a[0], a[1], 0), (b[0], b[1], 0)) for a, b in zip(pts, pts[1:])]
+
+
+border.extend(_rect_edges(PW - 2 * MARGIN, PH - 2 * MARGIN))           # inner frame
+border.extend(_rect_edges(PW, PH))                                     # sheet edge
+
+# --- iso_title_block (our helper) in the bottom-right corner ---
+TB_W = 180.0
+tb = iso_title_block(
+    "SPECIMEN SHEET", "B3D-DH-1", scale="1:1", material="—",
+    designed_by="build123d-drafting-helpers", date="2026-06-01",
+    width=TB_W, draft=draft_preset(font_size=2.6, decimal_precision=1),
+)
+TB_X0, TB_Y0 = PW / 2 - MARGIN - TB_W, -PH / 2 + MARGIN
+tb_loc = Location((TB_X0, TB_Y0, 0))
+stroke.append(tb.lines.moved(tb_loc))
+fill.append(tb.text.moved(tb_loc))
+
+# the title block is itself a specimen — call it out with a leader too, and
+# note *why* it exists (the nuance vs build123d's TechnicalDrawing title box).
+# The leader runs up the left; the name + note sit to its right so the leader
+# line never crosses the text (verified by lint() below).
+tb_top = TB_Y0 + tb.bbox["height"]
+tb_lab = leader((TB_X0 + 44, tb_top, 0), (TB_X0 + 46, tb_top + 15, 0),
+                "iso_title_block", LBL_DRAFT)
+ink.append(tb_lab.lines)
+fill.append(tb_lab.text)
+lint_items.append(tb_lab)
+note = []
+for k, ln in enumerate((
+        "standalone alternative to TechnicalDrawing's title box —",
+        "positionable, layer-routable, with ISO 7200 fields",
+        "(material + general tolerance)")):
+    t = Text(ln, font_size=2.3, font=SANS, align=(Align.MIN, Align.MAX)
+             ).moved(Location((TB_X0 + 92, tb_top + 18 - k * 3.2, 0)))
+    fill.append(t)
+    note.append(t)
+_text_box_item(note, "title-block note")
+
+# --- specimens ---
+for name, snippet, var, kind, (cx, cy) in SPECS:
+    add_cell(name, snippet, var, kind, cx, cy)
+
+# --- place_dims composite, lower-left (clear of the title block) ---
+pd = ("part = Rectangle(36,20) - Pos(0,-10)*Rectangle(16,8)\n"
+      "dims = place_dims([\n"
+      '    ((-8,-10,0),(8,-10,0),"below","16"),\n'
+      '    ((-18,-10,0),(18,-10,0),"below","36"),\n'
+      '    ((18,-10,0),(18,10,0),"right","20"),\n'
+      "], draft, base_distance=5)")
+ns: dict = {}
+exec(PRE + pd, ns)  # noqa: S102
+outline = Compound(children=list(ns["part"].edges()))
+dims = Compound(children=[d.shape for d in ns["dims"]])
+whole = Compound(children=[outline, dims])
+ctr = whole.bounding_box().center()
+loc = Location((-128 - ctr.X, -58 - ctr.Y, 0))
+stroke.append(outline.moved(loc))
+ink.append(dims.moved(loc))
+bb = whole.moved(loc).bounding_box()
+label_with_leader(bb, "place_dims")
+place_code(pd, -128, bb.min.Y - 5)
+
+
+def lint():
+    """Lint the sheet's own annotations — dogfood find_interferences().
+
+    Checks every leader callout's line against every label / code / note box, so
+    a leader that strikes through text is caught. Returns a list[LintIssue].
+    """
+    return find_interferences(lint_items)
 
 
 def write_specimen_sheet(svg_path: str = "specimen_sheet.svg") -> str:
-    """Build the specimen sheet and write it to *svg_path*. Returns the path."""
-    build_sheet().export(svg_path)
+    exp = ExportSVG(margin=4)
+    exp.add_layer("border", line_color=Color(0, 0, 0), line_weight=0.3, line_type=LineType.CONTINUOUS)
+    exp.add_layer("stroke", line_color=Color(0, 0, 0), line_weight=0.2, line_type=LineType.CONTINUOUS)
+    exp.add_layer("ink", line_color=Color(0, 0, 0), fill_color=Color(0, 0, 0), line_weight=0.2, line_type=LineType.CONTINUOUS)
+    exp.add_layer("fill", line_color=Color(0, 0, 0), fill_color=Color(0, 0, 0), line_weight=0.0, line_type=LineType.CONTINUOUS)
+    exp.add_layer("code", line_color=BLUE, fill_color=BLUE, line_weight=0.0, line_type=LineType.CONTINUOUS)
+    for bucket, layer in [(border, "border"), (stroke, "stroke"), (ink, "ink"), (fill, "fill"), (code, "code")]:
+        exp.add_shape(Compound(children=bucket), layer=layer)
+    exp.write(svg_path)
     return svg_path
 
 
 if __name__ == "__main__":
     import sys
-
-    out = sys.argv[1] if len(sys.argv) > 1 else "specimen_sheet.svg"
-    print("wrote", write_specimen_sheet(out))
+    issues = lint()
+    for i in issues:
+        print(f"[{i.severity}] {i.code}: {i.message}")
+    print(f"lint: {sum(i.severity == 'error' for i in issues)} error(s), "
+          f"{sum(i.severity == 'warning' for i in issues)} warning(s)")
+    print("wrote", write_specimen_sheet(sys.argv[1] if len(sys.argv) > 1 else "specimen_sheet.svg"))
