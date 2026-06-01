@@ -62,6 +62,7 @@ class LintIssue:
     severity: Literal["error", "warning"]
     message: str
     location: tuple[float, float] | None = None
+    code: str = ""   # stable machine-readable check id, e.g. "label_vs_measured"
 
 
 @dataclass
@@ -845,6 +846,7 @@ def lint_drawing(
                             f"annotations '{la}' and '{lb}' overlap by "
                             f"{ox:.1f}×{oy:.1f} mm — increase offset or spacing"
                         ),
+                        code="annotation_overlap",
                     ))
             except Exception:
                 pass
@@ -912,6 +914,7 @@ def _lint_centerline_dim_overlap(
                     f"{ox:.1f}×{oy:.1f} mm — use label_offset_x to shift "
                     f"or increase dim offset to clear the centerline"
                 ),
+                code="label_centerline_overlap",
             ))
     except Exception:
         pass
@@ -935,6 +938,7 @@ def _lint_dim(item: DimResult, part_bbox, issues: list[LintIssue]) -> None:
                             f"measured path length {item.measured_length:.3f} by "
                             f"{ratio*100:.1f}% — possible axis swap or wrong endpoint"
                         ),
+                        code="label_vs_measured",
                     ))
         except ValueError:
             pass
@@ -953,6 +957,7 @@ def _lint_dim(item: DimResult, part_bbox, issues: list[LintIssue]) -> None:
                     f"Dim '{label}': annotation bbox overlaps part outline by "
                     f"{overlap/dim_area*100:.0f}% — offset sign may place it inside the view"
                 ),
+                code="dim_inside_part",
             ))
 
 
@@ -970,6 +975,7 @@ def _lint_leader(item: LeaderResult, issues: list[LintIssue]) -> None:
                     f"is inside the label bbox — leader line passes through the text"
                 ),
                 location=item.elbow,
+                code="leader_line_through_text",
             ))
     except Exception:
         pass
@@ -1781,6 +1787,7 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
                 issues.append(LintIssue(
                     severity="error",
                     message=f'labels "{name_i}" and "{name_j}" overlap',
+                    code="labels_overlap",
                 ))
         if page_bbox is not None:
             pb = (page_bbox.min.X, page_bbox.min.Y, page_bbox.max.X, page_bbox.max.Y)
@@ -1788,6 +1795,7 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
                 issues.append(LintIssue(
                     severity="error",
                     message=f'label "{name_i}" extends outside the drawing frame',
+                    code="label_out_of_frame",
                 ))
         if part_bbox is not None:
             pb = (part_bbox.min.X, part_bbox.min.Y, part_bbox.max.X, part_bbox.max.Y)
@@ -1795,6 +1803,7 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
                 issues.append(LintIssue(
                     severity="error",
                     message=f'label "{name_i}" sits on the part outline',
+                    code="label_on_part",
                 ))
 
     for i, (_, segs_i, name_i) in enumerate(geoms):
@@ -1805,6 +1814,7 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
                 issues.append(LintIssue(
                     severity="error",
                     message=f'a line from "{name_i}" pierces label "{name_j}"',
+                    code="line_pierces_label",
                 ))
 
     for i, (_, segs_i, name_i) in enumerate(geoms):
@@ -1816,6 +1826,7 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None,
                     severity="warning",
                     message=(f'redundant overlapping lines between "{name_i}" '
                              f'and "{name_j}" — shared witness/edge drawn twice'),
+                    code="redundant_lines",
                 ))
 
     return issues

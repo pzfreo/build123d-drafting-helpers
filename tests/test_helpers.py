@@ -877,3 +877,21 @@ class TestFindInterferencesSeverity:
         warnings = [i for i in issues if i.severity == "warning"]
         assert any("pierces" in i.message for i in errors)
         assert any("redundant" in i.message for i in warnings)
+
+
+class TestLintIssueCode:
+    def test_find_interferences_sets_codes(self, draft):
+        dims = place_dims([
+            ((-18, -10, 0), (18, -10, 0), "below", "36"),
+            ((-18, -10, 0), (0, -10, 0), "below", "18"),
+        ], draft, base_distance=5)
+        codes = {i.code for i in find_interferences(dims)}
+        assert "line_pierces_label" in codes
+        assert "redundant_lines" in codes
+        assert "" not in codes  # every issue carries a code
+
+    def test_lint_drawing_sets_codes(self, draft):
+        # a dim whose label disagrees with the measured length -> label_vs_measured
+        d = dim_linear((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="999")
+        codes = {i.code for i in lint_drawing([d])}
+        assert "label_vs_measured" in codes

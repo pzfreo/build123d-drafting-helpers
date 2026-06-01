@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **`LintIssue.code`**: every issue from `lint_drawing()` and `find_interferences()` now
+  carries a stable machine-readable check id (`label_vs_measured`, `annotation_overlap`,
+  `label_centerline_overlap`, `dim_inside_part`, `leader_line_through_text`,
+  `labels_overlap`, `label_out_of_frame`, `label_on_part`, `line_pierces_label`,
+  `redundant_lines`). Lets consumers (e.g. the MCP server) route issues by code instead of
+  string-matching the message. Backward-compatible — new optional field.
+
 ## v0.1.9 — 2026-06-01
 
 ### Features
