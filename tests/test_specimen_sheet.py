@@ -35,3 +35,10 @@ def test_all_layers_present(sheet_module, tmp_path):
     svg = out.read_text(encoding="utf-8")
     for layer in ("border", "stroke", "ink", "fill", "code"):
         assert f'id="{layer}"' in svg
+
+
+def test_sheet_lints_clean(sheet_module):
+    # The catalogue is itself linted with find_interferences — no leader may
+    # strike through a label/code/note box (the bug this regression guards).
+    errors = [i for i in sheet_module.lint() if i.severity == "error"]
+    assert errors == [], "; ".join(f"{i.code}: {i.message}" for i in errors)
