@@ -447,6 +447,8 @@ def leader(
     elbow: tuple,
     label: str,
     draft: Draft,
+    all_around: bool = False,
+    all_over: bool = False,
 ) -> LeaderResult:
     """Leader annotation with arrowhead at *tip* and label hanging from *elbow*.
 
@@ -458,6 +460,11 @@ def leader(
         elbow: where the shaft bends to become the horizontal shelf (x, y[, z]).
         label: annotation text (e.g. "⌀7.93 H7", "Ra 1.6").
         draft: Draft config.
+        all_around: draw the ISO 1101 *all-around* symbol — a small circle at
+            the leader kink — marking that a profile tolerance applies all around
+            the cross-section. Mutually exclusive with all_over.
+        all_over: draw the *all-over* symbol — a double circle at the kink —
+            for a profile that applies over every surface.
 
     Returns:
         LeaderResult with .lines (Arrow + shelf Face) and .text (Text compound).
@@ -499,7 +506,22 @@ def leader(
     shelf_pen = shelf_edge.perpendicular_line(draft.line_width, 0)
     shelf_shape = sweep(shelf_pen, shelf_edge, mode=Mode.PRIVATE)
 
-    lines = Compound(children=[arrow_shape, shelf_shape])
+    line_children = [arrow_shape, shelf_shape]
+
+    if all_around or all_over:
+        # Small circle(s) at the kink. Drawn as two half-arcs (open paths) so the
+        # ring strokes without flooding on a fill_color layer — the leader's own
+        # layer is filled (arrowhead, shelf).
+        r = 0.7 * draft.arrow_length
+        radii = [r, 1.7 * r] if all_over else [r]
+        for rad in radii:
+            for a0, a1 in ((0, 180), (180, 360)):
+                line_children += [
+                    e.moved(Location(elbow_v))
+                    for e in Edge.make_circle(rad, start_angle=a0, end_angle=a1).edges()
+                ]
+
+    lines = Compound(children=line_children)
 
     # Text centred vertically at shelf height, horizontally inset by one gap
     if shelf_dir > 0:
@@ -1343,6 +1365,50 @@ class DatumTargetResult:
         return self.shape.bounding_box()
 
 
+@dataclass
+class CompositeFeatureControlFrameResult:
+    """Returned by composite_feature_control_frame() — a multi-row ISO 1101 frame
+    sharing one characteristic-symbol cell (e.g. a composite position tolerance).
+
+    Built with its bottom-left corner at (0, 0). Route .lines to a line_color
+    layer and .text to a fill_color layer (see add_to_layers()).
+    """
+    lines: Compound
+    text: Compound
+    characteristic: str
+    tolerances: tuple[str, ...]   # one per row, top → bottom
+    width: float
+    height: float
+
+    @property
+    def shape(self) -> Compound:
+        return Compound(children=[self.lines, self.text])
+
+    def bbox(self):
+        return self.shape.bounding_box()
+
+
+@dataclass
+class HoleCalloutResult:
+    """Returned by hole_callout() — a single-line hole note built from geometry
+    symbols (⌀ ⌴ ⌵ ↧) and values, e.g. ``4× ⌀8.5 ⌴ ⌀15 ↧5``.
+
+    Bottom-left at (0, 0). Route .lines to a line_color layer and .text to a
+    fill_color layer (see add_to_layers()).
+    """
+    lines: Compound          # symbol glyphs (⌀, counterbore, countersink, depth)
+    text: Compound           # numeric values + count/THRU words
+    width: float
+    height: float
+
+    @property
+    def shape(self) -> Compound:
+        return Compound(children=[self.lines, self.text])
+
+    def bbox(self):
+        return self.shape.bounding_box()
+
+
 def _arrowhead(tip: tuple[float, float], back: tuple[float, float], size: float) -> list[Edge]:
     """Two short barbs forming an open arrowhead at *tip*, opening toward *back*."""
     tx, ty = tip
@@ -1692,6 +1758,250 @@ def datum_target(
         text=Compound(children=text_faces),
         identifier=identifier,
         area_label=area_label or "",
+    )
+
+
+def _feature_symbol_edges(name: str, h: float) -> list[Edge]:
+    """Hole-feature callout glyphs as Edges, centred on the local origin, drawn
+    geometrically (the Unicode glyphs ⌀ ⌴ ⌵ ↧ are missing from CAD fonts).
+    """
+    s = 0.42 * h
+    if name == "diameter":
+        ring = list(Edge.make_circle(s).edges())
+        return ring + [Edge.make_line(Vector(0.9 * s, -0.9 * s, 0),
+                                      Vector(-0.9 * s, 0.9 * s, 0))]
+    if name == "counterbore":          # ⌴ — flat-bottomed bracket (⊔)
+        return [Edge.make_line(Vector(-s, s, 0), Vector(-s, -s, 0)),
+                Edge.make_line(Vector(-s, -s, 0), Vector(s, -s, 0)),
+                Edge.make_line(Vector(s, -s, 0), Vector(s, s, 0))]
+    if name == "countersink":          # ⌵ — funnel opening upward
+        return [Edge.make_line(Vector(-s, s, 0), Vector(0, -s, 0)),
+                Edge.make_line(Vector(s, s, 0), Vector(0, -s, 0))]
+    if name == "depth":                # ↧ — downward arrow (deep)
+        return [Edge.make_line(Vector(0, s, 0), Vector(0, -s, 0))] + \
+               _arrowhead((0, -s), (0, s), 0.55 * s)
+    raise ValueError(f"Unknown feature symbol '{name}'.")
+
+
+def composite_feature_control_frame(
+    characteristic: GDTCharacteristic,
+    rows: list[dict],
+    draft: Draft | None = None,
+) -> CompositeFeatureControlFrameResult:
+    """ISO 1101 *composite* feature control frame — two (or more) tolerance rows
+    sharing a single characteristic-symbol cell, e.g. a composite position
+    tolerance for a hole pattern::
+
+        | ⌖ | ⌀0.25 | A | B | C |     (pattern-locating)
+        |   | ⌀0.1  | A |             (feature-relating)
+
+    Built with its bottom-left corner at (0, 0).
+
+    Args:
+        characteristic: one of the 14 geometric characteristics (shared by all
+            rows — it is drawn once in a full-height cell on the left).
+        rows: one dict per row, top → bottom. Keys: ``tolerance`` (float or str,
+            required), ``datums`` (tuple, default ()), ``diameter`` (bool),
+            ``modifier`` ("M"/"L"/"P"), ``datum_modifiers`` ({letter: "M"|"L"}).
+        draft: Draft config. Defaults to 2.5 mm.
+
+    Returns:
+        CompositeFeatureControlFrameResult with the usual .lines / .text split.
+    """
+    if draft is None:
+        draft = Draft(font_size=2.5, decimal_precision=1)
+    name = characteristic.lower()
+    if name not in _GDT_GLYPHS:
+        raise ValueError(f"Unknown characteristic '{characteristic}'. "
+                         f"Supported: {', '.join(_GDT_GLYPHS)}")
+    if not rows:
+        raise ValueError("composite frame needs at least one row")
+
+    h = draft.font_size
+    H = 2.0 * h
+    pad = 0.6 * h
+    r_pre = 0.42 * h
+    mr = 0.62 * h
+    prec = draft.decimal_precision
+
+    def _text(txt: str, fs: float) -> Text:
+        return Text(txt=txt, font_size=fs, font=draft.font,
+                    align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE)
+
+    def _tol_str(t) -> str:
+        return t if isinstance(t, str) else f"{round(t, prec):.{prec}f}"
+
+    # --- compartment sizing (shared across rows so the grid aligns) ---
+    tol_strs = [_tol_str(r["tolerance"]) for r in rows]
+    tol_w = 0.0
+    for r, ts in zip(rows, tol_strs):
+        w = pad + _text(ts, h).bounding_box().size.X + pad
+        if r.get("diameter"):
+            w += 2 * r_pre + pad
+        if r.get("modifier"):
+            w += 2 * mr + pad
+        tol_w = max(tol_w, w)
+    w_sym = H
+    max_datums = max(len(r.get("datums", ())) for r in rows)
+    x2 = w_sym + tol_w                         # tolerance/datum boundary
+    total_w = x2 + max_datums * H
+    n = len(rows)
+    total_h = n * H
+
+    line_edges: list[Edge] = [
+        Edge.make_line(Vector(0, 0, 0), Vector(total_w, 0, 0)),
+        Edge.make_line(Vector(total_w, 0, 0), Vector(total_w, total_h, 0)),
+        Edge.make_line(Vector(total_w, total_h, 0), Vector(0, total_h, 0)),
+        Edge.make_line(Vector(0, total_h, 0), Vector(0, 0, 0)),
+        Edge.make_line(Vector(w_sym, 0, 0), Vector(w_sym, total_h, 0)),   # symbol cell
+    ]
+    # row dividers (only right of the shared symbol cell)
+    for k in range(1, n):
+        line_edges.append(Edge.make_line(Vector(w_sym, k * H, 0), Vector(total_w, k * H, 0)))
+
+    text_faces = []
+    # shared characteristic symbol, vertically centred in its full-height cell
+    for e in _characteristic_edges(name, h):
+        line_edges.append(e.moved(Location(Vector(w_sym / 2, total_h / 2, 0))))
+
+    for i, r in enumerate(rows):
+        cy = total_h - (i + 0.5) * H
+        top, bot = total_h - i * H, total_h - (i + 1) * H
+        # tolerance/datum boundary divider for this band
+        line_edges.append(Edge.make_line(Vector(x2, bot, 0), Vector(x2, top, 0)))
+
+        x_cursor = w_sym + pad
+        if r.get("diameter"):
+            dia_cx = x_cursor + r_pre
+            line_edges += [e.moved(Location(Vector(dia_cx, cy, 0)))
+                           for e in Edge.make_circle(r_pre).edges()]
+            line_edges.append(Edge.make_line(
+                Vector(dia_cx + 0.9 * r_pre, cy - 0.9 * r_pre, 0),
+                Vector(dia_cx - 0.9 * r_pre, cy + 0.9 * r_pre, 0)))
+            x_cursor = dia_cx + r_pre + pad
+        val_w = _text(tol_strs[i], h).bounding_box().size.X
+        val_cx = x_cursor + val_w / 2
+        text_faces.append(_text(tol_strs[i], h).moved(Location(Vector(val_cx, cy, 0))))
+        x_cursor = val_cx + val_w / 2 + pad
+        mod = r.get("modifier")
+        if mod:
+            m = mod.upper()
+            if m not in _MODIFIER_LETTER:
+                raise ValueError(f"Unknown modifier '{mod}'. Use M, L, or P.")
+            mod_cx = x_cursor + mr
+            line_edges += [e.moved(Location(Vector(mod_cx, cy, 0)))
+                           for e in Edge.make_circle(mr).edges()]
+            text_faces.append(_text(_MODIFIER_LETTER[m], h * 0.8)
+                              .moved(Location(Vector(mod_cx, cy, 0))))
+
+        datums = r.get("datums", ())
+        dmods = r.get("datum_modifiers", {}) or {}
+        for j, letter in enumerate(datums):
+            cx = x2 + j * H + H / 2
+            xr = x2 + (j + 1) * H
+            if xr < total_w - 1e-6:
+                line_edges.append(Edge.make_line(Vector(xr, bot, 0), Vector(xr, top, 0)))
+            dm = dmods.get(letter)
+            if dm:
+                text_faces.append(_text(letter, h).moved(Location(Vector(cx - 0.35 * h, cy, 0))))
+                mcx = cx + 0.5 * h
+                line_edges += [e.moved(Location(Vector(mcx, cy, 0)))
+                               for e in Edge.make_circle(0.55 * h).edges()]
+                text_faces.append(_text(dm.upper(), h * 0.7).moved(Location(Vector(mcx, cy, 0))))
+            else:
+                text_faces.append(_text(letter, h).moved(Location(Vector(cx, cy, 0))))
+
+    return CompositeFeatureControlFrameResult(
+        lines=Compound(children=line_edges),
+        text=Compound(children=text_faces),
+        characteristic=name,
+        tolerances=tuple(tol_strs),
+        width=total_w,
+        height=total_h,
+    )
+
+
+def hole_callout(
+    diameter: float | str,
+    *,
+    count: int | None = None,
+    through: bool = False,
+    depth: float | None = None,
+    cbore_dia: float | str | None = None,
+    cbore_depth: float | None = None,
+    csink_dia: float | str | None = None,
+    csink_angle: float | None = None,
+    draft: Draft | None = None,
+) -> HoleCalloutResult:
+    """Single-line hole note built from geometry symbols, e.g. ``4× ⌀8.5 THRU``
+    or ``⌀8.5 ↧20 ⌴ ⌀15 ↧6``.
+
+    Tokens are laid out left → right with the ⌀ / counterbore (⌴) / countersink
+    (⌵) / depth (↧) symbols drawn as geometry. Bottom-left at (0, 0).
+
+    Args:
+        diameter: hole diameter (number formatted to draft precision, or a string).
+        count: optional quantity, drawn as ``N×`` prefix.
+        through: append ``THRU`` (mutually exclusive with depth).
+        depth: blind-hole depth, drawn as ``↧<depth>``.
+        cbore_dia / cbore_depth: counterbore diameter and depth (``⌴ ⌀d ↧t``).
+        csink_dia / csink_angle: countersink diameter and included angle
+            (``⌵ ⌀d × <angle>°``).
+        draft: Draft config. Defaults to 2.5 mm.
+
+    Returns:
+        HoleCalloutResult with the usual .lines / .text split.
+    """
+    if draft is None:
+        draft = Draft(font_size=2.5, decimal_precision=1)
+    h = draft.font_size
+    prec = draft.decimal_precision
+    gap = 0.45 * h
+    sym_w = h                       # nominal symbol cell width
+
+    def _fmt(v) -> str:
+        return v if isinstance(v, str) else f"{round(v, prec):.{prec}f}"
+
+    # token stream: ("sym", name) or ("text", str)
+    tokens: list[tuple[str, str]] = []
+    if count:
+        tokens.append(("text", f"{count}×"))
+    tokens += [("sym", "diameter"), ("text", _fmt(diameter))]
+    if through:
+        tokens.append(("text", "THRU"))
+    elif depth is not None:
+        tokens += [("sym", "depth"), ("text", _fmt(depth))]
+    if cbore_dia is not None:
+        tokens += [("sym", "counterbore"), ("sym", "diameter"), ("text", _fmt(cbore_dia))]
+        if cbore_depth is not None:
+            tokens += [("sym", "depth"), ("text", _fmt(cbore_depth))]
+    if csink_dia is not None:
+        tokens += [("sym", "countersink"), ("sym", "diameter"), ("text", _fmt(csink_dia))]
+        if csink_angle is not None:
+            tokens.append(("text", f"× {_fmt(csink_angle)}°"))
+
+    line_edges: list[Edge] = []
+    text_faces = []
+    x = 0.0
+    for kind, val in tokens:
+        if kind == "sym":
+            cx = x + sym_w / 2
+            line_edges += [e.moved(Location(Vector(cx, 0, 0)))
+                           for e in _feature_symbol_edges(val, h)]
+            x += sym_w + gap
+        else:
+            t = Text(txt=val, font_size=h, font=draft.font,
+                     align=(Align.MIN, Align.CENTER), mode=Mode.PRIVATE
+                     ).moved(Location(Vector(x, 0, 0)))
+            text_faces.append(t)
+            x += t.bounding_box().size.X + gap
+
+    width = max(x - gap, 0.0)
+    return HoleCalloutResult(
+        lines=Compound(children=line_edges),
+        text=Compound(children=text_faces),
+        width=width,
+        height=h,
     )
 
 
