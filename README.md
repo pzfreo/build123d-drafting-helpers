@@ -6,6 +6,13 @@
 
 Third-party drawing-annotation helpers for [build123d](https://github.com/gumyr/build123d) — pure Python, no MCP dependency. Not affiliated with the upstream build123d project.
 
+Dimensions, leaders, centrelines, GD&T symbols, a title block, and a geometry-precise lint —
+all as build123d geometry, so a drawing exports to SVG **and** DXF and scales like any
+technical drawing. The sheet below is itself produced by the library, with every helper drawn
+and labelled by the helpers it documents ([`examples/specimen_sheet.py`](examples/specimen_sheet.py)):
+
+![Specimen sheet of the drafting helpers](docs/specimen_sheet.png)
+
 ```python
 from build123d_drafting import (
     dim_linear, place_dims, place_labels, centerline,
@@ -259,13 +266,11 @@ Returns `DatumFeatureResult(lines, text, letter)`.
 
 ## Examples
 
-[`examples/specimen_sheet.py`](examples/specimen_sheet.py) is an **A3 technical drawing that
-catalogues the helpers using the helpers themselves** — a real drawing frame, an
-`iso_title_block()` title block, every specimen called out by a `leader()` carrying the
-helper's name, all drafted with `draft_preset()`, and each cell captioned with the exact
-snippet that produced it:
-
-![Specimen sheet of the drafting helpers](docs/specimen_sheet.png)
+[`examples/specimen_sheet.py`](examples/specimen_sheet.py) — the catalogue **shown at the top
+of this page** — is an **A3 technical drawing that catalogues the helpers using the helpers
+themselves**: a real drawing frame, an `iso_title_block()` title block, every specimen called
+out by a `leader()` carrying the helper's name, all drafted with `draft_preset()`, and each
+cell captioned with the exact snippet that produced it.
 
 Run `python examples/specimen_sheet.py` to write `specimen_sheet.svg`, then rasterise it
 (resvg, Inkscape, or a browser) to refresh `docs/specimen_sheet.png`. Because the whole sheet
