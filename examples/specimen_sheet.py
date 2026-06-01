@@ -57,7 +57,7 @@ COLS = 3
 W, H, GAP, VGAP = 88.0, 45.0, 10.0, 11.0
 BAND_H, BAND_GAP = 66.0, 12.0
 GCFG = dict(title_fs=3.2, code_fs=1.9, line_dy=2.7, spec_y=31.0, code_top=19.5)
-BCFG = dict(title_fs=3.4, code_fs=1.9, line_dy=2.8, spec_y=44.0, code_top=24.0)
+BCFG = dict(title_fs=3.4, code_fs=1.9, line_dy=2.8, spec_y=40.0, code_top=23.0)
 
 
 def _run(preamble: str, snippet: str, var: str):
@@ -116,8 +116,8 @@ class _Sheet:
     def export(self, svg_path: str):
         exp = ExportSVG(margin=10)
         exp.add_layer("border", line_color=Color(0.62, 0.62, 0.62), line_weight=0.3, line_type=LineType.CONTINUOUS)
-        exp.add_layer("stroke", line_color=Color(0, 0, 0), line_weight=0.22, line_type=LineType.CONTINUOUS)
-        exp.add_layer("ink", line_color=Color(0, 0, 0), fill_color=Color(0, 0, 0), line_weight=0.22, line_type=LineType.CONTINUOUS)
+        exp.add_layer("stroke", line_color=Color(0, 0, 0), line_weight=0.18, line_type=LineType.CONTINUOUS)
+        exp.add_layer("ink", line_color=Color(0, 0, 0), fill_color=Color(0, 0, 0), line_weight=0.18, line_type=LineType.CONTINUOUS)
         exp.add_layer("fill", line_color=Color(0, 0, 0), fill_color=Color(0, 0, 0), line_weight=0.0, line_type=LineType.CONTINUOUS)
         exp.add_layer("code", line_color=Color(0.10, 0.16, 0.55), fill_color=Color(0.10, 0.16, 0.55), line_weight=0.0, line_type=LineType.CONTINUOUS)
         for bucket, layer in [(self.border, "border"), (self.stroke, "stroke"),
@@ -151,12 +151,13 @@ def build_sheet() -> _Sheet:
     band_w = (COLS * W + (COLS - 1) * GAP - GAP) / 2.0
 
     # --- band cell 1: place_dims on a part outline ---
-    pd_snip = ('dft = Draft(font_size=1.6, decimal_precision=1)\n'
-               'part = Rectangle(36, 20)\n'
+    pd_snip = ('dft = Draft(font_size=1.6, decimal_precision=1,\n'
+               '            arrow_length=1.5, line_width=0.1)\n'
+               'part = Rectangle(36, 20) - Pos(0, -10) * Rectangle(16, 8)\n'
                'dims = place_dims([\n'
-               '    ((-8, -10, 0), (8, -10, 0), "below", "16"),\n'
-               '    ((-18, -10, 0), (18, -10, 0), "below", "36"),\n'
-               '    ((18, -10, 0), (18, 10, 0), "right", "20"),\n'
+               '    ((-8, -10, 0), (8, -10, 0), "below", "16"),   # notch\n'
+               '    ((-18, -10, 0), (18, -10, 0), "below", "36"),  # overall\n'
+               '    ((18, -10, 0), (18, 10, 0), "right", "20"),    # height\n'
                '], dft, base_distance=5)')
     ns: dict = {}
     exec(BAND_PRE + pd_snip, ns)  # noqa: S102
