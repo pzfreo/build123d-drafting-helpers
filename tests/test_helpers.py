@@ -10,6 +10,7 @@ from build123d_drafting import (
     SurfaceFinishResult,
     add_to_layers,
     centerline, datum_feature, dim_linear, feature_control_frame,
+    find_interferences,
     iso_title_block, leader, leader_offset, lint_drawing,
     place_dims, place_labels,
     safe_dim_line, surface_finish_mark, view_axes,
@@ -771,3 +772,87 @@ class TestDatumFeature:
     def test_default_draft_used_when_none(self):
         res = datum_feature("A")
         assert isinstance(res, DatumFeatureResult)
+
+
+# ---------------------------------------------------------------------------
+# find_interferences (geometry-precise)
+# ---------------------------------------------------------------------------
+
+class TestFindInterferences:
+    def _msgs(self, issues):
+        return " | ".join(i.message for i in issues)
+
+    def test_witness_line_pierces_neighbour_label(self, draft):
+        # place_dims: the "18" extension line at x=0 spears the "36" label.
+        dims = place_dims([
+            ((-18, -10, 0), (18, -10, 0), "below", "36"),
+            ((-18, -10, 0), (0, -10, 0), "below", "18"),
+            ((18, -10, 0), (18, 10, 0), "right", "20"),
+        ], draft, base_distance=6)
+        issues = find_interferences(dims)
+        assert any("pierces" in i.message for i in issues), self._msgs(issues)
+
+    def test_clean_layout_has_no_issues(self, draft):
+        # dims on opposite sides of the part — nothing collides.
+        dims = [
+            dim_linear((-18, -10, 0), (18, -10, 0), "below", 6, draft, label="36"),
+            dim_linear((-18, 10, 0), (18, 10, 0), "above", 6, draft, label="36"),
+        ]
+        assert find_interferences(dims) == []
+
+    def test_overlapping_labels_flagged(self, draft):
+        # two dims over the same span at the same offset -> labels coincide.
+        dims = [
+            dim_linear((-8, -10, 0), (8, -10, 0), "below", 6, draft, label="12.50"),
+            dim_linear((-8, -10, 0), (8, -10, 0), "below", 6, draft, label="R3.20"),
+        ]
+        issues = find_interferences(dims)
+        assert any("overlap" in i.message for i in issues), self._msgs(issues)
+
+    def test_label_outside_page_frame_flagged(self, draft):
+        from build123d import Box
+        dims = [dim_linear((-18, -10, 0), (18, -10, 0), "below", 6, draft, label="36")]
+        # a frame that does not contain the (negative-Y) label
+        page = Box(40, 5, 1).bounding_box()  # y in [-2.5, 2.5]; label is near y=-16
+        issues = find_interferences(dims, page_bbox=page)
+        assert any("frame" in i.message for i in issues), self._msgs(issues)
+
+    def test_empty_list_is_safe(self):
+        assert find_interferences([]) == []
+
+
+class TestFindInterferencesRedundantLines:
+    def test_shared_endpoint_witness_lines_flagged(self, draft):
+        # "36" (-18..18) and "18" (-18..0) share the x=-18 witness line.
+        dims = place_dims([
+            ((-18, -10, 0), (18, -10, 0), "below", "36"),
+            ((-18, -10, 0), (0, -10, 0), "below", "18"),
+        ], draft, base_distance=5)
+        issues = find_interferences(dims)
+        assert any("redundant" in i.message for i in issues), \
+            " | ".join(i.message for i in issues)
+
+    def test_no_shared_endpoints_is_clean(self, draft):
+        # "16" (-8..8) and "36" (-18..18) share no endpoint -> no duplicate lines.
+        dims = place_dims([
+            ((-8, -10, 0), (8, -10, 0), "below", "16"),
+            ((-18, -10, 0), (18, -10, 0), "below", "36"),
+        ], draft, base_distance=5)
+        issues = find_interferences(dims)
+        assert not any("redundant" in i.message for i in issues), \
+            " | ".join(i.message for i in issues)
+
+
+class TestFindInterferencesSeverity:
+    def test_pierce_is_error_redundant_is_warning(self, draft):
+        # Layout with both a pierce ("18" line through "36") and a shared
+        # witness line (redundant) — verify the severity split.
+        dims = place_dims([
+            ((-18, -10, 0), (18, -10, 0), "below", "36"),
+            ((-18, -10, 0), (0, -10, 0), "below", "18"),
+        ], draft, base_distance=5)
+        issues = find_interferences(dims)
+        errors = [i for i in issues if i.severity == "error"]
+        warnings = [i for i in issues if i.severity == "warning"]
+        assert any("pierces" in i.message for i in errors)
+        assert any("redundant" in i.message for i in warnings)

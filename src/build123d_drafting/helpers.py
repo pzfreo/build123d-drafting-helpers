@@ -44,6 +44,7 @@ from build123d import (
     Draft,
     Edge,
     ExtensionLine,
+    GeomType,
     Location,
     Mode,
     Text,
@@ -1582,3 +1583,202 @@ def add_to_layers(exporter, result, *, line_layer="lines", text_layer="text"):
         )
     exporter.add_shape(lines, layer=line_layer)
     exporter.add_shape(text, layer=text_layer)
+
+
+# ---------------------------------------------------------------------------
+# Interference detection
+# ---------------------------------------------------------------------------
+
+_MIN_STRUCT_LEN = 3.5  # mm — ignore glyph strokes / arrowhead edges below this
+
+
+def _annotation_geom(item):
+    """Decompose an annotation result into (label_box, [segments], name).
+
+    label_box is (min_x, min_y, max_x, max_y) for the text, or None when the
+    item carries no label. segments are the *structural* straight lines
+    (witness lines, dim lines, leader shafts) — glyph strokes and short
+    arrowhead edges are filtered out, as are edges sitting inside the item's
+    own label box.
+    """
+    label_box = getattr(item, "label_bbox", None)
+    if label_box is None:
+        text = getattr(item, "text", None)
+        if text is not None and text.faces():
+            tb = text.bounding_box()
+            label_box = (tb.min.X, tb.min.Y, tb.max.X, tb.max.Y)
+
+    src = getattr(item, "lines", None)
+    if src is None:
+        src = getattr(item, "shape", None)
+
+    segs = []
+    if src is not None:
+        for e in src.edges():
+            try:
+                if e.geom_type != GeomType.LINE or e.length <= _MIN_STRUCT_LEN:
+                    continue
+                a, b = e.position_at(0), e.position_at(1)
+                if label_box is not None:
+                    mx, my = (a.X + b.X) / 2.0, (a.Y + b.Y) / 2.0
+                    bx0, by0, bx1, by1 = label_box
+                    if bx0 - 0.3 <= mx <= bx1 + 0.3 and by0 - 0.3 <= my <= by1 + 0.3:
+                        continue  # this item's own glyph/label-region edge
+                segs.append(((a.X, a.Y), (b.X, b.Y)))
+            except Exception:
+                continue
+
+    name = getattr(item, "label_str", None) or "?"
+    return label_box, segs, name
+
+
+def _seg_hits_box(p, q, box, pad=0.2):
+    """Liang–Barsky: does segment p->q intersect the padded AABB box?"""
+    minx, miny, maxx, maxy = box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad
+    x0, y0 = p
+    dx, dy = q[0] - x0, q[1] - y0
+    t0, t1 = 0.0, 1.0
+    for pp, qq in ((-dx, x0 - minx), (dx, maxx - x0), (-dy, y0 - miny), (dy, maxy - y0)):
+        if abs(pp) < 1e-12:
+            if qq < 0:
+                return False
+        else:
+            r = qq / pp
+            if pp < 0:
+                if r > t1:
+                    return False
+                t0 = max(t0, r)
+            else:
+                if r < t0:
+                    return False
+                t1 = min(t1, r)
+    return t0 <= t1
+
+
+def _box_overlap(a, b, minov):
+    return (min(a[2], b[2]) - max(a[0], b[0]) > minov
+            and min(a[3], b[3]) - max(a[1], b[1]) > minov)
+
+
+def _box_inside(inner, outer):
+    return (inner[0] >= outer[0] and inner[1] >= outer[1]
+            and inner[2] <= outer[2] and inner[3] <= outer[3])
+
+
+def _collinear_overlap(seg_a, seg_b, tol=0.15):
+    """Length (mm) over which two segments lie on the same line and overlap.
+
+    Returns 0 when the segments are not collinear or merely touch at a point.
+    """
+    (ax0, ay0), (ax1, ay1) = seg_a
+    (bx0, by0), (bx1, by1) = seg_b
+    dax, day = ax1 - ax0, ay1 - ay0
+    la = math.hypot(dax, day)
+    if la < 1e-9:
+        return 0.0
+    ux, uy = dax / la, day / la
+    # both endpoints of b must lie on the infinite line through a
+    if (abs((bx0 - ax0) * uy - (by0 - ay0) * ux) > tol
+            or abs((bx1 - ax0) * uy - (by1 - ay0) * ux) > tol):
+        return 0.0
+    pb0 = (bx0 - ax0) * ux + (by0 - ay0) * uy
+    pb1 = (bx1 - ax0) * ux + (by1 - ay0) * uy
+    lo = max(0.0, min(pb0, pb1))
+    hi = min(la, max(pb0, pb1))
+    return max(0.0, hi - lo)
+
+
+def find_interferences(items, *, part_bbox=None, page_bbox=None,
+                       min_overlap=0.5, pad=0.2, min_run=1.5):
+    """Geometry-precise interference detection between drafting annotations.
+
+    Where ``lint_drawing`` compares whole-annotation bounding boxes (and so
+    needs level-aware skips and misses sub-component clashes), this decomposes
+    each annotation into its **label box** and its **structural line segments**
+    (witness lines, dim lines, leader shafts) and tests the actual geometry:
+
+    - **line↔label** — a structural line of one annotation passes through
+      another annotation's text (e.g. a stacked dim's extension line spearing a
+      neighbouring dim's value). This is the class ``lint_drawing`` misses.
+    - **label↔label** — two labels physically overlap.
+    - **label↔frame** (when ``page_bbox`` is given) — a label extends outside
+      the drawing frame.
+    - **label↔part** (when ``part_bbox`` is given) — a label sits on top of the
+      part outline.
+    - **line↔line (redundant)** — structural lines from two annotations that lie
+      on the same line and overlap, e.g. two stacked dims that share an endpoint
+      each drawing the shared witness line (the duplicate could be avoided by
+      choosing dims that do not share a corner, or sharing one witness line).
+
+    Generic line↔line *crossings* are still not reported — witness lines
+    legitimately cross dim lines and centerlines; only collinear overlap is
+    flagged. An annotation's own (gapped) label is never flagged against itself.
+
+    Args:
+        items: result objects from this module (``DimResult``, ``LeaderResult``,
+            ``CenterlineResult``, ``FeatureControlFrameResult`` …). Anything
+            exposing ``.label_bbox`` or ``.text``, plus ``.lines`` or ``.shape``,
+            is handled.
+        part_bbox, page_bbox: optional ``BoundBox`` for the part outline / page
+            frame checks.
+        min_overlap: mm of bbox overlap (both axes) before two labels collide.
+        pad: mm tolerance when testing a line against a label box.
+        min_run: mm of collinear overlap before two lines are flagged as
+            redundant (shorter overlaps are treated as lines merely touching).
+
+    Returns:
+        list[LintIssue]. Real collisions (label↔label, line↔label, label↔frame,
+        label↔part) are severity ``"error"``. Redundant collinear overlaps are
+        severity ``"warning"`` — chain/baseline dimensioning legitimately shares
+        witness lines, so these are advisory and an author/LLM can choose to
+        reduce them without it being a hard failure.
+    """
+    geoms = [_annotation_geom(it) for it in items]
+    issues: list[LintIssue] = []
+
+    for i, (box_i, _, name_i) in enumerate(geoms):
+        if box_i is None:
+            continue
+        for box_j, _, name_j in geoms[i + 1:]:
+            if box_j is not None and _box_overlap(box_i, box_j, min_overlap):
+                issues.append(LintIssue(
+                    severity="error",
+                    message=f'labels "{name_i}" and "{name_j}" overlap',
+                ))
+        if page_bbox is not None:
+            pb = (page_bbox.min.X, page_bbox.min.Y, page_bbox.max.X, page_bbox.max.Y)
+            if not _box_inside(box_i, pb):
+                issues.append(LintIssue(
+                    severity="error",
+                    message=f'label "{name_i}" extends outside the drawing frame',
+                ))
+        if part_bbox is not None:
+            pb = (part_bbox.min.X, part_bbox.min.Y, part_bbox.max.X, part_bbox.max.Y)
+            if _box_overlap(box_i, pb, min_overlap):
+                issues.append(LintIssue(
+                    severity="error",
+                    message=f'label "{name_i}" sits on the part outline',
+                ))
+
+    for i, (_, segs_i, name_i) in enumerate(geoms):
+        for j, (box_j, _, name_j) in enumerate(geoms):
+            if i == j or box_j is None:
+                continue
+            if any(_seg_hits_box(p, q, box_j, pad) for (p, q) in segs_i):
+                issues.append(LintIssue(
+                    severity="error",
+                    message=f'a line from "{name_i}" pierces label "{name_j}"',
+                ))
+
+    for i, (_, segs_i, name_i) in enumerate(geoms):
+        for j in range(i + 1, len(geoms)):
+            _, segs_j, name_j = geoms[j]
+            if any(_collinear_overlap(a, b) > min_run
+                   for a in segs_i for b in segs_j):
+                issues.append(LintIssue(
+                    severity="warning",
+                    message=(f'redundant overlapping lines between "{name_i}" '
+                             f'and "{name_j}" — shared witness/edge drawn twice'),
+                ))
+
+    return issues
