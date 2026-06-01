@@ -4,6 +4,19 @@
 
 ### Features
 
+- **Composite feature control frames** — `composite_feature_control_frame(characteristic,
+  rows)` draws a multi-row ISO 1101 frame sharing one full-height characteristic cell (e.g. a
+  composite position tolerance for a hole pattern: `| ⌖ | ⌀0.25 | A | B | C |` over
+  `| ⌀0.1 | A |`). Each `rows` entry takes `tolerance`/`datums`/`diameter`/`modifier`/
+  `datum_modifiers`. New `CompositeFeatureControlFrameResult`.
+- **Hole callouts** — `hole_callout(diameter, count=…, through=…, depth=…, cbore_dia=…,
+  cbore_depth=…, csink_dia=…, csink_angle=…)` builds a single-line note from geometry symbols
+  (⌀ counterbore ⌴ countersink ⌵ depth ↧), e.g. `4× ⌀8.5 THRU` or `⌀8.5 ↧20 ⌴ ⌀15 ↧6`.
+  New `HoleCalloutResult`. Replaces hand-typed hole notes like the `⌀8.5 thru` in
+  `part_drawing.py`.
+- **All-around / all-over leaders** — `leader(..., all_around=True)` draws the ISO 1101
+  circle at the kink (profile applies all around the section); `all_over=True` draws the
+  double circle. Rings are open half-arcs so they stroke without flooding on a fill layer.
 - **Basic (theoretically-exact) dimensions** — `dim_linear(..., basic=True)` boxes the value
   in a rectangle per ISO 1101 / ASME Y14.5, the framed dimension that GD&T position and
   profile tolerances are located from. The box is four separate Edges, so it strokes

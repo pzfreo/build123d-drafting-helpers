@@ -5,13 +5,15 @@ import pytest
 from build123d import Draft, Compound, Edge, Vector
 
 from build123d_drafting import (
-    CenterlineResult, DatumFeatureResult, DatumTargetResult, DimResult,
-    FeatureControlFrameResult,
+    CenterlineResult, CompositeFeatureControlFrameResult,
+    DatumFeatureResult, DatumTargetResult, DimResult,
+    FeatureControlFrameResult, HoleCalloutResult,
     LeaderResult, LintIssue, TitleBlockResult,
     SurfaceFinishResult,
     add_to_layers,
-    centerline, datum_feature, datum_target, dim_linear, feature_control_frame,
-    find_interferences,
+    centerline, composite_feature_control_frame,
+    datum_feature, datum_target, dim_linear, feature_control_frame,
+    find_interferences, hole_callout,
     iso_title_block, leader, leader_offset, lint_drawing,
     place_dims, place_labels,
     safe_dim_line, surface_finish_mark, view_axes,
@@ -868,6 +870,138 @@ class TestBasicDimension:
         res = dim_linear((0, 0, 0), (0, 20, 0), "left", 8, draft, basic=True)
         assert res.is_basic is True
         assert len(res.shape.edges()) >= 4
+
+
+class TestCompositeFeatureControlFrame:
+    def _rows(self):
+        return [
+            {"tolerance": 0.25, "datums": ("A", "B", "C"), "diameter": True},
+            {"tolerance": 0.1, "datums": ("A",), "diameter": True},
+        ]
+
+    def test_returns_result(self, draft):
+        res = composite_feature_control_frame("position", self._rows(), draft)
+        assert isinstance(res, CompositeFeatureControlFrameResult)
+
+    def test_lines_and_text_are_compounds(self, draft):
+        res = composite_feature_control_frame("position", self._rows(), draft)
+        assert isinstance(res.lines, Compound)
+        assert isinstance(res.text, Compound)
+
+    def test_two_rows_height_is_two_frames(self, draft):
+        res = composite_feature_control_frame("position", self._rows(), draft)
+        assert res.height == pytest.approx(2 * (2 * draft.font_size))
+
+    def test_bottom_left_at_origin(self, draft):
+        res = composite_feature_control_frame("position", self._rows(), draft)
+        bb = res.shape.bounding_box()
+        assert bb.min.X == pytest.approx(0.0, abs=0.05)
+        assert bb.min.Y == pytest.approx(0.0, abs=0.05)
+
+    def test_tolerances_recorded_top_to_bottom(self, draft):
+        res = composite_feature_control_frame("position", self._rows(), draft)
+        assert res.tolerances == ("0.2", "0.1")  # precision 1 rounds 0.25 -> 0.2
+
+    def test_single_row_allowed(self, draft):
+        res = composite_feature_control_frame(
+            "position", [{"tolerance": 0.1, "datums": ("A",)}], draft)
+        assert res.height == pytest.approx(2 * draft.font_size)
+
+    def test_symbol_cell_shared_full_height(self, draft):
+        # the symbol cell divider runs the full height (one tall edge at x = H)
+        res = composite_feature_control_frame("position", self._rows(), draft)
+        H = 2 * draft.font_size
+        tall = [e for e in res.lines.edges()
+                if e.length == pytest.approx(2 * H, abs=0.05)]
+        assert len(tall) >= 1   # symbol divider + outer verticals are 2H tall
+
+    def test_unknown_characteristic_raises(self, draft):
+        with pytest.raises(ValueError):
+            composite_feature_control_frame("bogus", self._rows(), draft)
+
+    def test_empty_rows_raises(self, draft):
+        with pytest.raises(ValueError):
+            composite_feature_control_frame("position", [], draft)
+
+    def test_modifier_accepted(self, draft):
+        res = composite_feature_control_frame(
+            "position", [{"tolerance": 0.25, "datums": ("A",), "modifier": "M"}], draft)
+        assert isinstance(res, CompositeFeatureControlFrameResult)
+
+    def test_default_draft_used_when_none(self):
+        res = composite_feature_control_frame(
+            "position", [{"tolerance": 0.1, "datums": ("A",)}])
+        assert isinstance(res, CompositeFeatureControlFrameResult)
+
+
+class TestHoleCallout:
+    def test_returns_result(self, draft):
+        res = hole_callout(8.5, through=True, draft=draft)
+        assert isinstance(res, HoleCalloutResult)
+
+    def test_lines_and_text_are_compounds(self, draft):
+        res = hole_callout(8.5, through=True, draft=draft)
+        assert isinstance(res.lines, Compound)
+        assert isinstance(res.text, Compound)
+
+    def test_diameter_symbol_drawn(self, draft):
+        # ⌀ ring contributes circle edges to .lines
+        res = hole_callout(8.5, through=True, draft=draft)
+        assert len(res.lines.edges()) >= 2
+
+    def test_thru_word_in_text(self, draft):
+        res = hole_callout(8.5, through=True, draft=draft)
+        assert len(res.text.faces()) >= 1   # value + THRU render
+
+    def test_count_prefix_widens(self, draft):
+        a = hole_callout(8.5, through=True, draft=draft)
+        b = hole_callout(8.5, count=4, through=True, draft=draft)
+        assert b.width > a.width
+
+    def test_counterbore_adds_geometry(self, draft):
+        plain = hole_callout(8.5, depth=20, draft=draft)
+        cbore = hole_callout(8.5, depth=20, cbore_dia=15, cbore_depth=6, draft=draft)
+        assert cbore.width > plain.width
+        assert len(cbore.lines.edges()) > len(plain.lines.edges())
+
+    def test_countersink_accepted(self, draft):
+        res = hole_callout(8.5, csink_dia=15, csink_angle=90, draft=draft)
+        assert isinstance(res, HoleCalloutResult)
+        assert res.width > 0
+
+    def test_bottom_left_origin_x(self, draft):
+        res = hole_callout(8.5, through=True, draft=draft)
+        bb = res.shape.bounding_box()
+        assert bb.min.X == pytest.approx(0.0, abs=0.6 * draft.font_size)
+
+    def test_default_draft_used_when_none(self):
+        res = hole_callout(8.5, through=True)
+        assert isinstance(res, HoleCalloutResult)
+
+
+class TestLeaderAllAround:
+    def test_all_around_adds_ring(self, draft):
+        plain = leader((0, 0, 0), (10, 10, 0), "0.2", draft)
+        ring = leader((0, 0, 0), (10, 10, 0), "0.2", draft, all_around=True)
+        assert len(ring.lines.edges()) > len(plain.lines.edges())
+
+    def test_all_over_more_than_all_around(self, draft):
+        around = leader((0, 0, 0), (10, 10, 0), "0.2", draft, all_around=True)
+        over = leader((0, 0, 0), (10, 10, 0), "0.2", draft, all_over=True)
+        assert len(over.lines.edges()) > len(around.lines.edges())
+
+    def test_ring_is_open_arcs_not_extra_faces(self, draft):
+        # the ring must stroke (open arcs) — no new faces vs a plain leader
+        plain = leader((0, 0, 0), (10, 10, 0), "0.2", draft)
+        ring = leader((0, 0, 0), (10, 10, 0), "0.2", draft, all_around=True)
+        assert len(ring.lines.faces()) == len(plain.lines.faces())
+
+    def test_ring_centred_on_elbow(self, draft):
+        ring = leader((0, 0, 0), (10, 10, 0), "0.2", draft, all_around=True)
+        # arcs added near the elbow (10,10); their bbox should straddle it
+        bb = ring.lines.bounding_box()
+        assert bb.min.X <= 10 <= bb.max.X
+        assert bb.min.Y <= 10 <= bb.max.Y
 
 
 class TestDraftPreset:
