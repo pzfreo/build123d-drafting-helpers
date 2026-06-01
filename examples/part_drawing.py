@@ -6,8 +6,8 @@ Unlike the specimen sheet (a catalogue of symbols), this shows how you actually
     build the 3D part  ->  project_to_viewport() views (front / top / side / iso)
     ->  dimension with the helpers  ->  lint with find_interferences()  ->  export
 
-It's an A3 frame with an iso_title_block(); each part gets a third-angle set of
-front/top/side views plus an isometric, dimensioned with dim_linear()/leader()
+It's an A4 frame with an iso_title_block(); each part gets front/top/side views
+plus an isometric, dimensioned with dim_linear()/leader()
 (drafts from draft_preset()). The layout is verified collision-free by lint()
 before export.
 
@@ -25,8 +25,8 @@ from build123d_drafting import (
     dim_linear, draft_preset, find_interferences, iso_title_block, leader,
 )
 
-DRAFT = draft_preset(font_size=2.5, decimal_precision=1)
-PW, PH, MARGIN = 420.0, 297.0, 6.0          # A3 landscape
+DRAFT = draft_preset(font_size=2.2, decimal_precision=1)
+PW, PH, MARGIN = 297.0, 210.0, 6.0          # A4 landscape
 AF, HEAD_H, DIA, LEN = 16.0, 6.4, 10.0, 40.0
 NUT_AF, NUT_T, BORE = 16.0, 8.0, 8.5
 SANS = "Liberation Sans"
@@ -114,10 +114,14 @@ def _draw_part(part, cz, gx, gy):
     sw = side[0].bounding_box().size.X
     th = top[0].bounding_box().size.Y
 
+    iso_w = iso[0].bounding_box().size.X
+    side_cx = gx + fw / 2 + 16 + sw / 2
+    # FRONT | SIDE | ISO in a row, TOP above FRONT — keeps tall parts from
+    # overlapping (an isometric stacked above the side view would collide).
     f_bb = _add_view(*front, gx, gy, "FRONT")
-    _add_view(*top, gx, gy + fh / 2 + 30 + th / 2, "TOP")          # above front
-    _add_view(*side, gx + fw / 2 + 30 + sw / 2, gy, "SIDE")         # right of front
-    _add_view(*iso, gx + fw / 2 + 30 + sw / 2, gy + fh / 2 + 40, "ISO")
+    _add_view(*top, gx, gy + fh / 2 + 16 + th / 2, "TOP")
+    _add_view(*side, side_cx, gy, "SIDE")
+    _add_view(*iso, side_cx + sw / 2 + 16 + iso_w / 2, gy, "ISO")
     return f_bb
 
 
@@ -131,7 +135,7 @@ def _rect_edges(w, h, cx=0.0, cy=0.0):
 border.extend(_rect_edges(PW - 2 * MARGIN, PH - 2 * MARGIN))
 border.extend(_rect_edges(PW, PH))
 
-TB_W = 150.0
+TB_W = 118.0
 tb = iso_title_block(
     "M10 HEX BOLT & NUT", "B3D-DH-2", scale="1:1", material="Steel 8.8",
     general_tolerance="ISO 2768-m", designed_by="build123d-drafting-helpers",
@@ -142,7 +146,7 @@ part_v.append(tb.lines.moved(tb_loc))
 text_l.append(tb.text.moved(tb_loc))
 
 # --- bolt: views + dimensions (front view) ----------------------------------
-fb = _draw_part(_bolt(), LEN / 2, -118.0, 20.0)
+fb = _draw_part(_bolt(), LEN / 2, -104.0, 6.0)
 y0, y_head, y_top = fb.min.Y, fb.max.Y - HEAD_H, fb.max.Y
 xL, xR = fb.center().X - AF / 2, fb.center().X + AF / 2
 _dim((xL - DIA / 2, y0, 0), (xL - DIA / 2, y_head, 0), "left", 12, str(LEN))   # thread length
@@ -151,7 +155,7 @@ _leader((fb.center().X + DIA / 2, (y0 + y_head) / 2, 0),
         (fb.center().X + 26, (y0 + y_head) / 2 - 10, 0), f"M{int(DIA)} × 1.5")
 
 # --- nut: views + dimensions (front view) -----------------------------------
-nb = _draw_part(_nut(), NUT_T / 2, 70.0, 20.0)
+nb = _draw_part(_nut(), NUT_T / 2, 34.0, 6.0)
 _dim((nb.min.X, nb.max.Y, 0), (nb.max.X, nb.max.Y, 0), "above", 8, str(NUT_AF))   # A/F
 _dim((nb.max.X, nb.min.Y, 0), (nb.max.X, nb.max.Y, 0), "right", 10, str(NUT_T))   # thickness
 _leader((nb.center().X, nb.min.Y, 0), (nb.center().X - 24, nb.min.Y - 14, 0),

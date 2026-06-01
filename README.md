@@ -276,9 +276,9 @@ is build123d geometry — text included — it also exports to DXF and scales li
 Where the specimen sheet is a *catalogue*, this shows the **end-to-end workflow on a real
 part** (an M10 hex bolt + nut): build the 3D part → `project_to_viewport()` views →
 dimension with `dim_linear()` / `leader()` → **lint with `find_interferences()`** → export.
-An A3 frame, an `iso_title_block()`, a third-angle set of **front / top / side views plus an
-isometric** for each part (with dashed hidden lines), and the layout is verified
-collision-free by `lint()` before it's written.
+An A4 frame, an `iso_title_block()`, **front / top / side views plus an isometric** for each
+part (with dashed hidden lines), and the layout is verified collision-free by `lint()` before
+it's written.
 
 ![M10 bolt and nut drawing](docs/part_drawing.png)
 
