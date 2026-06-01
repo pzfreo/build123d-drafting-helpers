@@ -36,6 +36,12 @@
   `.characteristic`, `.tolerance_str`, `.datums`, `.identifier`, `.letter`,
   `.mark_position`, `.block_bbox`, …). `SurfaceFinish` exposes its tip via
   `.mark_position` (not `.position`, which is a read-only `Shape` property).
+  The lint metadata (`.label_bbox` / `.segments`, and a leader's `.tip` /
+  `.elbow`) is **transform-aware**: cached in the build frame and exposed
+  through the object's current `.location`, so `.moved()` / `.located()` /
+  `.rotate()` and the construction-time `rotation` / `align` all keep it
+  consistent with the geometry — lint a moved/rotated object and it still
+  checks the right region. A shared `_Annotation` base centralises this.
 - **Kept as functions** (orchestrators / pure math): `place_dims()` and
   `place_labels()` now return `list[Dimension]`; `leader_offset()` returns a
   `Leader`; `view_axes()` and `draft_preset()` are unchanged.

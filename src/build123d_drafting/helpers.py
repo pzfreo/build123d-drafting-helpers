@@ -131,6 +131,103 @@ def _strokes_and_text(strokes, text_faces, line_width):
 
 
 # ---------------------------------------------------------------------------
+# Annotation base — transform-aware lint metadata
+# ---------------------------------------------------------------------------
+
+def _rot_pt(pt, ang_deg):
+    """Rotate (x, y) about the origin by ang_deg degrees (Z axis)."""
+    a = math.radians(ang_deg)
+    c, s = math.cos(a), math.sin(a)
+    return (pt[0] * c - pt[1] * s, pt[0] * s + pt[1] * c)
+
+
+def _xf_pt(pt, ang_deg, off):
+    """Apply a Location's transform to a 2D point: rotate about origin, then translate."""
+    rx, ry = _rot_pt(pt, ang_deg)
+    return (rx + off[0], ry + off[1])
+
+
+def _xf_bbox(box, ang_deg, off):
+    """Transform an AABB by (rotate, translate) and return the new AABB of its corners."""
+    pts = [(box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3])]
+    t = [_xf_pt(p, ang_deg, off) for p in pts]
+    xs = [p[0] for p in t]
+    ys = [p[1] for p in t]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _bake_pt(pt, off, rot):
+    """Bake construction-time align (translate by *off*) then rotation (*rot*°) into a point.
+
+    Mirrors BaseSketchObject.__init__, which moves the geometry by the align
+    offset first and then rotates it about the origin.
+    """
+    return _rot_pt((pt[0] + off[0], pt[1] + off[1]), rot)
+
+
+def _bake_bbox(box, off, rot):
+    pts = [(box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3])]
+    t = [_bake_pt(p, off, rot) for p in pts]
+    xs = [p[0] for p in t]
+    ys = [p[1] for p in t]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+class _Annotation(BaseSketchObject):
+    """Shared base for the drawing-annotation sketch objects.
+
+    Centralises the construct-and-store boilerplate and, crucially, keeps the
+    lint metadata (``label_bbox`` / ``segments`` and, on leaders, ``tip`` /
+    ``elbow``) consistent with the geometry under transforms. The values are
+    cached in the object's *build* frame; the properties apply the object's
+    current ``.location`` (so ``.moved()`` / ``.located()`` / ``.rotate()`` all
+    track), and the construction-time ``rotation`` / ``align`` — which
+    ``BaseSketchObject`` bakes into the geometry — is baked into the cache too.
+    """
+
+    def __init__(self, sketch, *, label="", label_bbox=None, segments=None,
+                 rotation=0, align=None, mode=Mode.ADD):
+        # The align offset BaseSketchObject will apply — measured before super()
+        # mutates `sketch` (its align path moves the sketch in place).
+        off = (0.0, 0.0)
+        if align is not None:
+            al = align if isinstance(align, (tuple, list)) else (align, align)
+            v = sketch.bounding_box().to_align_offset(al)
+            off = (v.X, v.Y)
+        super().__init__(sketch, rotation=rotation, align=align, mode=mode)
+        self._init_off = off
+        self._init_rot = rotation
+        self.label = label
+        self._label_bbox_local = _bake_bbox(label_bbox, off, rotation) if label_bbox else None
+        self._segments_local = [
+            (_bake_pt(a, off, rotation), _bake_pt(b, off, rotation))
+            for a, b in (segments or [])
+        ]
+
+    def _loc(self):
+        return self.location.orientation.Z, (self.location.position.X, self.location.position.Y)
+
+    def _bake_point(self, pt):
+        """Bake construction transform into a build-frame point (for subclass coords)."""
+        return _bake_pt(pt, self._init_off, self._init_rot)
+
+    def _live_point(self, pt):
+        """Apply the current .location to a baked build-frame point."""
+        return _xf_pt(pt, *self._loc())
+
+    @property
+    def label_bbox(self):
+        if self._label_bbox_local is None:
+            return None
+        return _xf_bbox(self._label_bbox_local, *self._loc())
+
+    @property
+    def segments(self):
+        ang, off = self._loc()
+        return [(_xf_pt(a, ang, off), _xf_pt(b, ang, off)) for a, b in self._segments_local]
+
+
+# ---------------------------------------------------------------------------
 # Draft preset
 # ---------------------------------------------------------------------------
 
@@ -194,7 +291,7 @@ def _format_label(length, draft, tolerance) -> str:
     return f"{s} +{hi} -{lo}"
 
 
-class Dimension(BaseSketchObject):
+class Dimension(_Annotation):
     """ExtensionLine wrapper with named placement side, as a native Sketch.
 
     Args:
@@ -311,20 +408,18 @@ class Dimension(BaseSketchObject):
         # segments come from the ExtensionLine's straight edges + box strokes
         seg = _segments(el.edges()) + _segments(strokes)
 
-        super().__init__(sk, rotation=rotation, align=align, mode=mode)
-        self.label = label_str
-        self.label_bbox = label_bbox_tuple
+        super().__init__(sk, label=label_str, label_bbox=label_bbox_tuple,
+                         segments=seg, rotation=rotation, align=align, mode=mode)
         self.measured_length = measured
         self.dim_level_y = dim_level_y
         self.is_basic = basic
-        self.segments = seg
 
 
 def _truncate(s: str, max_len: int = 6) -> str:
     return s[:max_len] + "…" if len(s) > max_len else s
 
 
-class SafeDimension(BaseSketchObject):
+class SafeDimension(_Annotation):
     """DimensionLine wrapper that won't crash on labels longer than the path.
 
     build123d raises ValueError("Can't get geom adaptor of empty wire") when the
@@ -353,12 +448,15 @@ class SafeDimension(BaseSketchObject):
 
         chosen_label = fallback_label or _truncate(label)
         faces = None
+        seg: list = []
         for lbl in [label, fallback_label or _truncate(label)]:
             try:
                 dl = DimensionLine(path=path, draft=draft, label=lbl, mode=Mode.PRIVATE)
+                # compute segments before committing `faces`, so a failure here can't
+                # leave faces set with seg unbound (the else-branch would then NameError).
+                seg = _segments(dl.edges())
                 faces = list(dl.faces())
                 chosen_label = lbl
-                seg = _segments(dl.edges())
                 break
             except Exception:
                 continue
@@ -369,18 +467,16 @@ class SafeDimension(BaseSketchObject):
         else:
             sk = Sketch(children=faces)
 
-        super().__init__(sk, rotation=rotation, align=align, mode=mode)
-        self.label = chosen_label
-        self.label_bbox = None
+        super().__init__(sk, label=chosen_label, label_bbox=None, segments=seg,
+                         rotation=rotation, align=align, mode=mode)
         self.measured_length = measured
-        self.segments = seg
 
 
 # ---------------------------------------------------------------------------
 # centerline  ->  Centerline
 # ---------------------------------------------------------------------------
 
-class Centerline(BaseSketchObject):
+class Centerline(_Annotation):
     """A centreline between two points — a single thin line rendered as a face.
 
     Metadata: ``.label`` (""), ``.segments``, ``.is_centerline`` (True).
@@ -400,9 +496,8 @@ class Centerline(BaseSketchObject):
         v2 = Vector(p2[0], p2[1], p2[2] if len(p2) > 2 else 0.0)
         edge = Edge.make_line(v1, v2)
         sk, seg = _strokes_and_text([edge], [], line_width)
-        super().__init__(sk, rotation=rotation, align=align, mode=mode)
-        self.label = ""
-        self.segments = seg
+        super().__init__(sk, label="", label_bbox=None, segments=seg,
+                         rotation=rotation, align=align, mode=mode)
         self.is_centerline = True
 
 
@@ -410,7 +505,7 @@ class Centerline(BaseSketchObject):
 # leader  ->  Leader
 # ---------------------------------------------------------------------------
 
-class Leader(BaseSketchObject):
+class Leader(_Annotation):
     """Leader annotation with arrowhead at *tip* and label hanging from *elbow*.
 
     The horizontal shelf runs away from *tip* so the label text sits cleanly
@@ -502,12 +597,19 @@ class Leader(BaseSketchObject):
         sk = Sketch(children=faces)
         seg = (_segments([shaft_edge, shelf_edge]))
 
-        super().__init__(sk, rotation=rotation, align=align, mode=mode)
-        self.label = label
-        self.tip = (tip_v.X, tip_v.Y)
-        self.elbow = (elbow_v.X, elbow_v.Y)
-        self.label_bbox = (_tb.min.X, _tb.min.Y, _tb.max.X, _tb.max.Y)
-        self.segments = seg
+        super().__init__(sk, label=label,
+                         label_bbox=(_tb.min.X, _tb.min.Y, _tb.max.X, _tb.max.Y),
+                         segments=seg, rotation=rotation, align=align, mode=mode)
+        self._tip_local = self._bake_point((tip_v.X, tip_v.Y))
+        self._elbow_local = self._bake_point((elbow_v.X, elbow_v.Y))
+
+    @property
+    def tip(self):
+        return self._live_point(self._tip_local)
+
+    @property
+    def elbow(self):
+        return self._live_point(self._elbow_local)
 
 
 _COMPASS_ANGLES = {
@@ -915,7 +1017,7 @@ def _lint_leader(item, issues) -> None:
 _TB_COL_FRACTIONS = [0.40, 0.20, 0.15, 0.15, 0.10]
 
 
-class TitleBlock(BaseSketchObject):
+class TitleBlock(_Annotation):
     """ISO-style 2-row title block built at the origin (bottom-left at (0, 0)).
 
     Layout::
@@ -997,10 +1099,8 @@ class TitleBlock(BaseSketchObject):
         text_faces = [t for t in text_faces if t is not None]
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
-        super().__init__(sk, rotation=rotation, align=align, mode=mode)
-        self.label = part_name
-        self.label_bbox = None
-        self.segments = seg
+        super().__init__(sk, label=part_name, label_bbox=None, segments=seg,
+                         rotation=rotation, align=align, mode=mode)
         self.block_bbox = {
             "min_x": 0.0, "min_y": 0.0,
             "max_x": width, "max_y": y2,
@@ -1012,7 +1112,7 @@ class TitleBlock(BaseSketchObject):
 # surface_finish_mark  ->  SurfaceFinish
 # ---------------------------------------------------------------------------
 
-class SurfaceFinish(BaseSketchObject):
+class SurfaceFinish(_Annotation):
     """ISO 1302 surface finish check-mark symbol with Ra annotation.
 
     Args:
@@ -1079,11 +1179,9 @@ class SurfaceFinish(BaseSketchObject):
         label_text = label_text.moved(trans_loc)
 
         sk, seg = _strokes_and_text(strokes, [label_text], line_width)
-        super().__init__(sk, rotation=rotation, align=align, mode=mode)
-        self.label = ra_value
-        self.label_bbox = None
+        super().__init__(sk, label=ra_value, label_bbox=None, segments=seg,
+                         rotation=rotation, align=align, mode=mode)
         self.mark_position = (pos_v.X, pos_v.Y)
-        self.segments = seg
 
 
 # ---------------------------------------------------------------------------
@@ -1182,7 +1280,7 @@ def _characteristic_edges(name: str, h: float) -> list[Edge]:
     )
 
 
-class FeatureControlFrame(BaseSketchObject):
+class FeatureControlFrame(_Annotation):
     """ISO 1101 feature control frame, e.g. ``| ⌖ | ⌀0.5 Ⓜ | A | B | C |``.
 
     Built at the origin with its bottom-left corner at (0, 0).
@@ -1298,16 +1396,14 @@ class FeatureControlFrame(BaseSketchObject):
                 text_faces.append(_text(letter, h).moved(Location(Vector(cx, cy, 0))))
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
-        super().__init__(sk, rotation=rotation, align=align, mode=mode)
-        self.label = tol_str
-        self.label_bbox = None
-        self.segments = seg
+        super().__init__(sk, label=tol_str, label_bbox=None, segments=seg,
+                         rotation=rotation, align=align, mode=mode)
         self.characteristic = name
         self.tolerance_str = tol_str
         self.datums = tuple(datums)
 
 
-class DatumFeature(BaseSketchObject):
+class DatumFeature(_Annotation):
     """ISO 5459 datum feature symbol: a (filled) triangle on a short leader to a
     framed datum letter. Triangle tip at the origin pointing down (-Y).
 
@@ -1360,14 +1456,12 @@ class DatumFeature(BaseSketchObject):
                      ).moved(Location(Vector(0, (by0 + by1) / 2, 0)))
 
         sk, seg = _strokes_and_text(strokes, extra_faces + [glyph], line_width)
-        super().__init__(sk, rotation=rotation, align=align, mode=mode)
-        self.label = letter
-        self.label_bbox = None
-        self.segments = seg
+        super().__init__(sk, label=letter, label_bbox=None, segments=seg,
+                         rotation=rotation, align=align, mode=mode)
         self.letter = letter
 
 
-class DatumTarget(BaseSketchObject):
+class DatumTarget(_Annotation):
     """ISO 5459 datum-target symbol: a circle split by a horizontal line into an
     upper compartment (target-area size) and a lower compartment (identifier).
     Centred at the origin.
@@ -1403,10 +1497,8 @@ class DatumTarget(BaseSketchObject):
                                    ).moved(Location(Vector(0, r / 2, 0))))
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
-        super().__init__(sk, rotation=rotation, align=align, mode=mode)
-        self.label = identifier
-        self.label_bbox = None
-        self.segments = seg
+        super().__init__(sk, label=identifier, label_bbox=None, segments=seg,
+                         rotation=rotation, align=align, mode=mode)
         self.identifier = identifier
         self.area_label = area_label or ""
 
@@ -1431,7 +1523,7 @@ def _feature_symbol_edges(name: str, h: float) -> list[Edge]:
     raise ValueError(f"Unknown feature symbol '{name}'.")
 
 
-class CompositeFeatureControlFrame(BaseSketchObject):
+class CompositeFeatureControlFrame(_Annotation):
     """ISO 1101 *composite* feature control frame — two (or more) tolerance rows
     sharing a single characteristic-symbol cell. Bottom-left at (0, 0).
 
@@ -1552,15 +1644,13 @@ class CompositeFeatureControlFrame(BaseSketchObject):
                     text_faces.append(_text(letter, h).moved(Location(Vector(cx, cy, 0))))
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
-        super().__init__(sk, rotation=rotation, align=align, mode=mode)
-        self.label = tol_strs[0]
-        self.label_bbox = None
-        self.segments = seg
+        super().__init__(sk, label=tol_strs[0], label_bbox=None, segments=seg,
+                         rotation=rotation, align=align, mode=mode)
         self.characteristic = name
         self.tolerances = tuple(tol_strs)
 
 
-class HoleCallout(BaseSketchObject):
+class HoleCallout(_Annotation):
     """Single-line hole note built from geometry symbols, e.g. ``4× ⌀8.5 THRU``.
     Bottom-left at (0, 0).
 
@@ -1629,10 +1719,8 @@ class HoleCallout(BaseSketchObject):
 
         width = max(x - gap, 0.0)
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
-        super().__init__(sk, rotation=rotation, align=align, mode=mode)
-        self.label = ""
-        self.label_bbox = None
-        self.segments = seg
+        super().__init__(sk, label="", label_bbox=None, segments=seg,
+                         rotation=rotation, align=align, mode=mode)
         self.callout_width = width
         self.callout_height = h
 
