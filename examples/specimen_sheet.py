@@ -155,7 +155,7 @@ def build_sheet() -> _Sheet:
                'part = Rectangle(36, 20)\n'
                'dims = place_dims([\n'
                '    ((-18, -10, 0), (18, -10, 0), "below", "36"),\n'
-               '    ((-18, -10, 0), (0, -10, 0), "below", "18"),\n'
+               '    ((-18, -10, 0), (-4, -10, 0), "below", "14"),\n'
                '    ((18, -10, 0), (18, 10, 0), "right", "20"),\n'
                '], dft, base_distance=5)')
     ns: dict = {}
