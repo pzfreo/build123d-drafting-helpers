@@ -10,6 +10,7 @@ Import directly in your drawing scripts — no MCP server required:
 from build123d_drafting.helpers import (
     CenterlineResult,
     DatumFeatureResult,
+    DatumTargetResult,
     DimResult,
     FeatureControlFrameResult,
     LeaderResult,
@@ -19,6 +20,7 @@ from build123d_drafting.helpers import (
     add_to_layers,
     centerline,
     datum_feature,
+    datum_target,
     dim_linear,
     draft_preset,
     feature_control_frame,
@@ -37,6 +39,7 @@ from build123d_drafting.helpers import (
 __all__ = [
     "CenterlineResult",
     "DatumFeatureResult",
+    "DatumTargetResult",
     "DimResult",
     "FeatureControlFrameResult",
     "LeaderResult",
@@ -46,6 +49,7 @@ __all__ = [
     "add_to_layers",
     "centerline",
     "datum_feature",
+    "datum_target",
     "dim_linear",
     "draft_preset",
     "feature_control_frame",

@@ -4,6 +4,14 @@
 
 ### Features
 
+- **Basic (theoretically-exact) dimensions** — `dim_linear(..., basic=True)` boxes the value
+  in a rectangle per ISO 1101 / ASME Y14.5, the framed dimension that GD&T position and
+  profile tolerances are located from. The box is four separate Edges, so it strokes
+  cleanly even on a `fill_color` layer (no flood). `DimResult.is_basic` records the flag.
+- **Datum targets** — `datum_target(identifier, area_label=None)` draws the ISO 5459
+  divided-circle symbol: upper compartment = target-area size (e.g. `⌀6`, blank for a
+  point/line), lower = identifier (e.g. `A1`). Returns a `DatumTargetResult` with the usual
+  `.lines`/`.text` split for `add_to_layers()`. Connect to the target with `leader()`.
 - **`find_interferences(..., obstacles=[...])`**: labels are tested against arbitrary
   obstacle boxes (`BoundBox` or `(min_x, min_y, max_x, max_y)`), e.g. the projected views
   of a multi-view drawing — flags `label_over_geometry`. Label-only by design (leader lines

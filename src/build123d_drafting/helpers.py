@@ -73,6 +73,7 @@ class DimResult:
     measured_length: float
     dim_level_y: float | None = None  # Y coord of the dim line (for stacking checks)
     label_bbox: tuple[float, float, float, float] | None = None  # (min_x, min_y, max_x, max_y)
+    is_basic: bool = False  # True when the value is boxed as a basic (theoretically-exact) dimension
 
     def bbox(self):
         return self.shape.bounding_box()
@@ -225,6 +226,7 @@ def dim_linear(
     label: str | None = None,
     tolerance: float | tuple[float, float] | None = None,
     label_offset_x: float = 0.0,
+    basic: bool = False,
 ) -> DimResult:
     """ExtensionLine wrapper with named placement side.
 
@@ -239,6 +241,11 @@ def dim_linear(
         label_offset_x: signed distance (mm) to shift the label along the dim line
             away from the midpoint. Positive shifts toward p2; negative toward p1.
             When 0.0 (default), behaviour is unchanged.
+        basic: draw a rectangle around the value, marking it a *basic*
+            (theoretically-exact) dimension per ISO 1101 / ASME Y14.5 — the
+            box GD&T position/profile tolerances are located from. The box is
+            built from four separate Edges so it strokes (never floods) even on
+            a fill_color layer.
 
     Returns:
         DimResult with .shape (the Compound), .label_str, .measured_length,
@@ -304,19 +311,30 @@ def dim_linear(
     hx, hy = (half_h, half_w) if vertical else (half_w, half_h)
     label_bbox_tuple = (label_cx - hx, label_cy - hy, label_cx + hx, label_cy + hy)
 
+    extra: list = []
     if label_offset_x != 0.0 or _force_external:
         # Place explicit Text at the computed position (rotated for vertical dims)
-        text_shape = Text(
+        extra.append(Text(
             txt=label_str,
             font_size=draft.font_size,
             font=draft.font,
             align=(Align.CENTER, Align.CENTER),
             mode=Mode.PRIVATE,
         ).moved(Location(Vector(label_cx, label_cy, 0.0),
-                         Vector(0, 0, 1), 90.0 if vertical else 0.0))
-        final_shape = Compound(children=[shape, text_shape])
-    else:
-        final_shape = shape
+                         Vector(0, 0, 1), 90.0 if vertical else 0.0)))
+
+    if basic:
+        # Box the value as a basic dimension. Pad the label bbox and draw four
+        # separate Edges (a single closed wire would flood on a fill layer).
+        bpad = 0.4 * draft.font_size
+        bx0, by0, bx1, by1 = label_bbox_tuple
+        bx0 -= bpad; by0 -= bpad; bx1 += bpad; by1 += bpad
+        corners = [(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1), (bx0, by0)]
+        extra += [Edge.make_line(Vector(a[0], a[1], 0), Vector(b[0], b[1], 0))
+                  for a, b in zip(corners, corners[1:])]
+        label_bbox_tuple = (bx0, by0, bx1, by1)
+
+    final_shape = Compound(children=[shape, *extra]) if extra else shape
 
     return DimResult(
         shape=final_shape,
@@ -324,6 +342,7 @@ def dim_linear(
         measured_length=measured,
         dim_level_y=dim_level_y,
         label_bbox=label_bbox_tuple,
+        is_basic=basic,
     )
 
 
@@ -1304,6 +1323,26 @@ class DatumFeatureResult:
         return self.shape.bounding_box()
 
 
+@dataclass
+class DatumTargetResult:
+    """Returned by datum_target() — the divided-circle datum-target symbol (ISO 5459).
+
+    The circle is centred at the origin. Route .lines (circle + divider) to a
+    line_color layer and .text (area size + identifier) to a fill_color layer.
+    """
+    lines: Compound          # circle + horizontal divider
+    text: Compound           # upper area-size + lower identifier glyphs
+    identifier: str
+    area_label: str
+
+    @property
+    def shape(self) -> Compound:
+        return Compound(children=[self.lines, self.text])
+
+    def bbox(self):
+        return self.shape.bounding_box()
+
+
 def _arrowhead(tip: tuple[float, float], back: tuple[float, float], size: float) -> list[Edge]:
     """Two short barbs forming an open arrowhead at *tip*, opening toward *back*."""
     tx, ty = tip
@@ -1604,6 +1643,55 @@ def datum_feature(
         lines=Compound(children=lines),
         text=Compound(children=[glyph]),
         letter=letter,
+    )
+
+
+def datum_target(
+    identifier: str,
+    area_label: str | None = None,
+    draft: Draft | None = None,
+) -> DatumTargetResult:
+    """ISO 5459 datum-target symbol: a circle split by a horizontal line into an
+    upper compartment (the target-area size, e.g. ``⌀6`` — blank for a target
+    point or line) and a lower compartment (the target identifier, e.g. ``A1``).
+
+    The circle is centred at the origin. Connect it to the target with
+    ``leader()`` (a solid line to a visible target, dashed to a hidden one) and
+    mark a *target point* with a small ``×`` (two crossing Edges) on the view.
+
+    Args:
+        identifier: the target identifier — datum letter + number, e.g. "A1".
+        area_label: target-area size shown in the upper half (e.g. "⌀6"); None
+            leaves the upper half blank, as for a target point or line.
+        draft: Draft config for font size / line width. Defaults to 2.5 mm.
+
+    Returns:
+        DatumTargetResult with .lines (circle + divider) and .text (the two
+        compartment labels). Route .lines to a line_color layer and .text to a
+        fill_color layer (see add_to_layers()).
+    """
+    if draft is None:
+        draft = Draft(font_size=2.5, decimal_precision=1)
+    h = draft.font_size
+    r = 1.7 * h                        # circle radius ≈ 1.7 × char height
+
+    lines = list(Edge.make_circle(r).edges())
+    lines.append(Edge.make_line(Vector(-r, 0, 0), Vector(r, 0, 0)))
+
+    fs = 0.8 * h                       # compartment text shrunk to fit the circle
+    text_faces = [Text(txt=identifier, font_size=fs, font=draft.font,
+                       align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE
+                       ).moved(Location(Vector(0, -r / 2, 0)))]
+    if area_label:
+        text_faces.append(Text(txt=area_label, font_size=fs, font=draft.font,
+                               align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE
+                               ).moved(Location(Vector(0, r / 2, 0))))
+
+    return DatumTargetResult(
+        lines=Compound(children=lines),
+        text=Compound(children=text_faces),
+        identifier=identifier,
+        area_label=area_label or "",
     )
 
 
