@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **`find_interferences(items, *, part_bbox=None, page_bbox=None)`**: geometry-precise
+  interference detection between drafting annotations. Decomposes each annotation into
+  its label box and its structural line segments (witness lines, dim lines, leader
+  shafts) and tests actual crossings — catching cases `lint_drawing`'s whole-bbox checks
+  miss, e.g. a stacked dim's extension line spearing a neighbouring dim's value. Reports
+  `line↔label`, `label↔label`, and (when `page_bbox`/`part_bbox` are supplied)
+  `label↔frame` and `label↔part`. Generic line↔line crossings are intentionally not
+  flagged. Returns `list[LintIssue]`.
+
 ## v0.1.8 — 2026-06-01
 
 ### Bug fixes

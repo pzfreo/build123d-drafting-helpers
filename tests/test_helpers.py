@@ -10,6 +10,7 @@ from build123d_drafting import (
     SurfaceFinishResult,
     add_to_layers,
     centerline, datum_feature, dim_linear, feature_control_frame,
+    find_interferences,
     iso_title_block, leader, leader_offset, lint_drawing,
     place_dims, place_labels,
     safe_dim_line, surface_finish_mark, view_axes,
@@ -771,3 +772,50 @@ class TestDatumFeature:
     def test_default_draft_used_when_none(self):
         res = datum_feature("A")
         assert isinstance(res, DatumFeatureResult)
+
+
+# ---------------------------------------------------------------------------
+# find_interferences (geometry-precise)
+# ---------------------------------------------------------------------------
+
+class TestFindInterferences:
+    def _msgs(self, issues):
+        return " | ".join(i.message for i in issues)
+
+    def test_witness_line_pierces_neighbour_label(self, draft):
+        # place_dims: the "18" extension line at x=0 spears the "36" label.
+        dims = place_dims([
+            ((-18, -10, 0), (18, -10, 0), "below", "36"),
+            ((-18, -10, 0), (0, -10, 0), "below", "18"),
+            ((18, -10, 0), (18, 10, 0), "right", "20"),
+        ], draft, base_distance=6)
+        issues = find_interferences(dims)
+        assert any("pierces" in i.message for i in issues), self._msgs(issues)
+
+    def test_clean_layout_has_no_issues(self, draft):
+        # dims on opposite sides of the part — nothing collides.
+        dims = [
+            dim_linear((-18, -10, 0), (18, -10, 0), "below", 6, draft, label="36"),
+            dim_linear((-18, 10, 0), (18, 10, 0), "above", 6, draft, label="36"),
+        ]
+        assert find_interferences(dims) == []
+
+    def test_overlapping_labels_flagged(self, draft):
+        # two dims over the same span at the same offset -> labels coincide.
+        dims = [
+            dim_linear((-8, -10, 0), (8, -10, 0), "below", 6, draft, label="12.50"),
+            dim_linear((-8, -10, 0), (8, -10, 0), "below", 6, draft, label="R3.20"),
+        ]
+        issues = find_interferences(dims)
+        assert any("overlap" in i.message for i in issues), self._msgs(issues)
+
+    def test_label_outside_page_frame_flagged(self, draft):
+        from build123d import Box
+        dims = [dim_linear((-18, -10, 0), (18, -10, 0), "below", 6, draft, label="36")]
+        # a frame that does not contain the (negative-Y) label
+        page = Box(40, 5, 1).bounding_box()  # y in [-2.5, 2.5]; label is near y=-16
+        issues = find_interferences(dims, page_bbox=page)
+        assert any("frame" in i.message for i in issues), self._msgs(issues)
+
+    def test_empty_list_is_safe(self):
+        assert find_interferences([]) == []
