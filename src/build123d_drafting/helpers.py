@@ -833,7 +833,7 @@ def place_labels(
 # lint_drawing — generic / duck-typed
 # ---------------------------------------------------------------------------
 
-def lint_drawing(items, part_bbox=None) -> list[LintIssue]:
+def lint_drawing(items, part_bbox=None, page_bbox=None) -> list[LintIssue]:
     """Structural checks on a composed annotation list, duck-typed.
 
     Dispatch is by attribute presence, not type:
@@ -843,15 +843,29 @@ def lint_drawing(items, part_bbox=None) -> list[LintIssue]:
       dim-inside-part checks.
     - centerline-like (``.is_centerline``): pairwise overlap against dims.
 
+    Page-bounds checking is performed when *page_bbox* is provided as a
+    ``(min_x, min_y, max_x, max_y)`` tuple, or when ``set_page()`` has been
+    called and stored a module-level page context.  Any annotation whose full
+    bounding box extends past the drawable area (page minus margin) is flagged
+    as ``annotation_out_of_bounds`` (severity ``"error"``).
+
     Args:
         items: annotation objects exposing the relevant attrs (or SimpleNamespace
             stand-ins).
         part_bbox: optional BoundBox of the projected part outline.
+        page_bbox: optional ``(min_x, min_y, max_x, max_y)`` drawable area.
+            If ``None``, falls back to the module-level context set by
+            ``set_page()``.  When neither is set, page-bounds are not checked.
 
     Returns:
         list[LintIssue].
     """
     issues: list[LintIssue] = []
+
+    # Resolve page bounds: explicit arg beats module-level context.
+    if page_bbox is None and _DRAWING_PAGE is not None:
+        p = _DRAWING_PAGE
+        page_bbox = (p["min_x"], p["min_y"], p["max_x"], p["max_y"])
 
     for item in items:
         if getattr(item, "elbow", None) is not None:
@@ -893,6 +907,32 @@ def lint_drawing(items, part_bbox=None) -> list[LintIssue]:
                             f"{ox:.1f}×{oy:.1f} mm — increase offset or spacing"
                         ),
                         code="annotation_overlap",
+                    ))
+            except Exception:
+                pass
+
+    # Page-bounds check — annotations must stay within the drawable area.
+    if page_bbox is not None:
+        px0, py0, px1, py1 = page_bbox
+        for item in items:
+            try:
+                bb = item.bounding_box()
+                overshoots = []
+                if bb.min.X < px0:
+                    overshoots.append(f"left by {px0 - bb.min.X:.1f} mm")
+                if bb.max.X > px1:
+                    overshoots.append(f"right by {bb.max.X - px1:.1f} mm")
+                if bb.min.Y < py0:
+                    overshoots.append(f"below by {py0 - bb.min.Y:.1f} mm")
+                if bb.max.Y > py1:
+                    overshoots.append(f"above by {bb.max.Y - py1:.1f} mm")
+                for detail in overshoots:
+                    lbl = getattr(item, "label", None) or "?"
+                    issues.append(LintIssue(
+                        severity="error",
+                        message=(f"annotation '{lbl}' extends past drawable area "
+                                 f"({detail}) — increase margin or reduce offset"),
+                        code="annotation_out_of_bounds",
                     ))
             except Exception:
                 pass
@@ -1947,3 +1987,92 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None, obstacles=None,
                 ))
 
     return issues
+
+
+# ---------------------------------------------------------------------------
+# Drawing context — set_page() and annotate() for standalone scripts
+# ---------------------------------------------------------------------------
+
+# Module-level drawing context singleton. Stores page extents set by
+# set_page() so that lint_drawing() can check annotation bounds in standalone
+# scripts (i.e. outside the MCP session).
+_DRAWING_PAGE: dict | None = None
+
+
+def set_page(width: float, height: float, margin: float = 5.0) -> dict:
+    """Register the drawing page extent for lint_drawing() bounds checking.
+
+    In the MCP server ``set_page()`` is a session builtin that stores state in
+    the session object; this module-level version stores state globally in the
+    ``build123d_drafting`` module so that standalone drawing scripts can use it
+    without an MCP session::
+
+        from build123d_drafting import set_page, lint_drawing
+
+        set_page(297, 210, margin=10)   # A4 landscape
+        # ... build dims ...
+        violations = lint_drawing(dims)  # checks page bounds automatically
+
+    Args:
+        width:  page width in mm (e.g. 297 for A4 landscape).
+        height: page height in mm (e.g. 210 for A4 landscape).
+        margin: clear border in mm (default 5). Annotations must stay within
+            (margin, margin) to (width−margin, height−margin).
+
+    Returns:
+        The page dict ``{min_x, min_y, max_x, max_y, width, height, margin}``,
+        also stored module-globally for ``lint_drawing()``.
+    """
+    global _DRAWING_PAGE
+    _DRAWING_PAGE = {
+        "width": width, "height": height, "margin": margin,
+        "min_x": margin, "min_y": margin,
+        "max_x": width - margin, "max_y": height - margin,
+    }
+    return _DRAWING_PAGE
+
+
+def clear_page() -> None:
+    """Clear the module-level drawing page context (e.g. between sheets in tests)."""
+    global _DRAWING_PAGE
+    _DRAWING_PAGE = None
+
+
+def annotate(result, name: str | None = None, label: str | None = None) -> None:
+    """Register a drawing annotation for lint_drawing() in standalone scripts.
+
+    In the MCP server ``annotate()`` is a session builtin that stores metadata
+    in the session *and* calls ``show()``.  This module-level version is a
+    lightweight companion for standalone drawing scripts: since
+    ``build123d_drafting`` annotation objects (``Dimension``, ``Leader``, …)
+    already carry their lint metadata as instance attributes (``label``,
+    ``label_bbox``, ``segments``, ``measured_length``, …), calling
+    ``annotate()`` is **optional** in standalone use.  Its main purpose is
+    providing a drop-in API so the same drawing script runs both via the MCP
+    and as a standalone Python script without changes.
+
+    In standalone mode this is a no-op unless you need to attach an explicit
+    label string to a vanilla build123d ``ExtensionLine`` / ``DimensionLine``
+    (which does not carry its constructor label after construction)::
+
+        from build123d import ExtensionLine, Draft
+        from build123d_drafting import annotate, lint_drawing
+
+        draft = Draft(font_size=2.5, decimal_precision=1)
+        el = ExtensionLine(border=[...], offset=8, draft=draft, label="40")
+        annotate(el, "width", label="40")   # attaches label for lint_vs_measured
+
+    For ``Dimension`` / ``Leader`` objects, just pass them to ``lint_drawing()``
+    directly — ``annotate()`` is not needed.
+
+    Args:
+        result: annotation object.
+        name:   optional name (ignored in standalone mode).
+        label:  explicit label string, stored as ``result._annotate_label``
+                and read by ``lint_drawing()`` if the object has no ``.label``.
+    """
+    if label is not None:
+        try:
+            result._annotate_label = label
+        except AttributeError:
+            pass

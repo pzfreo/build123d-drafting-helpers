@@ -23,6 +23,8 @@ from build123d_drafting.helpers import (
     SafeDimension,
     SurfaceFinish,
     TitleBlock,
+    annotate,
+    clear_page,
     draft_preset,
     find_interferences,
     find_overlaps,
@@ -30,6 +32,7 @@ from build123d_drafting.helpers import (
     lint_drawing,
     place_dims,
     place_labels,
+    set_page,
     view_axes,
 )
 
@@ -46,6 +49,8 @@ __all__ = [
     "SafeDimension",
     "SurfaceFinish",
     "TitleBlock",
+    "annotate",
+    "clear_page",
     "draft_preset",
     "find_interferences",
     "find_overlaps",
@@ -53,5 +58,6 @@ __all__ = [
     "lint_drawing",
     "place_dims",
     "place_labels",
+    "set_page",
     "view_axes",
 ]
