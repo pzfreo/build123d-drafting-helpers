@@ -318,13 +318,19 @@ is build123d geometry — text included — it also exports to DXF and scales li
 ### A worked drawing — [`examples/part_drawing.py`](examples/part_drawing.py)
 
 Where the specimen sheet is a *catalogue*, this shows the **end-to-end workflow on a real
-part** (an M10 hex bolt + nut): build the 3D part → `project_to_viewport()` views →
-dimension with `Dimension` / `Leader` → **lint with `find_interferences()`** → export.
-An A4 frame, a `TitleBlock`, **front / top / side views plus an isometric** for each
-part (with dashed hidden lines), and the layout is verified collision-free by `lint()` before
-it's written.
+part**: take a [`bd_warehouse`](https://github.com/gumyr/bd_warehouse) `HexHeadScrew` +
+`HexNut` → `project_to_viewport()` views → dimension with `Dimension` / `Leader` →
+**lint with `find_interferences()`** → export. An A4 frame, a `TitleBlock`, **front / top /
+side views plus an isometric** for each part (with dashed hidden lines), and the layout is
+verified collision-free by `lint()` before it's written.
 
-![M10 bolt and nut drawing](docs/part_drawing.png)
+**Every dimension and callout is pulled from the bd_warehouse object** — change
+`BOLT_SIZE` / `BOLT_LENGTH` at the top of the script (e.g. `"M8-1.25"`, `"M12-1.75"`) and the
+views, length / across-flats dimensions, thread designation and title block all reflow
+automatically; the lint stays clean because the label values come from the same source as
+the geometry. (`bd_warehouse` is an example-only dev dependency, not a runtime dependency.)
+
+![hex bolt and nut drawing](docs/part_drawing.png)
 
 ## Development
 

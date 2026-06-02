@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Examples
+
+- **`examples/part_drawing.py` now draws a real [`bd_warehouse`](https://github.com/gumyr/bd_warehouse)
+  fastener** (`HexHeadScrew` + `HexNut`) instead of geometry built from scratch. Every
+  dimension and callout is pulled from the bd_warehouse object — change `BOLT_SIZE` /
+  `BOLT_LENGTH` and the views, length / across-flats dims, thread designation and title block
+  all reflow (the lint stays clean because label values share the part's source of truth).
+  `bd_warehouse` is an example-only dev dependency; the library's runtime deps are unchanged
+  (build123d only).
+
 ## v0.2.0 — 2026-06-01
 
 ### Changed (breaking)
