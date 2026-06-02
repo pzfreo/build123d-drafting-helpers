@@ -26,4 +26,7 @@ jobs:
         run: uv sync --group dev
 
       - name: Run tests
-        run: uv run pytest tests/ -v --timeout=120
+        # No --timeout here: it would override the 300 s set in
+        # [tool.pytest.ini_options]. The heaviest test (full specimen-sheet SVG
+        # export) can exceed 120 s on the slower macOS runners.
+        run: uv run pytest tests/ -v

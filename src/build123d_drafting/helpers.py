@@ -906,23 +906,31 @@ def lint_drawing(items, part_bbox=None, page_bbox=None,
                     _lint_centerline_dim_overlap(dim_item, cl_item, issues)
                     continue
 
-                level_a = getattr(item_a, "dim_level_y", None)
-                level_b = getattr(item_b, "dim_level_y", None)
-                if (level_a is not None and level_b is not None
-                        and abs(level_a - level_b) > 3.0):
-                    continue
-                ba = item_a.bounding_box()
-                bb = item_b.bounding_box()
-                ox = max(0.0, min(ba.max.X, bb.max.X) - max(ba.min.X, bb.min.X))
-                oy = max(0.0, min(ba.max.Y, bb.max.Y) - max(ba.min.Y, bb.min.Y))
+                # Compare label text extents, NOT full bounding boxes.
+                # Full bbox includes witness lines which legitimately overlap for
+                # stacked dims (every inner bbox is a subset of the outer one).
+                # label_bbox is the keep-clear region around the value text — the
+                # thing that actually matters to a reader.
+                def _label_box(item):
+                    lb = getattr(item, "label_bbox", None)
+                    if lb is not None:
+                        return lb
+                    bb = item.bounding_box()
+                    return (bb.min.X, bb.min.Y, bb.max.X, bb.max.Y)
+
+                la_box = _label_box(item_a)
+                lb_box = _label_box(item_b)
+                ox = max(0.0, min(la_box[2], lb_box[2]) - max(la_box[0], lb_box[0]))
+                oy = max(0.0, min(la_box[3], lb_box[3]) - max(la_box[1], lb_box[1]))
                 if ox > 0.5 and oy > 0.5:
                     la = getattr(item_a, "label", "?")
                     lb = getattr(item_b, "label", "?")
                     issues.append(LintIssue(
                         severity="warning",
                         message=(
-                            f"annotations '{la}' and '{lb}' overlap by "
-                            f"{ox:.1f}×{oy:.1f} mm — increase offset or spacing"
+                            f"labels '{la}' and '{lb}' overlap by "
+                            f"{ox:.1f}×{oy:.1f} mm — use label_offset_x or "
+                            f"increase dim offset to separate them"
                         ),
                         code="annotation_overlap",
                     ))
