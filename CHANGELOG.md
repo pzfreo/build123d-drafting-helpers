@@ -15,6 +15,15 @@
   "1:1"); `drawing_scale` defaults to `1.0`, so existing 1:1 drawings are
   unchanged.
 
+### Documentation
+
+- **Title-block overflow is catchable via the page-bounds check** (#151). A
+  `TitleBlock` whose long text (e.g. a verbose subtitle) spills past its frame
+  grows its bounding box, so passing it to `lint_drawing()` as an item with a
+  `page_bbox` (or after `set_page()`) flags it as `annotation_out_of_bounds`.
+  Documented in the README and `lint_drawing` docstring, with a regression test.
+  Also corrected the README `lint_drawing` signature to include `page_bbox`.
+
 ### Examples
 
 - **`examples/part_drawing.py` now draws a real [`bd_warehouse`](https://github.com/gumyr/bd_warehouse)

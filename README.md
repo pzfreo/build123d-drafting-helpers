@@ -188,7 +188,7 @@ axes = view_axes((0, 0, -100), (0, 1, 0), (0, 0, 0))
 
 ---
 
-### `lint_drawing(items, part_bbox=None, drawing_scale=1.0)`
+### `lint_drawing(items, part_bbox=None, page_bbox=None, drawing_scale=1.0)`
 
 Duck-typed structural checks on a list of annotation objects (`Dimension`, `Leader`,
 `Centerline`, …). Dispatch is by attribute presence, not type:
@@ -200,6 +200,7 @@ Duck-typed structural checks on a list of annotation objects (`Dimension`, `Lead
 | `label_centerline_overlap` | Dim label bbox crosses a `Centerline` — use `label_offset_x` or `place_labels` |
 | `dim_inside_part` | Dim bbox overlaps part outline by >10% — dim is inside the view |
 | `leader_line_through_text` | Leader elbow point inside label bbox — line strikes through text |
+| `annotation_out_of_bounds` | An item's bbox extends past the page (set `page_bbox` or call `set_page()`) |
 
 ```python
 bore_cl = Centerline((0, -30, 0), (0, 30, 0))
@@ -221,6 +222,12 @@ tb = TitleBlock("Gear", "DRW-007", drawing_scale=5.0)   # title block prints "5:
 `format_drawing_scale(5.0)` → `"5:1"`, `format_drawing_scale(0.5)` → `"1:2"`. Pass the
 numeric factor to both `lint_drawing` and `TitleBlock` so the linted and printed scales
 can't drift.
+
+**Page bounds.** Set a drawable area — pass `page_bbox=(min_x, min_y, max_x, max_y)`
+or call `set_page(width, height, margin)` first — and any item whose bounding box spills
+past it is flagged `annotation_out_of_bounds`. Include your `TitleBlock` in the items
+list: its bounding box grows when a long string (e.g. a verbose subtitle) overflows the
+frame, so a too-long title block is caught the same way as a stray dimension.
 
 ---
 
