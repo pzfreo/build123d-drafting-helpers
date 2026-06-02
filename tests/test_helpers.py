@@ -12,6 +12,7 @@ from build123d_drafting import (
     SurfaceFinish, TitleBlock,
     draft_preset,
     find_interferences, find_overlaps,
+    format_drawing_scale,
     leader_offset, lint_drawing,
     place_dims, place_labels, view_axes,
 )
@@ -426,6 +427,50 @@ class TestLintDrawing:
 
 
 # ---------------------------------------------------------------------------
+# drawing_scale (issue #147): N:1 drawings without false label_vs_measured
+# ---------------------------------------------------------------------------
+
+class TestDrawingScale:
+    def test_format_enlargement(self):
+        assert format_drawing_scale(5.0) == "5:1"
+        assert format_drawing_scale(2.5) == "2.5:1"
+
+    def test_format_unity(self):
+        assert format_drawing_scale(1.0) == "1:1"
+
+    def test_format_reduction(self):
+        assert format_drawing_scale(0.5) == "1:2"
+        assert format_drawing_scale(0.1) == "1:10"
+
+    def test_format_rejects_non_positive(self):
+        with pytest.raises(ValueError):
+            format_drawing_scale(0.0)
+        with pytest.raises(ValueError):
+            format_drawing_scale(-2.0)
+
+    def test_scaled_dim_with_real_label_passes(self, draft):
+        # 20 mm of geometry drawn at 2:1 represents a real 10 mm feature.
+        # The label carries the real value; lint must accept it.
+        d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="10")
+        codes = {i.code for i in lint_drawing([d], drawing_scale=2.0)}
+        assert "label_vs_measured" not in codes
+
+    def test_scaled_dim_with_unscaled_label_flagged(self, draft):
+        # labelling the *measured* 20 mm instead of the real 10 mm is the
+        # mistake the check should still catch at 2:1.
+        d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        codes = {i.code for i in lint_drawing([d], drawing_scale=2.0)}
+        assert "label_vs_measured" in codes
+
+    def test_default_scale_unchanged(self, draft):
+        # drawing_scale defaults to 1.0 → identical to the pre-existing behaviour.
+        d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        assert "label_vs_measured" not in {i.code for i in lint_drawing([d])}
+        bad = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="999")
+        assert "label_vs_measured" in {i.code for i in lint_drawing([bad])}
+
+
+# ---------------------------------------------------------------------------
 # TitleBlock
 # ---------------------------------------------------------------------------
 
@@ -469,6 +514,19 @@ class TestTitleBlock:
 
     def test_renders_on_single_ink_layer(self, draft):
         _export_ink(TitleBlock("Part", "001", material="Al", date="x", draft=draft))
+
+    def test_numeric_drawing_scale_renders(self, draft):
+        # a numeric drawing_scale derives the printed "5:1" cell and must still
+        # produce real, filled geometry (the scale cell is a Text face).
+        _export_ink(TitleBlock("Part", "001", drawing_scale=5.0, draft=draft))
+
+    def test_drawing_scale_overrides_scale_string(self, draft):
+        # both given: the numeric drawing_scale wins. Hard to read the rendered
+        # glyphs back, so assert it constructs without error and the precedence
+        # is exercised (format_drawing_scale correctness is covered separately).
+        tb = TitleBlock("Part", "001", scale="1:1", drawing_scale=2.0, draft=draft)
+        assert isinstance(tb, Sketch)
+        assert len(tb.faces()) > 0
 
 
 # ---------------------------------------------------------------------------

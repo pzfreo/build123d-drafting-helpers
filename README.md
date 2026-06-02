@@ -17,6 +17,7 @@ and labelled by the helpers it documents ([`examples/specimen_sheet.py`](example
 from build123d_drafting import (
     Dimension, place_dims, place_labels, Centerline,
     Leader, view_axes, lint_drawing, find_interferences, find_overlaps,
+    format_drawing_scale,
 )
 ```
 
@@ -187,7 +188,7 @@ axes = view_axes((0, 0, -100), (0, 1, 0), (0, 0, 0))
 
 ---
 
-### `lint_drawing(items, part_bbox=None)`
+### `lint_drawing(items, part_bbox=None, drawing_scale=1.0)`
 
 Duck-typed structural checks on a list of annotation objects (`Dimension`, `Leader`,
 `Centerline`, …). Dispatch is by attribute presence, not type:
@@ -206,6 +207,20 @@ issues = lint_drawing([dim1, dim2, lea1, bore_cl])
 for issue in issues:
     print(issue.severity, issue.message)
 ```
+
+**Scaled drawings.** To draw a small part enlarged — e.g. a 7.5 mm feature at 5:1 —
+scale the geometry up before projecting and pass the same factor as `drawing_scale`.
+The `label_vs_measured` check then divides the measured path length by it, so labels
+carry the *real* dimension while the geometry is drawn large:
+
+```python
+issues = lint_drawing([dim], drawing_scale=5.0)   # 37.5 mm measured, label "7.5" → OK
+tb = TitleBlock("Gear", "DRW-007", drawing_scale=5.0)   # title block prints "5:1"
+```
+
+`format_drawing_scale(5.0)` → `"5:1"`, `format_drawing_scale(0.5)` → `"1:2"`. Pass the
+numeric factor to both `lint_drawing` and `TitleBlock` so the linted and printed scales
+can't drift.
 
 ---
 

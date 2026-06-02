@@ -833,7 +833,7 @@ def place_labels(
 # lint_drawing — generic / duck-typed
 # ---------------------------------------------------------------------------
 
-def lint_drawing(items, part_bbox=None) -> list[LintIssue]:
+def lint_drawing(items, part_bbox=None, drawing_scale: float = 1.0) -> list[LintIssue]:
     """Structural checks on a composed annotation list, duck-typed.
 
     Dispatch is by attribute presence, not type:
@@ -847,6 +847,13 @@ def lint_drawing(items, part_bbox=None) -> list[LintIssue]:
         items: annotation objects exposing the relevant attrs (or SimpleNamespace
             stand-ins).
         part_bbox: optional BoundBox of the projected part outline.
+        drawing_scale: the N:1 factor the geometry was scaled by before
+            projecting (e.g. ``5.0`` for a 7.5 mm feature drawn at 5:1). The
+            label-vs-measured check divides each measured path length by this
+            before comparing to the label value, so labels carry the *real*
+            dimension while the geometry is drawn enlarged. Defaults to ``1.0``
+            (no scaling). See :func:`format_drawing_scale` to render the
+            matching "5:1" indicator in the title block.
 
     Returns:
         list[LintIssue].
@@ -857,7 +864,7 @@ def lint_drawing(items, part_bbox=None) -> list[LintIssue]:
         if getattr(item, "elbow", None) is not None:
             _lint_leader(item, issues)
         elif getattr(item, "measured_length", None) is not None:
-            _lint_dim(item, part_bbox, issues)
+            _lint_dim(item, part_bbox, issues, drawing_scale)
 
     for i, item_a in enumerate(items):
         for item_b in items[i + 1:]:
@@ -943,7 +950,7 @@ def _lint_centerline_dim_overlap(dim_item, cl_item, issues) -> None:
         pass
 
 
-def _lint_dim(item, part_bbox, issues) -> None:
+def _lint_dim(item, part_bbox, issues, drawing_scale: float = 1.0) -> None:
     label = getattr(item, "label", "") or ""
     measured = getattr(item, "measured_length", None)
 
@@ -951,14 +958,23 @@ def _lint_dim(item, part_bbox, issues) -> None:
     if nums and measured is not None:
         try:
             label_val = float(nums[0])
-            if measured > 1e-6:
-                ratio = abs(label_val - measured) / measured
+            # When drawing_scale != 1.0 the geometry was scaled up before projecting
+            # (e.g. part.scale(5) for a 7.5 mm feature drawn at 5:1). The measured
+            # path length is the *scaled* length; the label carries the *real* value.
+            # Divide measured by the scale factor before comparing so a 37.5 mm
+            # measured segment with label "7.5" at 5:1 is accepted, not flagged.
+            effective_measured = measured / drawing_scale if drawing_scale > 0 else measured
+            if effective_measured > 1e-6:
+                ratio = abs(label_val - effective_measured) / effective_measured
                 if ratio > 0.005:
                     issues.append(LintIssue(
                         severity="warning",
                         message=(
                             f"Dim '{label}': label value {label_val:.3f} differs from "
-                            f"measured path length {measured:.3f} by {ratio*100:.1f}% "
+                            f"measured path length {measured:.3f}"
+                            + (f" (÷{drawing_scale} = {effective_measured:.3f})"
+                               if drawing_scale != 1.0 else "")
+                            + f" by {ratio*100:.1f}% "
                             f"— possible axis swap or wrong endpoint"
                         ),
                         code="label_vs_measured",
@@ -1014,6 +1030,28 @@ def _lint_leader(item, issues) -> None:
 # iso_title_block  ->  TitleBlock
 # ---------------------------------------------------------------------------
 
+def format_drawing_scale(scale: float) -> str:
+    """Format an N:1 drawing-scale factor as a conventional ISO scale string.
+
+    Enlargements (``scale > 1``) render as ``"N:1"``; reductions
+    (``scale < 1``) as ``"1:M"``; ``1.0`` as ``"1:1"``. Integer ratios drop the
+    trailing ``.0`` ("5:1", not "5.0:1"); non-integer ratios keep their
+    significant decimals ("2.5:1").
+
+    This produces the indicator string that matches the ``drawing_scale`` passed
+    to :func:`lint_drawing` — pass it to :class:`TitleBlock` (or build123d's
+    ``TechnicalDrawing``) so the printed scale and the linted scale agree.
+
+    Raises:
+        ValueError: if ``scale`` is not positive.
+    """
+    if scale <= 0:
+        raise ValueError(f"drawing_scale must be positive, got {scale}")
+    if scale >= 1.0:
+        return f"{scale:g}:1"
+    return f"1:{1.0 / scale:g}"
+
+
 _TB_COL_FRACTIONS = [0.40, 0.20, 0.15, 0.15, 0.10]
 
 
@@ -1029,6 +1067,12 @@ class TitleBlock(_Annotation):
         └──────────────────┴─────────────────────────────-┘
 
     Column proportions 40 / 20 / 15 / 15 / 10 %.
+
+    The scale cell takes either an explicit ``scale`` string ("1:1") or, for
+    scaled drawings, a numeric ``drawing_scale`` (e.g. ``5.0``) which is
+    formatted to "5:1" via :func:`format_drawing_scale` and overrides ``scale``.
+    Pass the same ``drawing_scale`` to :func:`lint_drawing` so the printed
+    indicator and the label-vs-measured check stay in agreement.
 
     Metadata: ``.label`` (part_name), ``.label_bbox`` (None), ``.segments``,
     ``.block_bbox`` dict ({min_x, min_y, max_x, max_y, width, height}).
@@ -1050,8 +1094,16 @@ class TitleBlock(_Annotation):
         rotation: float = 0,
         align=None,
         mode: Mode = Mode.ADD,
+        drawing_scale: float | None = None,
     ):
         draft = draft or Draft(font_size=2.5, decimal_precision=1)
+
+        # A numeric drawing_scale is the single source of truth: it derives the
+        # printed "5:1" indicator AND is the divisor lint_drawing() uses for the
+        # label-vs-measured check, so the two can never drift. It overrides any
+        # explicit `scale` string.
+        if drawing_scale is not None:
+            scale = format_drawing_scale(drawing_scale)
 
         col_widths = [f * width for f in _TB_COL_FRACTIONS]
         x: list[float] = [0.0]
