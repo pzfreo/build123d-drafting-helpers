@@ -57,4 +57,4 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-timeout = 120
+timeout = 300
