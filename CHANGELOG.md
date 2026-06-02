@@ -1,9 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 — 2026-06-02
 
 ### Added
 
+- **`set_page()` and `annotate()` are exported from the package** (#148) so
+  standalone scripts (no MCP) can enable page-bounds checking and attach lint
+  metadata: `from build123d_drafting import set_page, annotate, clear_page`.
+  `lint_drawing()` gains an optional `page_bbox=(min_x, min_y, max_x, max_y)`
+  (or reads the module-level context set by `set_page()`); any annotation whose
+  bounding box extends past the drawable area is flagged `annotation_out_of_bounds`.
 - **Native drawing-scale support (`drawing_scale`)** so small parts can be drawn
   enlarged (e.g. a 7.5 mm feature at 5:1) without `lint_drawing()` raising false
   `label_vs_measured` errors (#147). `lint_drawing(items, drawing_scale=5.0)`
@@ -14,6 +20,15 @@
   New `format_drawing_scale(scale)` helper formats the ISO string ("5:1", "1:2",
   "1:1"); `drawing_scale` defaults to `1.0`, so existing 1:1 drawings are
   unchanged.
+
+### Fixed
+
+- **`annotation_overlap` no longer false-positives on stacked dimensions** (#149).
+  The overlap check now compares each annotation's `label_bbox` (the keep-clear
+  region around the value text) instead of its full bounding box, which included
+  witness lines that legitimately overlap for baseline-stacked dims — making a
+  zero-violation lint unreachable for almost any real drawing. Falls back to the
+  full bounding box when an item exposes no `label_bbox`.
 
 ### Documentation
 
