@@ -42,7 +42,7 @@ Or with uv:
 uv add build123d-drafting-helpers
 ```
 
-Requires `build123d >= 0.7.0` and Python ≥ 3.10.
+Requires `build123d >= 0.9.0` and Python ≥ 3.10.
 
 ## Helpers
 
