@@ -857,7 +857,14 @@ def lint_drawing(items, part_bbox=None, drawing_scale: float = 1.0) -> list[Lint
 
     Returns:
         list[LintIssue].
+
+    Raises:
+        ValueError: if ``drawing_scale`` is not positive (matches
+            :func:`format_drawing_scale` / :class:`TitleBlock`).
     """
+    if drawing_scale <= 0:
+        raise ValueError(f"drawing_scale must be positive, got {drawing_scale}")
+
     issues: list[LintIssue] = []
 
     for item in items:
@@ -963,7 +970,8 @@ def _lint_dim(item, part_bbox, issues, drawing_scale: float = 1.0) -> None:
             # path length is the *scaled* length; the label carries the *real* value.
             # Divide measured by the scale factor before comparing so a 37.5 mm
             # measured segment with label "7.5" at 5:1 is accepted, not flagged.
-            effective_measured = measured / drawing_scale if drawing_scale > 0 else measured
+            # drawing_scale is guaranteed positive by lint_drawing()'s validation.
+            effective_measured = measured / drawing_scale
             if effective_measured > 1e-6:
                 ratio = abs(label_val - effective_measured) / effective_measured
                 if ratio > 0.005:

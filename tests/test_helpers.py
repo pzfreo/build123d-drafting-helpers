@@ -448,6 +448,15 @@ class TestDrawingScale:
         with pytest.raises(ValueError):
             format_drawing_scale(-2.0)
 
+    def test_lint_rejects_non_positive_scale(self, draft):
+        # lint_drawing must reject a bad scale loudly (same contract as
+        # format_drawing_scale / TitleBlock), not silently skip the division.
+        d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="10")
+        with pytest.raises(ValueError):
+            lint_drawing([d], drawing_scale=0.0)
+        with pytest.raises(ValueError):
+            lint_drawing([d], drawing_scale=-5.0)
+
     def test_scaled_dim_with_real_label_passes(self, draft):
         # 20 mm of geometry drawn at 2:1 represents a real 10 mm feature.
         # The label carries the real value; lint must accept it.
@@ -515,18 +524,32 @@ class TestTitleBlock:
     def test_renders_on_single_ink_layer(self, draft):
         _export_ink(TitleBlock("Part", "001", material="Al", date="x", draft=draft))
 
-    def test_numeric_drawing_scale_renders(self, draft):
-        # a numeric drawing_scale derives the printed "5:1" cell and must still
-        # produce real, filled geometry (the scale cell is a Text face).
-        _export_ink(TitleBlock("Part", "001", drawing_scale=5.0, draft=draft))
+    @staticmethod
+    def _fingerprint(tb):
+        # Glyphs render as exact filled faces, so (count, total area) is a
+        # deterministic, font-stable fingerprint of a title block's rendered
+        # content. The border strokes are identical across variants, so any
+        # difference comes purely from the scale-cell text.
+        faces = tb.faces()
+        return (len(faces), round(sum(f.area for f in faces), 6))
+
+    def test_numeric_drawing_scale_derives_cell(self, draft):
+        # drawing_scale=5.0 must render exactly what scale="5:1" renders — proves
+        # the derived string actually reaches the scale cell, not just that
+        # geometry exists.
+        derived = TitleBlock("Part", "001", drawing_scale=5.0, draft=draft)
+        explicit = TitleBlock("Part", "001", scale="5:1", draft=draft)
+        assert self._fingerprint(derived) == self._fingerprint(explicit)
+        # ...and it is not silently a no-op equal to the "1:1" default.
+        default = TitleBlock("Part", "001", scale="1:1", draft=draft)
+        assert self._fingerprint(derived) != self._fingerprint(default)
 
     def test_drawing_scale_overrides_scale_string(self, draft):
-        # both given: the numeric drawing_scale wins. Hard to read the rendered
-        # glyphs back, so assert it constructs without error and the precedence
-        # is exercised (format_drawing_scale correctness is covered separately).
-        tb = TitleBlock("Part", "001", scale="1:1", drawing_scale=2.0, draft=draft)
-        assert isinstance(tb, Sketch)
-        assert len(tb.faces()) > 0
+        # both given: the numeric drawing_scale wins, so the result matches the
+        # equivalent "5:1" string and ignores the explicit "1:1".
+        both = TitleBlock("Part", "001", scale="1:1", drawing_scale=5.0, draft=draft)
+        explicit = TitleBlock("Part", "001", scale="5:1", draft=draft)
+        assert self._fingerprint(both) == self._fingerprint(explicit)
 
 
 # ---------------------------------------------------------------------------
