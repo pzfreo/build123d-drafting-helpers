@@ -1,36 +1,64 @@
-"""Part drawing — the end-to-end workflow on a real part (M10 hex bolt + nut).
+"""Part drawing — the end-to-end workflow on a real part (hex bolt + nut).
 
 Unlike the specimen sheet (a catalogue of symbols), this shows how you actually
-*make a drawing* with the helpers:
+*make a drawing* with the helpers, on a real library part:
 
-    build the 3D part  ->  project_to_viewport() views (front / top / side / iso)
+    bd_warehouse fastener  ->  project_to_viewport() views (front/top/side/iso)
     ->  dimension with the helpers  ->  lint with find_interferences()  ->  export
 
-It's an A4 frame with a TitleBlock; each part gets front/top/side views
-plus an isometric, dimensioned with Dimension()/Leader()
-(drafts from draft_preset()). The layout is verified collision-free by lint()
-before export.
+The part is a ``bd_warehouse`` ``HexHeadScrew`` + ``HexNut``, and **every
+dimension and callout is pulled from the bd_warehouse object** — change
+``BOLT_SIZE`` / ``BOLT_LENGTH`` below and the views, dimensions, thread
+designation and title block all reflow automatically. It's an A4 frame with a
+TitleBlock; each part gets front/top/side views plus an isometric, dimensioned
+with Dimension()/Leader() (drafts from draft_preset()). The layout is verified
+collision-free by lint() before export.
 
     python examples/part_drawing.py            # writes part_drawing.svg
+
+Requires the dev/example dependency ``bd_warehouse`` (``uv sync --group dev``).
 """
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 
+from bd_warehouse.fastener import HexHeadScrew, HexNut
 from build123d import (
-    Align, BuildPart, BuildSketch, Circle, Color, Compound, Edge, ExportSVG,
-    LineType, Location, Mode, Plane, RegularPolygon, Text, extrude,
+    Align, Axis, Color, Compound, Edge, ExportSVG, LineType, Location, Text,
 )
 from build123d_drafting import (
     Dimension, draft_preset, find_interferences, Leader, TitleBlock,
 )
 
+# --- the part: change these two lines and the whole drawing reflows ----------
+BOLT_SIZE = "M10-1.5"      # any bd_warehouse hex size, e.g. "M8-1.25", "M12-1.75"
+BOLT_LENGTH = 40.0
+
+_bolt = HexHeadScrew(size=BOLT_SIZE, length=BOLT_LENGTH, simple=True)
+_nut = HexNut(size=BOLT_SIZE, simple=True)
+
+# Every value below is read from the bd_warehouse parts — no magic numbers.
+_AF = math.sqrt(3) / 2.0                       # across-corners -> across-flats
+BOLT_L = _bolt.length                          # threaded shaft length
+HEAD_H = _bolt.head_height
+THREAD_D = _bolt.thread_diameter
+PITCH = _bolt.thread_pitch
+HEAD_AF = _bolt.head_diameter * _AF            # spanner size (across flats)
+NUT_T = _nut.nut_thickness
+NUT_AF = _nut.nut_diameter * _AF
+THREAD = f"M{THREAD_D:g} × {PITCH:g}"          # e.g. "M10 × 1.5"
+TITLE = f"{BOLT_SIZE.split('-')[0]} HEX BOLT & NUT"
+
+# Rotate 30° about the axis so a hex flat faces the front camera — the front
+# view then shows the across-flats width, i.e. the dimensioned A/F.
+bolt = _bolt.rotate(Axis.Z, 30)
+nut = _nut.rotate(Axis.Z, 30)
+
 DRAFT = draft_preset(font_size=2.2, decimal_precision=1)
-PW, PH, MARGIN = 297.0, 210.0, 6.0          # A4 landscape
-AF, HEAD_H, DIA, LEN = 16.0, 6.4, 10.0, 40.0
-NUT_AF, NUT_T, BORE = 16.0, 8.0, 8.5
+PW, PH, MARGIN = 297.0, 210.0, 6.0             # A4 landscape
 SANS = "Liberation Sans"
-D = 800.0                                    # camera distance
+D = 800.0                                       # camera distance
 
 border, part_v, hidden_v, dims_l, text_l = [], [], [], [], []
 lint_items: list = []
@@ -42,29 +70,6 @@ def _label_box(t, name="text"):
     bb = t.bounding_box()
     return SimpleNamespace(label_bbox=(bb.min.X, bb.min.Y, bb.max.X, bb.max.Y),
                            label=name, segments=[], elbow=None)
-
-
-# --- 3D parts (simplified — ISO 6410 style, no modelled threads) ------------
-def _bolt():
-    with BuildPart() as p:
-        with BuildSketch(Plane.XY.offset(LEN)):
-            RegularPolygon(radius=AF / 2, side_count=6, major_radius=False, rotation=90)
-        extrude(amount=HEAD_H)
-        with BuildSketch():
-            Circle(DIA / 2)
-        extrude(amount=LEN)
-    return p.part
-
-
-def _nut():
-    with BuildPart() as p:
-        with BuildSketch():
-            RegularPolygon(radius=NUT_AF / 2, side_count=6, major_radius=False, rotation=90)
-        extrude(amount=NUT_T)
-        with BuildSketch():
-            Circle(BORE / 2)
-        extrude(amount=NUT_T, mode=Mode.SUBTRACT)
-    return p.part
 
 
 def _project(part, origin, up, look):
@@ -103,8 +108,9 @@ def _leader(tip, elbow, label):
     lint_items.append(ld)
 
 
-def _draw_part(part, cz, gx, gy):
+def _draw_part(part, gx, gy):
     """Third-angle front/top/side + isometric. Returns the placed FRONT bbox."""
+    cz = part.bounding_box().center().Z
     front = _project(part, (0, -D, cz), (0, 0, 1), (0, 0, cz))
     top = _project(part, (0, 0, D), (0, 1, 0), (0, 0, cz))
     side = _project(part, (D, 0, cz), (0, 0, 1), (0, 0, cz))
@@ -138,31 +144,31 @@ border.extend(_rect_edges(PW, PH))
 
 TB_W = 118.0
 tb = TitleBlock(
-    "M10 HEX BOLT & NUT", "B3D-DH-2", scale="1:1", material="Steel 8.8",
+    TITLE, "B3D-DH-2", scale="1:1", material="Steel 8.8",
     general_tolerance="ISO 2768-m", designed_by="build123d-drafting-helpers",
     date="2026-06-01", width=TB_W, draft=draft_preset(font_size=2.4, decimal_precision=1),
 )
 tb_loc = Location((PW / 2 - MARGIN - TB_W, -PH / 2 + MARGIN, 0))
 dims_l.append(tb.moved(tb_loc))
 
-# --- bolt: views + dimensions (front view) ----------------------------------
-fb = _draw_part(_bolt(), LEN / 2, -104.0, 6.0)
+# --- bolt: views + dimensions (front view) — all values from the bd part -----
+fb = _draw_part(bolt, -104.0, 6.0)
 y0, y_head, y_top = fb.min.Y, fb.max.Y - HEAD_H, fb.max.Y
-xL, xR = fb.center().X - AF / 2, fb.center().X + AF / 2
-_dim((xL - DIA / 2, y0, 0), (xL - DIA / 2, y_head, 0), "left", 12, str(LEN))   # thread length
-_dim((xL, y_top, 0), (xR, y_top, 0), "above", 8, str(AF))                      # head A/F
+xL, xR = fb.center().X - HEAD_AF / 2, fb.center().X + HEAD_AF / 2
+_dim((xL - THREAD_D / 2, y0, 0), (xL - THREAD_D / 2, y_head, 0), "left", 12, f"{BOLT_L:g}")  # length
+_dim((xL, y_top, 0), (xR, y_top, 0), "above", 8, f"{HEAD_AF:g}")                             # head A/F
 # thread designation: leader from the shaft down into the clear area below the
 # views (its label must not land over the SIDE view, which the annotation lint
 # can't see — part geometry isn't a label).
-_leader((fb.center().X + DIA / 2, y0 + 8, 0),
-        (fb.center().X + 30, y0 - 20, 0), f"M{int(DIA)} × 1.5")
+_leader((fb.center().X + THREAD_D / 2, y0 + 8, 0),
+        (fb.center().X + 30, y0 - 20, 0), THREAD)
 
 # --- nut: views + dimensions (front view) -----------------------------------
-nb = _draw_part(_nut(), NUT_T / 2, 34.0, 6.0)
-_dim((nb.min.X, nb.max.Y, 0), (nb.max.X, nb.max.Y, 0), "above", 8, str(NUT_AF))   # A/F
-_dim((nb.max.X, nb.min.Y, 0), (nb.max.X, nb.max.Y, 0), "right", 8, str(NUT_T))   # thickness
+nb = _draw_part(nut, 34.0, 6.0)
+_dim((nb.min.X, nb.max.Y, 0), (nb.max.X, nb.max.Y, 0), "above", 8, f"{NUT_AF:g}")   # A/F
+_dim((nb.max.X, nb.min.Y, 0), (nb.max.X, nb.max.Y, 0), "right", 8, f"{NUT_T:g}")    # thickness
 _leader((nb.center().X, nb.min.Y, 0), (nb.center().X - 24, nb.min.Y - 14, 0),
-        f"⌀{BORE} thru (M{int(DIA)})")
+        f"{THREAD} thru")
 
 # the title block is a labelled feature too
 tb_h = tb.bounding_box().size.Y

@@ -50,6 +50,9 @@ include = [
 dev = [
     "pytest>=7",
     "pytest-timeout",
+    # example-only: examples/part_drawing.py draws a real bd_warehouse fastener.
+    # NOT a runtime dependency of the library (which needs only build123d).
+    "bd_warehouse",
 ]
 
 [tool.pytest.ini_options]
