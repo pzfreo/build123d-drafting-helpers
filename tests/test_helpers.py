@@ -1168,3 +1168,33 @@ class TestFindInterferencesObstacles:
         ld = Leader((0, 0, 0), (20, 12, 0), "Ø5", draft)
         issues = find_interferences([ld], obstacles=[(-2, -2, 2, 2)])
         assert not any(i.code == "label_over_geometry" for i in issues)
+
+
+class TestAnnotationOverlapLabelBbox:
+    """Regression: annotation_overlap must compare label text boxes, not full
+    bboxes. Full bboxes include witness lines that legitimately overlap for
+    stacked dimensions — that was always a false positive. Issue #149."""
+
+    def test_stacked_dims_from_same_anchor_no_false_positive(self, draft):
+        # Four stacked height dims from the same left anchor — all witness lines
+        # share the same X and their full bboxes nest inside each other. Only
+        # the label text regions should be compared; they don't overlap.
+        dims = place_dims([
+            ((0, 0, 0), (0, 15, 0), "left", "15"),
+            ((0, 0, 0), (0, 30, 0), "left", "30"),
+            ((0, 0, 0), (0, 45, 0), "left", "45"),
+            ((0, 0, 0), (0, 60, 0), "left", "60"),
+        ], draft, base_distance=8)
+        overlaps = [i for i in lint_drawing(dims) if i.code == "annotation_overlap"]
+        assert overlaps == [], (
+            "stacked dims should not produce annotation_overlap — "
+            + "; ".join(i.message for i in overlaps)
+        )
+
+    def test_truly_overlapping_labels_still_flagged(self, draft):
+        # Two dims placed at the same offset with the same span → labels land
+        # on top of each other → should still be flagged.
+        d1 = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        d2 = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        overlaps = [i for i in lint_drawing([d1, d2]) if i.code == "annotation_overlap"]
+        assert overlaps, "identical dims with overlapping labels should fire annotation_overlap"
