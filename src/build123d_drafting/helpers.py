@@ -848,7 +848,10 @@ def lint_drawing(items, part_bbox=None, page_bbox=None,
     ``(min_x, min_y, max_x, max_y)`` tuple, or when ``set_page()`` has been
     called and stored a module-level page context.  Any annotation whose full
     bounding box extends past the drawable area (page minus margin) is flagged
-    as ``annotation_out_of_bounds`` (severity ``"error"``).
+    as ``annotation_out_of_bounds`` (severity ``"error"``).  This includes a
+    :class:`TitleBlock` passed as an item: its bounding box grows when a long
+    string (e.g. a verbose subtitle) overflows the frame, so include the title
+    block in *items* to catch text that spills past the page edge.
 
     Args:
         items: annotation objects exposing the relevant attrs (or SimpleNamespace

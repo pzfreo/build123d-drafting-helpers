@@ -420,6 +420,26 @@ class TestSetPage:
         assert callable(sp)
         assert callable(ann)
 
+    def test_titleblock_text_overflow_flagged(self, draft):
+        # #151: a title block whose long text spills past its frame is caught by
+        # the page-bounds check when the block is passed to lint_drawing as an
+        # item. The page is derived from the *normal* block's own bbox plus a
+        # small slack, so the assertion is self-calibrating across platforms'
+        # font metrics — only the relative overflow of the long string matters.
+        normal = TitleBlock("Part", "001", draft=draft)
+        bb = normal.bounding_box()
+        page = (bb.min.X - 2, bb.min.Y - 2, bb.max.X + 2, bb.max.Y + 2)
+        clean = [i for i in lint_drawing([normal], page_bbox=page)
+                 if i.code == "annotation_out_of_bounds"]
+        assert clean == [], "a title block that fits must not be flagged"
+
+        overflowing = TitleBlock(
+            "Gear c13-10  Wall 1.1 mm  Mtg 3.2 THRU x6  10.0 SQ tube  "
+            "Tol ISO 2768-m  extra notes", "001", draft=draft)
+        flagged = [i for i in lint_drawing([overflowing], page_bbox=page)
+                   if i.code == "annotation_out_of_bounds"]
+        assert flagged, "title block whose text spills past the page edge should be flagged"
+
 
 class TestAnnotate:
     def test_annotate_no_op_on_native_objects(self, draft):
