@@ -10,11 +10,11 @@ from build123d_drafting import (
     FeatureControlFrame, HoleCallout,
     Leader, LintIssue, SafeDimension,
     SurfaceFinish, TitleBlock,
-    draft_preset,
+    annotate, clear_page, draft_preset,
     find_interferences, find_overlaps,
     format_drawing_scale,
     leader_offset, lint_drawing,
-    place_dims, place_labels, view_axes,
+    place_dims, place_labels, set_page, view_axes,
 )
 from build123d_drafting.helpers import _GDT_GLYPHS
 
@@ -370,6 +370,72 @@ class TestViewAxes:
 # ---------------------------------------------------------------------------
 # lint_drawing
 # ---------------------------------------------------------------------------
+
+class TestSetPage:
+    def setup_method(self):
+        clear_page()  # reset between tests
+
+    def teardown_method(self):
+        clear_page()
+
+    def test_set_page_returns_dict(self):
+        page = set_page(297, 210, margin=10)
+        assert page["width"] == 297
+        assert page["height"] == 210
+        assert page["min_x"] == 10 and page["max_x"] == 287
+        assert page["min_y"] == 10 and page["max_y"] == 200
+
+    def test_out_of_bounds_annotation_flagged(self, draft):
+        set_page(50, 50, margin=5)   # tiny page
+        # Dimension placed well outside the page
+        d = Dimension((-100, -100, 0), (100, -100, 0), "below", 8, draft, label="200")
+        issues = [i for i in lint_drawing([d]) if i.code == "annotation_out_of_bounds"]
+        assert issues, "annotation outside page should be flagged"
+        assert all(i.severity == "error" for i in issues)
+
+    def test_in_bounds_annotation_not_flagged(self, draft):
+        # Page is (0,0)-(200,150), margin 10 → drawable (10,10)-(190,140).
+        # Place a dim well within those bounds.
+        set_page(200, 150, margin=10)
+        d = Dimension((80, 50, 0), (120, 50, 0), "above", 8, draft, label="40")
+        issues = [i for i in lint_drawing([d]) if i.code == "annotation_out_of_bounds"]
+        assert issues == []
+
+    def test_explicit_page_bbox_overrides_module_state(self, draft):
+        set_page(1000, 1000, margin=0)  # very large page (all in bounds)
+        d = Dimension((-100, -100, 0), (100, -100, 0), "below", 8, draft, label="200")
+        # Explicit tiny bbox triggers out-of-bounds despite large module-level page
+        issues = [i for i in lint_drawing([d], page_bbox=(0, 0, 10, 10))
+                  if i.code == "annotation_out_of_bounds"]
+        assert issues
+
+    def test_no_page_means_no_bounds_check(self, draft):
+        clear_page()  # no page set
+        d = Dimension((-100, -100, 0), (100, -100, 0), "below", 8, draft, label="200")
+        issues = [i for i in lint_drawing([d]) if i.code == "annotation_out_of_bounds"]
+        assert issues == []
+
+    def test_set_page_importable_from_package(self):
+        from build123d_drafting import set_page as sp, annotate as ann
+        assert callable(sp)
+        assert callable(ann)
+
+
+class TestAnnotate:
+    def test_annotate_no_op_on_native_objects(self, draft):
+        # annotate() on a Dimension (which already has .label) should be a no-op
+        d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        original_label = d.label
+        annotate(d, "width")
+        assert d.label == original_label   # unchanged
+
+    def test_annotate_attaches_label_to_vanilla_object(self, draft):
+        from build123d import ExtensionLine
+        el = ExtensionLine(border=[(-10, 0, 0), (10, 0, 0)], offset=8, draft=draft,
+                           label="20")
+        annotate(el, "width", label="20")
+        assert getattr(el, "_annotate_label", None) == "20"
+
 
 class TestLintDrawing:
     def test_empty_list_returns_no_issues(self):
