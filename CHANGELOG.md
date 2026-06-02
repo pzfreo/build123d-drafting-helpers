@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- **Native drawing-scale support (`drawing_scale`)** so small parts can be drawn
+  enlarged (e.g. a 7.5 mm feature at 5:1) without `lint_drawing()` raising false
+  `label_vs_measured` errors (#147). `lint_drawing(items, drawing_scale=5.0)`
+  divides each measured path length by the scale before comparing it to the
+  label, so labels carry the *real* dimension while the geometry is drawn scaled.
+  `TitleBlock(..., drawing_scale=5.0)` derives the printed "5:1" indicator from
+  the same number — one source of truth for both the lint and the title block.
+  New `format_drawing_scale(scale)` helper formats the ISO string ("5:1", "1:2",
+  "1:1"); `drawing_scale` defaults to `1.0`, so existing 1:1 drawings are
+  unchanged.
+
 ### Examples
 
 - **`examples/part_drawing.py` now draws a real [`bd_warehouse`](https://github.com/gumyr/bd_warehouse)
