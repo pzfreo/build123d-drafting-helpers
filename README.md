@@ -188,7 +188,7 @@ axes = view_axes((0, 0, -100), (0, 1, 0), (0, 0, 0))
 
 ---
 
-### `lint_drawing(items, part_bbox=None, page_bbox=None, drawing_scale=1.0)`
+### `lint_drawing(items, part_bbox=None, page_bbox=None, drawing_scale=1.0, view_shapes=None)`
 
 Duck-typed structural checks on a list of annotation objects (`Dimension`, `Leader`,
 `Centerline`, …). Dispatch is by attribute presence, not type:
@@ -201,6 +201,8 @@ Duck-typed structural checks on a list of annotation objects (`Dimension`, `Lead
 | `dim_inside_part` | Dim bbox overlaps part outline by >10% — dim is inside the view |
 | `leader_line_through_text` | Leader elbow point inside label bbox — line strikes through text |
 | `annotation_out_of_bounds` | An item's bbox extends past the page (set `page_bbox` or call `set_page()`) |
+| `view_annotation_overlap` | An annotation bbox overlaps a view shape bbox — annotation overlaps or intrudes into the view |
+| `view_overlap` | Two view shape bboxes overlap each other — views are too close |
 
 ```python
 bore_cl = Centerline((0, -30, 0), (0, 30, 0))

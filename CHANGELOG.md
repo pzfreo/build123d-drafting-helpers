@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3.1 — 2026-06-04
+
+### Added
+
+- **`lint_drawing()` gains a `view_shapes` parameter** (#159, #160) for
+  checking projected view outlines against the rest of the drawing.
+  Pass a list of build123d shapes representing the view bounding regions;
+  `lint_drawing()` emits `view_annotation_overlap` (warning) when an
+  annotation's bbox overlaps a view outline, and `view_overlap` (warning)
+  when two view outlines overlap each other.
+
+### Fixed
+
+- **`pyproject.toml` version corrected to `0.3.1`** — the v0.3.0 release
+  tag and GitHub release were created but `pyproject.toml` was never bumped
+  from `0.2.0`.
+
 ## v0.3.0 — 2026-06-02
 
 ### Added
