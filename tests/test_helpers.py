@@ -1225,7 +1225,7 @@ class TestLintViewShapes:
 
     def _make_box_shape(self, x, y, w, h):
         """Return a build123d Box located at (x+w/2, y+h/2) — stands in for a projected view."""
-        from build123d import Box, Pos, Compound
+        from build123d import Box, Pos
         return Pos(x + w / 2, y + h / 2, 0) * Box(w, h, 0.01)
 
     # --- no view_shapes: existing behaviour unchanged ---
@@ -1300,4 +1300,10 @@ class TestLintViewShapes:
         bad = SimpleNamespace()  # no bounding_box attribute
         d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
         issues = lint_drawing([d], view_shapes=[bad])  # must not raise
+        assert not any(i.code == "view_annotation_overlap" for i in issues)
+
+    def test_same_shape_in_items_and_view_shapes_no_self_overlap(self):
+        # A shape passed in both lists must not generate a spurious self-overlap warning
+        view = self._make_box_shape(0, 0, 40, 30)
+        issues = lint_drawing([view], view_shapes=[view])
         assert not any(i.code == "view_annotation_overlap" for i in issues)

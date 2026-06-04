@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`lint_drawing()` gains a `view_shapes` parameter** (#159, #160) for
+  checking projected view outlines against the rest of the drawing.
+  Pass a list of build123d shapes representing the view bounding regions;
+  `lint_drawing()` emits `view_annotation_overlap` (warning) when an
+  annotation's bbox overlaps a view outline, and `view_overlap` (warning)
+  when two view outlines overlap each other.
+
 ## v0.3.0 — 2026-06-02
 
 ### Added

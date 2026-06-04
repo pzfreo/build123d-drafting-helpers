@@ -835,7 +835,7 @@ def place_labels(
 
 def lint_drawing(items, part_bbox=None, page_bbox=None,
                  drawing_scale: float = 1.0,
-                 view_shapes=None) -> list[LintIssue]:
+                 view_shapes: list | None = None) -> list[LintIssue]:
     """Structural checks on a composed annotation list, duck-typed.
 
     Dispatch is by attribute presence, not type:
@@ -868,6 +868,11 @@ def lint_drawing(items, part_bbox=None, page_bbox=None,
             dimension while the geometry is drawn enlarged. Defaults to ``1.0``
             (no scaling). See :func:`format_drawing_scale` to render the
             matching "5:1" indicator in the title block.
+        view_shapes: optional list of build123d shapes representing projected
+            view outlines.  When provided, their bounding boxes are checked
+            for overlap with annotations (``view_annotation_overlap``, warning)
+            and for overlap with each other (``view_overlap``, warning).
+            Shapes whose bounding box cannot be computed are silently skipped.
 
     Returns:
         list[LintIssue].
@@ -964,7 +969,7 @@ def lint_drawing(items, part_bbox=None, page_bbox=None,
             except Exception:
                 pass
 
-    if view_shapes:
+    if view_shapes is not None:
         _lint_view_shapes(view_shapes, items, issues)
 
     return issues
@@ -990,17 +995,21 @@ def _lint_view_shapes(view_shapes, ann_items, issues) -> None:
     """Check view shapes for overlap with annotations (#159) and each other (#160)."""
     # Build named bbox list; use the shape's id as fallback name.
     named_bboxes = []
+    view_shape_ids = set()
     for vs in view_shapes:
         bb = _bbox2d(vs)
         if bb is None:
             continue
         name = getattr(vs, "label", None) or getattr(vs, "name", None) or f"view@{id(vs)}"
         named_bboxes.append((name, bb))
+        view_shape_ids.add(id(vs))
 
     # #159 — view shape vs annotation bounding box overlaps
     for vname, vbb in named_bboxes:
         vx0, vy0, vx1, vy1 = vbb
         for ann in ann_items:
+            if id(ann) in view_shape_ids:
+                continue
             try:
                 ab = _bbox2d(ann)
                 if ab is None:
