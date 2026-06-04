@@ -1218,3 +1218,86 @@ class TestAnnotationOverlapLabelBbox:
         d2 = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
         overlaps = [i for i in lint_drawing([d1, d2]) if i.code == "annotation_overlap"]
         assert overlaps, "identical dims with overlapping labels should fire annotation_overlap"
+
+
+class TestLintViewShapes:
+    """Tests for view_shapes parameter — #159 (view vs annotation) and #160 (view vs view)."""
+
+    def _make_box_shape(self, x, y, w, h):
+        """Return a build123d Box located at (x+w/2, y+h/2) — stands in for a projected view."""
+        from build123d import Box, Pos, Compound
+        return Pos(x + w / 2, y + h / 2, 0) * Box(w, h, 0.01)
+
+    # --- no view_shapes: existing behaviour unchanged ---
+
+    def test_no_view_shapes_no_new_codes(self, draft):
+        d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        codes = {i.code for i in lint_drawing([d])}
+        assert "view_annotation_overlap" not in codes
+        assert "view_overlap" not in codes
+
+    # --- #159: view vs annotation ---
+
+    def test_view_overlapping_annotation_flagged(self, draft):
+        # View at x=0–40, y=0–30; dim label sits inside that region
+        view = self._make_box_shape(0, 0, 40, 30)
+        d = Dimension((5, 10, 0), (15, 10, 0), "above", 4, draft, label="10")
+        codes = {i.code for i in lint_drawing([d], view_shapes=[view])}
+        assert "view_annotation_overlap" in codes
+
+    def test_view_not_overlapping_annotation_not_flagged(self, draft):
+        # View at x=0–40, y=0–30; dim far away at x=100
+        view = self._make_box_shape(0, 0, 40, 30)
+        d = Dimension((100, 10, 0), (120, 10, 0), "above", 4, draft, label="20")
+        codes = {i.code for i in lint_drawing([d], view_shapes=[view])}
+        assert "view_annotation_overlap" not in codes
+
+    def test_view_annotation_overlap_severity_warning(self, draft):
+        view = self._make_box_shape(0, 0, 40, 30)
+        d = Dimension((5, 10, 0), (15, 10, 0), "above", 4, draft, label="10")
+        issues = [i for i in lint_drawing([d], view_shapes=[view])
+                  if i.code == "view_annotation_overlap"]
+        assert issues and issues[0].severity == "warning"
+
+    # --- #160: view vs view ---
+
+    def test_overlapping_views_flagged(self):
+        v1 = self._make_box_shape(0, 0, 60, 40)
+        v2 = self._make_box_shape(50, 0, 60, 40)  # overlaps v1 by 10mm in X
+        codes = {i.code for i in lint_drawing([], view_shapes=[v1, v2])}
+        assert "view_overlap" in codes
+
+    def test_non_overlapping_views_not_flagged(self):
+        v1 = self._make_box_shape(0, 0, 60, 40)
+        v2 = self._make_box_shape(70, 0, 60, 40)  # 10mm gap
+        codes = {i.code for i in lint_drawing([], view_shapes=[v1, v2])}
+        assert "view_overlap" not in codes
+
+    def test_view_overlap_severity_warning(self):
+        v1 = self._make_box_shape(0, 0, 60, 40)
+        v2 = self._make_box_shape(50, 0, 60, 40)
+        issues = [i for i in lint_drawing([], view_shapes=[v1, v2])
+                  if i.code == "view_overlap"]
+        assert issues and issues[0].severity == "warning"
+
+    def test_three_views_only_adjacent_pairs_flagged(self):
+        # v1 overlaps v2; v2 overlaps v3; v1 and v3 do not overlap each other
+        v1 = self._make_box_shape(0, 0, 60, 40)
+        v2 = self._make_box_shape(50, 0, 60, 40)   # overlaps v1
+        v3 = self._make_box_shape(100, 0, 60, 40)  # overlaps v2, clear of v1
+        issues = [i for i in lint_drawing([], view_shapes=[v1, v2, v3])
+                  if i.code == "view_overlap"]
+        assert len(issues) == 2
+
+    def test_empty_view_shapes_list_no_error(self, draft):
+        d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        issues = lint_drawing([d], view_shapes=[])
+        assert not any(i.code in ("view_overlap", "view_annotation_overlap") for i in issues)
+
+    def test_invalid_view_shape_skipped_gracefully(self, draft):
+        # A non-shape object with no bounding_box should be silently skipped
+        from types import SimpleNamespace
+        bad = SimpleNamespace()  # no bounding_box attribute
+        d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        issues = lint_drawing([d], view_shapes=[bad])  # must not raise
+        assert not any(i.code == "view_annotation_overlap" for i in issues)
