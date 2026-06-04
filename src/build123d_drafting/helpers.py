@@ -834,7 +834,8 @@ def place_labels(
 # ---------------------------------------------------------------------------
 
 def lint_drawing(items, part_bbox=None, page_bbox=None,
-                 drawing_scale: float = 1.0) -> list[LintIssue]:
+                 drawing_scale: float = 1.0,
+                 view_shapes=None) -> list[LintIssue]:
     """Structural checks on a composed annotation list, duck-typed.
 
     Dispatch is by attribute presence, not type:
@@ -963,7 +964,79 @@ def lint_drawing(items, part_bbox=None, page_bbox=None,
             except Exception:
                 pass
 
+    if view_shapes:
+        _lint_view_shapes(view_shapes, items, issues)
+
     return issues
+
+
+def _bbox2d(shape):
+    """Return (minx, miny, maxx, maxy) for a build123d shape, or None on failure."""
+    try:
+        bb = shape.bounding_box()
+        return bb.min.X, bb.min.Y, bb.max.X, bb.max.Y
+    except Exception:
+        return None
+
+
+def _bboxes_overlap_2d(a, b) -> bool:
+    """True if two (minx, miny, maxx, maxy) rectangles overlap in XY."""
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    return ax0 < bx1 and ax1 > bx0 and ay0 < by1 and ay1 > by0
+
+
+def _lint_view_shapes(view_shapes, ann_items, issues) -> None:
+    """Check view shapes for overlap with annotations (#159) and each other (#160)."""
+    # Build named bbox list; use the shape's id as fallback name.
+    named_bboxes = []
+    for vs in view_shapes:
+        bb = _bbox2d(vs)
+        if bb is None:
+            continue
+        name = getattr(vs, "label", None) or getattr(vs, "name", None) or f"view@{id(vs)}"
+        named_bboxes.append((name, bb))
+
+    # #159 — view shape vs annotation bounding box overlaps
+    for vname, vbb in named_bboxes:
+        vx0, vy0, vx1, vy1 = vbb
+        for ann in ann_items:
+            try:
+                ab = _bbox2d(ann)
+                if ab is None:
+                    continue
+                if _bboxes_overlap_2d(vbb, ab):
+                    albl = getattr(ann, "label", None) or getattr(ann, "name", None) or type(ann).__name__
+                    issues.append(LintIssue(
+                        severity="warning",
+                        message=(
+                            f"view '{vname}' bbox "
+                            f"[x={vx0:.1f}–{vx1:.1f}, y={vy0:.1f}–{vy1:.1f}] "
+                            f"overlaps annotation '{albl}' — increase view spacing "
+                            f"or move the annotation"
+                        ),
+                        code="view_annotation_overlap",
+                    ))
+            except Exception:
+                pass
+
+    # #160 — view shape vs view shape bounding box overlaps
+    for i, (aname, abb) in enumerate(named_bboxes):
+        ax0, ay0, ax1, ay1 = abb
+        for bname, bbb in named_bboxes[i + 1:]:
+            bx0, by0, bx1, by1 = bbb
+            if _bboxes_overlap_2d(abb, bbb):
+                issues.append(LintIssue(
+                    severity="warning",
+                    message=(
+                        f"view '{aname}' bbox "
+                        f"[x={ax0:.1f}–{ax1:.1f}, y={ay0:.1f}–{ay1:.1f}] "
+                        f"overlaps view '{bname}' "
+                        f"[x={bx0:.1f}–{bx1:.1f}, y={by0:.1f}–{by1:.1f}] "
+                        f"— increase spacing between views"
+                    ),
+                    code="view_overlap",
+                ))
 
 
 def _lint_centerline_dim_overlap(dim_item, cl_item, issues) -> None:
