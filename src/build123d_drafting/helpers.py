@@ -1498,6 +1498,9 @@ class TitleBlock(_Annotation):
             align=align,
             mode=mode,
         )
+        # block_bbox: the frame extents in the BUILD frame (before any .moved()
+        # or rotation=). Use .bounding_box() for the live, transform-accurate
+        # extents when the title block has been repositioned.
         self.block_bbox = {
             "min_x": 0.0,
             "min_y": 0.0,
@@ -2268,21 +2271,53 @@ def find_overlaps(sketches, *, min_area: float = 0.01) -> list[LintIssue]:
     Works on any build123d ``Sketch`` with zero metadata — uses the boolean
     intersect ``(a & b)`` and tests the resulting area.
 
+    An AABB (bounding-box) pre-filter is applied before the expensive OCC
+    boolean: pairs whose bboxes do not overlap are skipped, reducing the cost
+    from O(n²) boolean ops to O(n²) cheap AABB tests + O(k) booleans where k
+    is the number of actually-overlapping pairs (usually very small).
+
+    When the boolean itself raises (non-manifold geometry, invalid sketch) a
+    ``geometry_check_failed`` warning is emitted rather than silently
+    continuing — so callers can distinguish "clean, no overlap" from "check
+    never ran".
+
     Returns:
-        list[LintIssue] with code ``faces_overlap`` (severity ``"warning"``).
+        list[LintIssue] with codes ``faces_overlap`` (warning) or
+        ``geometry_check_failed`` (warning).
     """
     items = list(sketches)
     issues: list[LintIssue] = []
+    # Pre-compute bboxes once; fall back to None on failure.
+    bboxes = []
+    for item in items:
+        try:
+            bb = item.bounding_box()
+            bboxes.append((bb.min.X, bb.min.Y, bb.max.X, bb.max.Y))
+        except Exception:
+            bboxes.append(None)
+
     for i in range(len(items)):
         for j in range(i + 1, len(items)):
+            # AABB pre-filter — skip if bboxes don't overlap at all.
+            bi, bj = bboxes[i], bboxes[j]
+            if bi is not None and bj is not None:
+                if (bi[2] <= bj[0] or bj[2] <= bi[0] or
+                        bi[3] <= bj[1] or bj[3] <= bi[1]):
+                    continue
+            la = getattr(items[i], "label", None) or f"#{i}"
+            lb = getattr(items[j], "label", None) or f"#{j}"
             try:
                 inter = items[i] & items[j]
                 area = inter.area
-            except Exception:
+            except Exception as exc:
+                issues.append(LintIssue(
+                    severity="warning",
+                    message=(f"geometry check failed for '{la}' vs '{lb}': {exc} "
+                             f"— overlap status unknown"),
+                    code="geometry_check_failed",
+                ))
                 continue
             if area > min_area:
-                la = getattr(items[i], "label", None) or f"#{i}"
-                lb = getattr(items[j], "label", None) or f"#{j}"
                 issues.append(
                     LintIssue(
                         severity="warning",
