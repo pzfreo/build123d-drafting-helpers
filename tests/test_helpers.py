@@ -1,20 +1,34 @@
 """Tests for build123d_drafting (0.2.0 — native BaseSketchObject API)."""
+
 import math
 
 import pytest
 from build123d import Color, Draft, ExportSVG, Sketch
 
 from build123d_drafting import (
-    Centerline, CompositeFeatureControlFrame,
-    DatumFeature, DatumTarget, Dimension,
-    FeatureControlFrame, HoleCallout,
-    Leader, LintIssue, SafeDimension,
-    SurfaceFinish, TitleBlock,
-    annotate, clear_page, draft_preset,
-    find_interferences, find_overlaps,
+    Centerline,
+    CompositeFeatureControlFrame,
+    DatumFeature,
+    DatumTarget,
+    Dimension,
+    FeatureControlFrame,
+    HoleCallout,
+    Leader,
+    SafeDimension,
+    SurfaceFinish,
+    TitleBlock,
+    annotate,
+    clear_page,
+    draft_preset,
+    find_interferences,
+    find_overlaps,
     format_drawing_scale,
-    leader_offset, lint_drawing,
-    place_dims, place_labels, set_page, view_axes,
+    leader_offset,
+    lint_drawing,
+    place_dims,
+    place_labels,
+    set_page,
+    view_axes,
 )
 from build123d_drafting.helpers import _GDT_GLYPHS
 
@@ -49,6 +63,7 @@ def _export_ink(obj):
 # ---------------------------------------------------------------------------
 # Dimension
 # ---------------------------------------------------------------------------
+
 
 class TestDimension:
     def test_is_a_sketch(self, draft):
@@ -100,8 +115,9 @@ class TestDimension:
         _export_ink(d)  # must not raise
 
     def test_label_offset_x_shifts_label(self, draft):
-        d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft,
-                      label="Ø5.0 H8", label_offset_x=10)
+        d = Dimension(
+            (-10, 0, 0), (10, 0, 0), "above", 8, draft, label="Ø5.0 H8", label_offset_x=10
+        )
         assert d.label_bbox is not None
         lmin_x, *_ = d.label_bbox
         assert lmin_x > 0.0
@@ -113,8 +129,9 @@ class TestDimension:
         assert any("centerline" in i.message.lower() for i in issues)
 
     def test_centerline_no_overlap_with_offset(self, draft):
-        d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft,
-                      label="Ø5.0 H8", label_offset_x=15)
+        d = Dimension(
+            (-10, 0, 0), (10, 0, 0), "above", 8, draft, label="Ø5.0 H8", label_offset_x=15
+        )
         cl = Centerline((0, 0, 0), (0, 20, 0))
         issues = [i for i in lint_drawing([d, cl]) if "centerline" in i.message.lower()]
         assert issues == []
@@ -133,10 +150,10 @@ class TestDimension:
 # place_dims
 # ---------------------------------------------------------------------------
 
+
 class TestPlaceDims:
     def test_single_dim_gets_base_distance(self, draft):
-        results = place_dims([((-10, 0, 0), (10, 0, 0), "above", "20")], draft,
-                             base_distance=8.0)
+        results = place_dims([((-10, 0, 0), (10, 0, 0), "above", "20")], draft, base_distance=8.0)
         assert len(results) == 1
         assert results[0].bounding_box().max.Y > 8.0
 
@@ -151,7 +168,7 @@ class TestPlaceDims:
     def test_non_overlapping_dims_share_tier(self, draft):
         specs = [
             ((-30, 0, 0), (-10, 0, 0), "above", "20"),
-            (( 10, 0, 0), ( 30, 0, 0), "above", "20"),
+            ((10, 0, 0), (30, 0, 0), "above", "20"),
         ]
         results = place_dims(specs, draft, base_distance=8.0)
         assert abs(results[0].bounding_box().max.Y - results[1].bounding_box().max.Y) < 1.0
@@ -176,7 +193,7 @@ class TestPlaceDims:
     def test_returns_dimensions(self, draft):
         specs = [
             ((-10, 0, 0), (10, 0, 0), "above", "20"),
-            (( 10, 0, 0), (30, 0, 0), "above", "20"),
+            ((10, 0, 0), (30, 0, 0), "above", "20"),
         ]
         results = place_dims(specs, draft)
         assert all(isinstance(r, Dimension) for r in results)
@@ -186,32 +203,35 @@ class TestPlaceDims:
 # place_labels
 # ---------------------------------------------------------------------------
 
+
 class TestPlaceLabels:
     def test_no_centerlines_unchanged(self, draft):
-        results = place_labels([((-10, 0, 0), (10, 0, 0), "above", 8, "20")], draft,
-                               centerlines=[])
+        results = place_labels([((-10, 0, 0), (10, 0, 0), "above", 8, "20")], draft, centerlines=[])
         assert len(results) == 1
         assert isinstance(results[0], Dimension)
         assert results[0].label_bbox is not None
 
     def test_clears_vertical_centerline(self, draft):
         cl = Centerline((0, 0, 0), (0, 20, 0))
-        results = place_labels([((-10, 0, 0), (10, 0, 0), "above", 8, "Ø5.0 H8")],
-                               draft, centerlines=[cl])
+        results = place_labels(
+            [((-10, 0, 0), (10, 0, 0), "above", 8, "Ø5.0 H8")], draft, centerlines=[cl]
+        )
         lmin_x, _, lmax_x, _ = results[0].label_bbox
         assert not (lmin_x < 0.0 < lmax_x)
 
     def test_cleared_dim_passes_lint(self, draft):
         cl = Centerline((0, 0, 0), (0, 20, 0))
-        results = place_labels([((-10, 0, 0), (10, 0, 0), "above", 8, "Ø5.0 H8")],
-                               draft, centerlines=[cl])
+        results = place_labels(
+            [((-10, 0, 0), (10, 0, 0), "above", 8, "Ø5.0 H8")], draft, centerlines=[cl]
+        )
         issues = [i for i in lint_drawing(results + [cl]) if "centerline" in i.message.lower()]
         assert issues == []
 
     def test_no_shift_when_no_crossing(self, draft):
         cl = Centerline((50, 0, 0), (50, 20, 0))
-        results = place_labels([((-10, 0, 0), (10, 0, 0), "above", 8, "20")],
-                               draft, centerlines=[cl])
+        results = place_labels(
+            [((-10, 0, 0), (10, 0, 0), "above", 8, "20")], draft, centerlines=[cl]
+        )
         original = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
         assert abs(results[0].label_bbox[0] - original.label_bbox[0]) < 0.5
 
@@ -228,14 +248,16 @@ class TestPlaceLabels:
             assert not (lmin_x < 0.0 < lmax_x)
 
     def test_tolerance_spec_accepted(self, draft):
-        results = place_labels([((-10, 0, 0), (10, 0, 0), "above", 8, "20", 0.1)],
-                               draft, centerlines=[])
+        results = place_labels(
+            [((-10, 0, 0), (10, 0, 0), "above", 8, "20", 0.1)], draft, centerlines=[]
+        )
         assert results[0].label.startswith("20")
 
 
 # ---------------------------------------------------------------------------
 # SafeDimension
 # ---------------------------------------------------------------------------
+
 
 class TestSafeDimension:
     def test_normal_label_works(self, draft):
@@ -262,6 +284,7 @@ class TestSafeDimension:
 # ---------------------------------------------------------------------------
 # Leader
 # ---------------------------------------------------------------------------
+
 
 class TestLeader:
     def test_is_a_sketch(self, draft):
@@ -308,6 +331,7 @@ class TestLeader:
 # leader_offset
 # ---------------------------------------------------------------------------
 
+
 class TestLeaderOffset:
     def test_returns_leader(self, draft):
         assert isinstance(leader_offset((10, 10), "NE", 12.0, "label", draft), Leader)
@@ -341,6 +365,7 @@ class TestLeaderOffset:
 # view_axes
 # ---------------------------------------------------------------------------
 
+
 class TestViewAxes:
     def test_top_view_x_maps_to_page_x_positive(self):
         assert view_axes((0, 0, 100), (0, 1, 0), (0, 0, 0))["world_X"] == ("page_X", 1.0)
@@ -371,6 +396,7 @@ class TestViewAxes:
 # lint_drawing
 # ---------------------------------------------------------------------------
 
+
 class TestSetPage:
     def setup_method(self):
         clear_page()  # reset between tests
@@ -386,7 +412,7 @@ class TestSetPage:
         assert page["min_y"] == 10 and page["max_y"] == 200
 
     def test_out_of_bounds_annotation_flagged(self, draft):
-        set_page(50, 50, margin=5)   # tiny page
+        set_page(50, 50, margin=5)  # tiny page
         # Dimension placed well outside the page
         d = Dimension((-100, -100, 0), (100, -100, 0), "below", 8, draft, label="200")
         issues = [i for i in lint_drawing([d]) if i.code == "annotation_out_of_bounds"]
@@ -405,8 +431,11 @@ class TestSetPage:
         set_page(1000, 1000, margin=0)  # very large page (all in bounds)
         d = Dimension((-100, -100, 0), (100, -100, 0), "below", 8, draft, label="200")
         # Explicit tiny bbox triggers out-of-bounds despite large module-level page
-        issues = [i for i in lint_drawing([d], page_bbox=(0, 0, 10, 10))
-                  if i.code == "annotation_out_of_bounds"]
+        issues = [
+            i
+            for i in lint_drawing([d], page_bbox=(0, 0, 10, 10))
+            if i.code == "annotation_out_of_bounds"
+        ]
         assert issues
 
     def test_no_page_means_no_bounds_check(self, draft):
@@ -416,7 +445,9 @@ class TestSetPage:
         assert issues == []
 
     def test_set_page_importable_from_package(self):
-        from build123d_drafting import set_page as sp, annotate as ann
+        from build123d_drafting import annotate as ann
+        from build123d_drafting import set_page as sp
+
         assert callable(sp)
         assert callable(ann)
 
@@ -429,15 +460,23 @@ class TestSetPage:
         normal = TitleBlock("Part", "001", draft=draft)
         bb = normal.bounding_box()
         page = (bb.min.X - 2, bb.min.Y - 2, bb.max.X + 2, bb.max.Y + 2)
-        clean = [i for i in lint_drawing([normal], page_bbox=page)
-                 if i.code == "annotation_out_of_bounds"]
+        clean = [
+            i
+            for i in lint_drawing([normal], page_bbox=page)
+            if i.code == "annotation_out_of_bounds"
+        ]
         assert clean == [], "a title block that fits must not be flagged"
 
         overflowing = TitleBlock(
-            "Gear c13-10  Wall 1.1 mm  Mtg 3.2 THRU x6  10.0 SQ tube  "
-            "Tol ISO 2768-m  extra notes", "001", draft=draft)
-        flagged = [i for i in lint_drawing([overflowing], page_bbox=page)
-                   if i.code == "annotation_out_of_bounds"]
+            "Gear c13-10  Wall 1.1 mm  Mtg 3.2 THRU x6  10.0 SQ tube  Tol ISO 2768-m  extra notes",
+            "001",
+            draft=draft,
+        )
+        flagged = [
+            i
+            for i in lint_drawing([overflowing], page_bbox=page)
+            if i.code == "annotation_out_of_bounds"
+        ]
         assert flagged, "title block whose text spills past the page edge should be flagged"
 
 
@@ -447,12 +486,12 @@ class TestAnnotate:
         d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
         original_label = d.label
         annotate(d, "width")
-        assert d.label == original_label   # unchanged
+        assert d.label == original_label  # unchanged
 
     def test_annotate_attaches_label_to_vanilla_object(self, draft):
         from build123d import ExtensionLine
-        el = ExtensionLine(border=[(-10, 0, 0), (10, 0, 0)], offset=8, draft=draft,
-                           label="20")
+
+        el = ExtensionLine(border=[(-10, 0, 0), (10, 0, 0)], offset=8, draft=draft, label="20")
         annotate(el, "width", label="20")
         assert getattr(el, "_annotate_label", None) == "20"
 
@@ -463,8 +502,9 @@ class TestLintDrawing:
 
     def test_label_value_matches_length_no_issue(self, draft):
         d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
-        issues = [i for i in lint_drawing([d])
-                  if "axis swap" in i.message or "differs from" in i.message]
+        issues = [
+            i for i in lint_drawing([d]) if "axis swap" in i.message or "differs from" in i.message
+        ]
         assert issues == []
 
     def test_label_value_diverges_from_length(self, draft):
@@ -479,8 +519,13 @@ class TestLintDrawing:
         class FakeBBox:
             class _pt:
                 pass
-            min = _pt(); min.X = -20; min.Y = -20
-            max = _pt(); max.X = 20; max.Y = 20
+
+            min = _pt()
+            min.X = -20
+            min.Y = -20
+            max = _pt()
+            max.X = 20
+            max.Y = 20
 
         issues = lint_drawing([d], part_bbox=FakeBBox())
         assert any("overlap" in i.message.lower() for i in issues)
@@ -500,13 +545,14 @@ class TestLintDrawing:
         assert any("overlap" in i.message.lower() for i in lint_drawing([a, b]))
 
     def test_stacked_dims_not_flagged(self, draft):
-        inner = Dimension((-10, 0, 0), (10, 0, 0), "above",  8, draft, label="20")
+        inner = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
         outer = Dimension((-10, 0, 0), (10, 0, 0), "above", 18, draft, label="20")
         assert [i for i in lint_drawing([inner, outer]) if "overlap" in i.message.lower()] == []
 
     def test_duck_typed_namespace_dim(self, draft):
         # lint must work on a lightweight SimpleNamespace stand-in (the MCP uses these)
         from types import SimpleNamespace
+
         ns = SimpleNamespace(label="999", measured_length=20.0, label_bbox=None)
         codes = {i.code for i in lint_drawing([ns])}
         assert "label_vs_measured" in codes
@@ -515,6 +561,7 @@ class TestLintDrawing:
 # ---------------------------------------------------------------------------
 # drawing_scale (issue #147): N:1 drawings without false label_vs_measured
 # ---------------------------------------------------------------------------
+
 
 class TestDrawingScale:
     def test_format_enlargement(self):
@@ -569,6 +616,7 @@ class TestDrawingScale:
 # TitleBlock
 # ---------------------------------------------------------------------------
 
+
 class TestTitleBlock:
     def test_is_a_sketch(self, draft):
         tb = TitleBlock("My Part", "DRW-001", draft=draft)
@@ -599,9 +647,14 @@ class TestTitleBlock:
 
     def test_all_fields_populated(self, draft):
         tb = TitleBlock(
-            part_name="Bracket", drawing_number="BRK-042", scale="2:1",
-            material="Al 6061", general_tolerance="ISO 2768-m",
-            designed_by="J. Smith", date="2026-05-19", draft=draft,
+            part_name="Bracket",
+            drawing_number="BRK-042",
+            scale="2:1",
+            material="Al 6061",
+            general_tolerance="ISO 2768-m",
+            designed_by="J. Smith",
+            date="2026-05-19",
+            draft=draft,
         )
         assert isinstance(tb, Sketch)
         # outer border (4) + row divider (1) + top dividers (4) + bottom divider (1)
@@ -649,7 +702,9 @@ class TestTitleBlock:
     def test_revision_overrides_date(self, draft):
         # When both are set, revision wins — result equals revision-only.
         # Use show_labels=False to isolate value content from label content.
-        both = TitleBlock("Part", "001", revision="B", date="2026-01-01", show_labels=False, draft=draft)
+        both = TitleBlock(
+            "Part", "001", revision="B", date="2026-01-01", show_labels=False, draft=draft
+        )
         rev_only = TitleBlock("Part", "001", revision="B", show_labels=False, draft=draft)
         assert self._fingerprint(both) == self._fingerprint(rev_only)
 
@@ -674,8 +729,7 @@ class TestTitleBlock:
         assert len(with_lo.segments) > len(without.segments)
 
     def test_legal_owner_renders_as_sketch(self, draft):
-        tb = TitleBlock("Part", "DRW-001", legal_owner="ACME Corp",
-                        revision="B", draft=draft)
+        tb = TitleBlock("Part", "DRW-001", legal_owner="ACME Corp", revision="B", draft=draft)
         assert isinstance(tb, Sketch)
         assert len(tb.faces()) > 0
 
@@ -700,15 +754,19 @@ class TestTitleBlock:
     def test_legal_owner_label_present(self, draft):
         # Block with legal_owner + labels should have more faces than without label.
         with_lo_labelled = TitleBlock("Part", "001", legal_owner="X", show_labels=True, draft=draft)
-        with_lo_unlabelled = TitleBlock("Part", "001", legal_owner="X", show_labels=False, draft=draft)
+        with_lo_unlabelled = TitleBlock(
+            "Part", "001", legal_owner="X", show_labels=False, draft=draft
+        )
         assert len(with_lo_labelled.faces()) > len(with_lo_unlabelled.faces())
 
     def test_show_labels_does_not_affect_block_bbox(self, draft):
         # Labels are glyphs only — they must not change the reported block dimensions.
-        with_labels = TitleBlock("Part", "001", legal_owner="X", cell_height=8,
-                                 show_labels=True, draft=draft)
-        without_labels = TitleBlock("Part", "001", legal_owner="X", cell_height=8,
-                                    show_labels=False, draft=draft)
+        with_labels = TitleBlock(
+            "Part", "001", legal_owner="X", cell_height=8, show_labels=True, draft=draft
+        )
+        without_labels = TitleBlock(
+            "Part", "001", legal_owner="X", cell_height=8, show_labels=False, draft=draft
+        )
         assert with_labels.block_bbox == without_labels.block_bbox
 
     def test_whitespace_only_legal_owner_treated_as_empty(self, draft):
@@ -736,6 +794,7 @@ class TestTitleBlock:
 # SurfaceFinish
 # ---------------------------------------------------------------------------
 
+
 class TestSurfaceFinish:
     def test_is_a_sketch(self, draft):
         assert isinstance(SurfaceFinish("Ra 1.6", (10, 20), draft=draft), Sketch)
@@ -744,7 +803,9 @@ class TestSurfaceFinish:
         assert SurfaceFinish("Ra 3.2", (0, 0), draft=draft).label == "Ra 3.2"
 
     def test_position_stored(self, draft):
-        assert SurfaceFinish("Ra 1.6", (15.0, 25.0), draft=draft).mark_position == pytest.approx((15.0, 25.0))
+        assert SurfaceFinish("Ra 1.6", (15.0, 25.0), draft=draft).mark_position == pytest.approx(
+            (15.0, 25.0)
+        )
 
     def test_three_stroke_segments(self, draft):
         # leg1 (diagonal), leg2 (vertical), shelf (horizontal)
@@ -774,6 +835,7 @@ class TestSurfaceFinish:
 # FeatureControlFrame
 # ---------------------------------------------------------------------------
 
+
 class TestFeatureControlFrame:
     def test_is_a_sketch(self, draft):
         assert isinstance(FeatureControlFrame("position", 0.5, ("A", "B", "C"), draft), Sketch)
@@ -790,7 +852,11 @@ class TestFeatureControlFrame:
         assert bb.min.Y == pytest.approx(0.0, abs=0.1)
 
     def test_datums_stored(self, draft):
-        assert FeatureControlFrame("position", 0.5, ("A", "B", "C"), draft).datums == ("A", "B", "C")
+        assert FeatureControlFrame("position", 0.5, ("A", "B", "C"), draft).datums == (
+            "A",
+            "B",
+            "C",
+        )
 
     def test_float_tolerance_formatted_to_precision(self, draft):
         assert FeatureControlFrame("position", 0.5, (), draft).tolerance_str == "0.5"
@@ -805,12 +871,16 @@ class TestFeatureControlFrame:
 
     def test_diameter_widens_tolerance_compartment(self, draft):
         plain = FeatureControlFrame("position", 0.5, ("A",), draft).bounding_box().size.X
-        dia = FeatureControlFrame("position", 0.5, ("A",), draft, diameter=True).bounding_box().size.X
+        dia = (
+            FeatureControlFrame("position", 0.5, ("A",), draft, diameter=True).bounding_box().size.X
+        )
         assert dia > plain
 
     def test_modifier_widens_tolerance_compartment(self, draft):
         plain = FeatureControlFrame("position", 0.5, ("A",), draft).bounding_box().size.X
-        mmc = FeatureControlFrame("position", 0.5, ("A",), draft, modifier="M").bounding_box().size.X
+        mmc = (
+            FeatureControlFrame("position", 0.5, ("A",), draft, modifier="M").bounding_box().size.X
+        )
         assert mmc > plain
 
     def test_label_is_tolerance(self, draft):
@@ -839,6 +909,7 @@ class TestFeatureControlFrame:
 # ---------------------------------------------------------------------------
 # DatumFeature
 # ---------------------------------------------------------------------------
+
 
 class TestDatumFeature:
     def test_is_a_sketch(self, draft):
@@ -874,8 +945,7 @@ class TestDatumTarget:
         # The divider runs across the circle through y=0 from -r..r, so its
         # midpoint is the circle centre at the origin.
         dt = DatumTarget("A1", draft=draft)
-        divider = next(s for s in dt.segments
-                       if abs(s[0][1]) < 0.01 and abs(s[1][1]) < 0.01)
+        divider = next(s for s in dt.segments if abs(s[0][1]) < 0.01 and abs(s[1][1]) < 0.01)
         cx = (divider[0][0] + divider[1][0]) / 2.0
         assert cx == pytest.approx(0.0, abs=0.1)
 
@@ -891,8 +961,7 @@ class TestDatumTarget:
     def test_divider_present(self, draft):
         # one horizontal divider segment through the circle centre
         dt = DatumTarget("A1", draft=draft)
-        horizontals = [s for s in dt.segments
-                       if abs(s[0][1]) < 0.01 and abs(s[1][1]) < 0.01]
+        horizontals = [s for s in dt.segments if abs(s[0][1]) < 0.01 and abs(s[1][1]) < 0.01]
         assert len(horizontals) >= 1
 
     def test_renders_on_single_ink_layer(self, draft):
@@ -919,11 +988,12 @@ class TestBasicDimension:
         res = Dimension((0, 0, 0), (20, 0, 0), "above", 8, draft, basic=True)
         x0, y0, x1, y1 = res.label_bbox
         # the four box strokes lie on the label bbox rectangle
-        on_box = [s for s in res.segments
-                  if math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1])
-                  == pytest.approx(x1 - x0, abs=0.05)
-                  or math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1])
-                  == pytest.approx(y1 - y0, abs=0.05)]
+        on_box = [
+            s
+            for s in res.segments
+            if math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) == pytest.approx(x1 - x0, abs=0.05)
+            or math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) == pytest.approx(y1 - y0, abs=0.05)
+        ]
         assert len(on_box) >= 4
 
     def test_basic_box_strokes_not_floods(self, draft):
@@ -963,7 +1033,9 @@ class TestCompositeFeatureControlFrame:
         assert CompositeFeatureControlFrame("position", self._rows(), draft).label == "0.2"
 
     def test_single_row_allowed(self, draft):
-        res = CompositeFeatureControlFrame("position", [{"tolerance": 0.1, "datums": ("A",)}], draft)
+        res = CompositeFeatureControlFrame(
+            "position", [{"tolerance": 0.1, "datums": ("A",)}], draft
+        )
         assert res.bounding_box().size.Y == pytest.approx(2 * draft.font_size, abs=0.3)
 
     def test_unknown_characteristic_raises(self, draft):
@@ -976,12 +1048,14 @@ class TestCompositeFeatureControlFrame:
 
     def test_modifier_accepted(self, draft):
         res = CompositeFeatureControlFrame(
-            "position", [{"tolerance": 0.25, "datums": ("A",), "modifier": "M"}], draft)
+            "position", [{"tolerance": 0.25, "datums": ("A",), "modifier": "M"}], draft
+        )
         assert isinstance(res, Sketch)
 
     def test_default_draft_used_when_none(self):
-        assert isinstance(CompositeFeatureControlFrame(
-            "position", [{"tolerance": 0.1, "datums": ("A",)}]), Sketch)
+        assert isinstance(
+            CompositeFeatureControlFrame("position", [{"tolerance": 0.1, "datums": ("A",)}]), Sketch
+        )
 
     def test_renders_on_single_ink_layer(self, draft):
         _export_ink(CompositeFeatureControlFrame("position", self._rows(), draft))
@@ -1022,8 +1096,18 @@ class TestHoleCallout:
         assert isinstance(HoleCallout(8.5, through=True), Sketch)
 
     def test_renders_on_single_ink_layer(self, draft):
-        _export_ink(HoleCallout(8.5, count=4, depth=20, cbore_dia=15, cbore_depth=6,
-                                csink_dia=18, csink_angle=90, draft=draft))
+        _export_ink(
+            HoleCallout(
+                8.5,
+                count=4,
+                depth=20,
+                cbore_dia=15,
+                cbore_depth=6,
+                csink_dia=18,
+                csink_angle=90,
+                draft=draft,
+            )
+        )
 
 
 class TestLeaderAllAround:
@@ -1068,9 +1152,11 @@ class TestDraftPreset:
 # Transform-aware lint metadata (label_bbox / segments / elbow track the geometry)
 # ---------------------------------------------------------------------------
 
+
 class TestTransformMetadata:
     def test_moved_shifts_label_bbox(self, draft):
         from build123d import Location, Vector
+
         d = Dimension((0, 0, 0), (30, 0, 0), "below", 6, draft, label="30")
         cx0 = (d.label_bbox[0] + d.label_bbox[2]) / 2.0
         m = d.moved(Location(Vector(50, 20, 0)))
@@ -1081,6 +1167,7 @@ class TestTransformMetadata:
 
     def test_moved_shifts_segments(self, draft):
         from build123d import Location, Vector
+
         d = Dimension((0, 0, 0), (30, 0, 0), "below", 6, draft, label="30")
         seg0 = d.segments[0]
         m = d.moved(Location(Vector(50, 0, 0)))
@@ -1089,6 +1176,7 @@ class TestTransformMetadata:
 
     def test_moved_leader_elbow_tracks(self, draft):
         from build123d import Location, Vector
+
         ld = Leader((0, 0, 0), (9, 7, 0), "X", draft)
         m = ld.moved(Location(Vector(100, 0, 0)))
         assert m.elbow[0] == pytest.approx(ld.elbow[0] + 100, abs=0.01)
@@ -1106,6 +1194,7 @@ class TestTransformMetadata:
     def test_moved_object_lints_correctly(self, draft):
         # a leader whose elbow sits in its label, then moved, still flags the pierce
         from build123d import Location, Vector
+
         # build a leader whose elbow is inside its own label region is hard; instead
         # check that moving a clean leader keeps it clean (no false positive from stale coords)
         ld = Leader((0, 0, 0), (40, 5, 0), "PART", draft).moved(Location(Vector(70, 70, 0)))
@@ -1117,6 +1206,7 @@ class TestTransformMetadata:
 # find_overlaps (pure geometry)
 # ---------------------------------------------------------------------------
 
+
 class TestFindOverlaps:
     def test_identical_sketches_overlap(self, draft):
         a = FeatureControlFrame("position", 0.5, ("A",), draft)
@@ -1127,7 +1217,8 @@ class TestFindOverlaps:
     def test_separated_sketches_no_overlap(self, draft):
         a = HoleCallout(8.5, through=True, draft=draft)
         b = HoleCallout(8.5, through=True, draft=draft).moved(
-            __import__("build123d").Pos(200, 200, 0))
+            __import__("build123d").Pos(200, 200, 0)
+        )
         assert find_overlaps([a, b]) == []
 
     def test_empty_is_safe(self):
@@ -1135,7 +1226,6 @@ class TestFindOverlaps:
 
     def test_works_on_bare_sketch(self, draft):
         # zero metadata — just two Sketches
-        from build123d import Pos
         a = Centerline((0, 0, 0), (10, 0, 0))
         b = Centerline((0, 0, 0), (0, 10, 0))
         # they cross at origin -> thin faces intersect
@@ -1147,16 +1237,21 @@ class TestFindOverlaps:
 # find_interferences (geometry-precise, duck-typed)
 # ---------------------------------------------------------------------------
 
+
 class TestFindInterferences:
     def _msgs(self, issues):
         return " | ".join(i.message for i in issues)
 
     def test_witness_line_pierces_neighbour_label(self, draft):
-        dims = place_dims([
-            ((-18, -10, 0), (18, -10, 0), "below", "36"),
-            ((-18, -10, 0), (0, -10, 0), "below", "18"),
-            ((18, -10, 0), (18, 10, 0), "right", "20"),
-        ], draft, base_distance=6)
+        dims = place_dims(
+            [
+                ((-18, -10, 0), (18, -10, 0), "below", "36"),
+                ((-18, -10, 0), (0, -10, 0), "below", "18"),
+                ((18, -10, 0), (18, 10, 0), "right", "20"),
+            ],
+            draft,
+            base_distance=6,
+        )
         issues = find_interferences(dims)
         assert any("pierces" in i.message for i in issues), self._msgs(issues)
 
@@ -1176,6 +1271,7 @@ class TestFindInterferences:
 
     def test_label_outside_page_frame_flagged(self, draft):
         from build123d import Box
+
         dims = [Dimension((-18, -10, 0), (18, -10, 0), "below", 6, draft, label="36")]
         page = Box(40, 5, 1).bounding_box()
         issues = find_interferences(dims, page_bbox=page)
@@ -1187,6 +1283,7 @@ class TestFindInterferences:
     def test_duck_typed_namespace(self, draft):
         # SimpleNamespace stand-ins with .label_bbox/.segments must work
         from types import SimpleNamespace
+
         a = SimpleNamespace(label="A", label_bbox=(0, 0, 10, 4), segments=[])
         b = SimpleNamespace(label="B", label_bbox=(2, 1, 12, 5), segments=[])
         issues = find_interferences([a, b])
@@ -1195,30 +1292,42 @@ class TestFindInterferences:
 
 class TestFindInterferencesRedundantLines:
     def test_shared_endpoint_witness_lines_flagged(self, draft):
-        dims = place_dims([
-            ((-18, -10, 0), (18, -10, 0), "below", "36"),
-            ((-18, -10, 0), (0, -10, 0), "below", "18"),
-        ], draft, base_distance=5)
+        dims = place_dims(
+            [
+                ((-18, -10, 0), (18, -10, 0), "below", "36"),
+                ((-18, -10, 0), (0, -10, 0), "below", "18"),
+            ],
+            draft,
+            base_distance=5,
+        )
         issues = find_interferences(dims)
-        assert any("redundant" in i.message for i in issues), \
-            " | ".join(i.message for i in issues)
+        assert any("redundant" in i.message for i in issues), " | ".join(i.message for i in issues)
 
     def test_no_shared_endpoints_is_clean(self, draft):
-        dims = place_dims([
-            ((-8, -10, 0), (8, -10, 0), "below", "16"),
-            ((-18, -10, 0), (18, -10, 0), "below", "36"),
-        ], draft, base_distance=5)
+        dims = place_dims(
+            [
+                ((-8, -10, 0), (8, -10, 0), "below", "16"),
+                ((-18, -10, 0), (18, -10, 0), "below", "36"),
+            ],
+            draft,
+            base_distance=5,
+        )
         issues = find_interferences(dims)
-        assert not any("redundant" in i.message for i in issues), \
-            " | ".join(i.message for i in issues)
+        assert not any("redundant" in i.message for i in issues), " | ".join(
+            i.message for i in issues
+        )
 
 
 class TestFindInterferencesSeverity:
     def test_pierce_is_error_redundant_is_warning(self, draft):
-        dims = place_dims([
-            ((-18, -10, 0), (18, -10, 0), "below", "36"),
-            ((-18, -10, 0), (0, -10, 0), "below", "18"),
-        ], draft, base_distance=5)
+        dims = place_dims(
+            [
+                ((-18, -10, 0), (18, -10, 0), "below", "36"),
+                ((-18, -10, 0), (0, -10, 0), "below", "18"),
+            ],
+            draft,
+            base_distance=5,
+        )
         issues = find_interferences(dims)
         errors = [i for i in issues if i.severity == "error"]
         warnings = [i for i in issues if i.severity == "warning"]
@@ -1228,10 +1337,14 @@ class TestFindInterferencesSeverity:
 
 class TestLintIssueCode:
     def test_find_interferences_sets_codes(self, draft):
-        dims = place_dims([
-            ((-18, -10, 0), (18, -10, 0), "below", "36"),
-            ((-18, -10, 0), (0, -10, 0), "below", "18"),
-        ], draft, base_distance=5)
+        dims = place_dims(
+            [
+                ((-18, -10, 0), (18, -10, 0), "below", "36"),
+                ((-18, -10, 0), (0, -10, 0), "below", "18"),
+            ],
+            draft,
+            base_distance=5,
+        )
         codes = {i.code for i in find_interferences(dims)}
         assert "line_pierces_label" in codes
         assert "redundant_lines" in codes
@@ -1251,6 +1364,7 @@ class TestLeaderLabelBbox:
     def test_lint_leader_uses_label_bbox_without_geometry(self):
         # duck-typed stand-in: only label_bbox + elbow, no Sketch geometry
         from types import SimpleNamespace
+
         r = SimpleNamespace(label="X", elbow=(5, 1), label_bbox=(0, 0, 10, 2))
         codes = {i.code for i in lint_drawing([r])}
         assert "leader_line_through_text" in codes
@@ -1271,6 +1385,7 @@ class TestFindInterferencesObstacles:
 
     def test_accepts_boundbox(self, draft):
         from build123d import Box, Pos
+
         d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
         lb = d.label_bbox
         cx, cy = (lb[0] + lb[2]) / 2, (lb[1] + lb[3]) / 2
@@ -1293,16 +1408,19 @@ class TestAnnotationOverlapLabelBbox:
         # Four stacked height dims from the same left anchor — all witness lines
         # share the same X and their full bboxes nest inside each other. Only
         # the label text regions should be compared; they don't overlap.
-        dims = place_dims([
-            ((0, 0, 0), (0, 15, 0), "left", "15"),
-            ((0, 0, 0), (0, 30, 0), "left", "30"),
-            ((0, 0, 0), (0, 45, 0), "left", "45"),
-            ((0, 0, 0), (0, 60, 0), "left", "60"),
-        ], draft, base_distance=8)
+        dims = place_dims(
+            [
+                ((0, 0, 0), (0, 15, 0), "left", "15"),
+                ((0, 0, 0), (0, 30, 0), "left", "30"),
+                ((0, 0, 0), (0, 45, 0), "left", "45"),
+                ((0, 0, 0), (0, 60, 0), "left", "60"),
+            ],
+            draft,
+            base_distance=8,
+        )
         overlaps = [i for i in lint_drawing(dims) if i.code == "annotation_overlap"]
-        assert overlaps == [], (
-            "stacked dims should not produce annotation_overlap — "
-            + "; ".join(i.message for i in overlaps)
+        assert overlaps == [], "stacked dims should not produce annotation_overlap — " + "; ".join(
+            i.message for i in overlaps
         )
 
     def test_truly_overlapping_labels_still_flagged(self, draft):
@@ -1320,6 +1438,7 @@ class TestLintViewShapes:
     def _make_box_shape(self, x, y, w, h):
         """Return a build123d Box located at (x+w/2, y+h/2) — stands in for a projected view."""
         from build123d import Box, Pos
+
         return Pos(x + w / 2, y + h / 2, 0) * Box(w, h, 0.01)
 
     # --- no view_shapes: existing behaviour unchanged ---
@@ -1349,8 +1468,9 @@ class TestLintViewShapes:
     def test_view_annotation_overlap_severity_warning(self, draft):
         view = self._make_box_shape(0, 0, 40, 30)
         d = Dimension((5, 10, 0), (15, 10, 0), "above", 4, draft, label="10")
-        issues = [i for i in lint_drawing([d], view_shapes=[view])
-                  if i.code == "view_annotation_overlap"]
+        issues = [
+            i for i in lint_drawing([d], view_shapes=[view]) if i.code == "view_annotation_overlap"
+        ]
         assert issues and issues[0].severity == "warning"
 
     # --- #160: view vs view ---
@@ -1370,17 +1490,15 @@ class TestLintViewShapes:
     def test_view_overlap_severity_warning(self):
         v1 = self._make_box_shape(0, 0, 60, 40)
         v2 = self._make_box_shape(50, 0, 60, 40)
-        issues = [i for i in lint_drawing([], view_shapes=[v1, v2])
-                  if i.code == "view_overlap"]
+        issues = [i for i in lint_drawing([], view_shapes=[v1, v2]) if i.code == "view_overlap"]
         assert issues and issues[0].severity == "warning"
 
     def test_three_views_only_adjacent_pairs_flagged(self):
         # v1 overlaps v2; v2 overlaps v3; v1 and v3 do not overlap each other
         v1 = self._make_box_shape(0, 0, 60, 40)
-        v2 = self._make_box_shape(50, 0, 60, 40)   # overlaps v1
+        v2 = self._make_box_shape(50, 0, 60, 40)  # overlaps v1
         v3 = self._make_box_shape(100, 0, 60, 40)  # overlaps v2, clear of v1
-        issues = [i for i in lint_drawing([], view_shapes=[v1, v2, v3])
-                  if i.code == "view_overlap"]
+        issues = [i for i in lint_drawing([], view_shapes=[v1, v2, v3]) if i.code == "view_overlap"]
         assert len(issues) == 2
 
     def test_empty_view_shapes_list_no_error(self, draft):
@@ -1391,6 +1509,7 @@ class TestLintViewShapes:
     def test_invalid_view_shape_skipped_gracefully(self, draft):
         # A non-shape object with no bounding_box should be silently skipped
         from types import SimpleNamespace
+
         bad = SimpleNamespace()  # no bounding_box attribute
         d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
         issues = lint_drawing([d], view_shapes=[bad])  # must not raise

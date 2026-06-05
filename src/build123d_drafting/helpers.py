@@ -28,18 +28,18 @@ text) is rendered as thin filled *faces* — there is a single ink layer, no
 
   find_overlaps Pure-geometry collision: pairs of sketches whose faces intersect.
 """
+
 from __future__ import annotations
 
 import math
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from build123d import (
     Align,
     Arrow,
     Color,  # noqa: F401 — re-exported convenience
-    Compound,
     DimensionLine,
     Draft,
     Edge,
@@ -55,17 +55,17 @@ from build123d import (
 from build123d.objects_sketch import BaseSketchObject
 from build123d.operations_generic import sweep
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class LintIssue:
     severity: Literal["error", "warning"]
     message: str
     location: tuple[float, float] | None = None
-    code: str = ""   # stable machine-readable check id, e.g. "label_vs_measured"
+    code: str = ""  # stable machine-readable check id, e.g. "label_vs_measured"
 
 
 def _segments(edges):
@@ -92,9 +92,7 @@ def _split_circles(edges):
     out = []
     for e in edges:
         try:
-            is_full_circle = (
-                e.geom_type == GeomType.CIRCLE and e.is_closed
-            )
+            is_full_circle = e.geom_type == GeomType.CIRCLE and e.is_closed
         except Exception:
             is_full_circle = False
         if is_full_circle:
@@ -102,8 +100,10 @@ def _split_circles(edges):
             centre = e.arc_center
             loc = Location(centre)
             for a0, a1 in ((0, 180), (180, 360)):
-                out += [arc.moved(loc) for arc in
-                        Edge.make_circle(r, start_angle=a0, end_angle=a1).edges()]
+                out += [
+                    arc.moved(loc)
+                    for arc in Edge.make_circle(r, start_angle=a0, end_angle=a1).edges()
+                ]
         else:
             out.append(e)
     return out
@@ -133,6 +133,7 @@ def _strokes_and_text(strokes, text_faces, line_width):
 # ---------------------------------------------------------------------------
 # Annotation base — transform-aware lint metadata
 # ---------------------------------------------------------------------------
+
 
 def _rot_pt(pt, ang_deg):
     """Rotate (x, y) about the origin by ang_deg degrees (Z axis)."""
@@ -185,8 +186,17 @@ class _Annotation(BaseSketchObject):
     ``BaseSketchObject`` bakes into the geometry — is baked into the cache too.
     """
 
-    def __init__(self, sketch, *, label="", label_bbox=None, segments=None,
-                 rotation=0, align=None, mode=Mode.ADD):
+    def __init__(
+        self,
+        sketch,
+        *,
+        label="",
+        label_bbox=None,
+        segments=None,
+        rotation=0,
+        align=None,
+        mode=Mode.ADD,
+    ):
         # The align offset BaseSketchObject will apply — measured before super()
         # mutates `sketch` (its align path moves the sketch in place).
         off = (0.0, 0.0)
@@ -200,8 +210,7 @@ class _Annotation(BaseSketchObject):
         self.label = label
         self._label_bbox_local = _bake_bbox(label_bbox, off, rotation) if label_bbox else None
         self._segments_local = [
-            (_bake_pt(a, off, rotation), _bake_pt(b, off, rotation))
-            for a, b in (segments or [])
+            (_bake_pt(a, off, rotation), _bake_pt(b, off, rotation)) for a, b in (segments or [])
         ]
 
     def _loc(self):
@@ -231,8 +240,8 @@ class _Annotation(BaseSketchObject):
 # Draft preset
 # ---------------------------------------------------------------------------
 
-def draft_preset(font_size: float = 2.5, decimal_precision: int = 2,
-                 **overrides) -> Draft:
+
+def draft_preset(font_size: float = 2.5, decimal_precision: int = 2, **overrides) -> Draft:
     """A ``Draft`` tuned for clean technical-drawing output.
 
     Scales the arrowhead to the font and uses a thin line, closer to ISO
@@ -243,7 +252,7 @@ def draft_preset(font_size: float = 2.5, decimal_precision: int = 2,
 
     Any field can be overridden by keyword.
     """
-    params = dict(
+    params: dict[str, Any] = dict(
         font_size=font_size,
         decimal_precision=decimal_precision,
         arrow_length=0.9 * font_size,
@@ -258,10 +267,10 @@ def draft_preset(font_size: float = 2.5, decimal_precision: int = 2,
 # ---------------------------------------------------------------------------
 
 _SIDE_VECTORS: dict[str, tuple[float, float, float]] = {
-    "above": (0.0,  1.0, 0.0),
+    "above": (0.0, 1.0, 0.0),
     "below": (0.0, -1.0, 0.0),
-    "left":  (-1.0, 0.0, 0.0),
-    "right": ( 1.0, 0.0, 0.0),
+    "left": (-1.0, 0.0, 0.0),
+    "right": (1.0, 0.0, 0.0),
 }
 
 
@@ -347,8 +356,14 @@ class Dimension(_Annotation):
                 mode=Mode.PRIVATE,
             )
         except ValueError:
-            el = ExtensionLine(border=[p1, p2], offset=offset, draft=draft,
-                               label=None, tolerance=None, mode=Mode.PRIVATE)
+            el = ExtensionLine(
+                border=[p1, p2],
+                offset=offset,
+                draft=draft,
+                label=None,
+                tolerance=None,
+                mode=Mode.PRIVATE,
+            )
             label_offset_x = label_offset_x or 0.0
             _force_external = True
 
@@ -362,15 +377,18 @@ class Dimension(_Annotation):
         mid_y = (p1[1] + p2[1]) / 2.0
         dxp, dyp = p2[0] - p1[0], p2[1] - p1[1]
         plen = math.hypot(dxp, dyp) or 1.0
-        ux, uy = dxp / plen, dyp / plen        # path direction
-        nx, ny = uy, -ux                       # right-hand normal
+        ux, uy = dxp / plen, dyp / plen  # path direction
+        nx, ny = uy, -ux  # right-hand normal
         label_cx = mid_x + nx * offset + ux * label_offset_x
         label_cy = mid_y + ny * offset + uy * label_offset_x
         vertical = abs(dyp) > abs(dxp)
 
         probe = Text(
-            txt=label_str, font_size=draft.font_size, font=draft.font,
-            align=Align.CENTER, mode=Mode.PRIVATE,
+            txt=label_str,
+            font_size=draft.font_size,
+            font=draft.font,
+            align=Align.CENTER,
+            mode=Mode.PRIVATE,
         )
         text_bb = probe.bounding_box()
         half_w = text_bb.size.X / 2.0
@@ -384,19 +402,32 @@ class Dimension(_Annotation):
         extra_text: list = []
 
         if label_offset_x != 0.0 or _force_external:
-            extra_text.append(Text(
-                txt=label_str, font_size=draft.font_size, font=draft.font,
-                align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE,
-            ).moved(Location(Vector(label_cx, label_cy, 0.0),
-                             Vector(0, 0, 1), 90.0 if vertical else 0.0)))
+            extra_text.append(
+                Text(
+                    txt=label_str,
+                    font_size=draft.font_size,
+                    font=draft.font,
+                    align=(Align.CENTER, Align.CENTER),
+                    mode=Mode.PRIVATE,
+                ).moved(
+                    Location(
+                        Vector(label_cx, label_cy, 0.0), Vector(0, 0, 1), 90.0 if vertical else 0.0
+                    )
+                )
+            )
 
         if basic:
             bpad = 0.4 * draft.font_size
             bx0, by0, bx1, by1 = label_bbox_tuple
-            bx0 -= bpad; by0 -= bpad; bx1 += bpad; by1 += bpad
+            bx0 -= bpad
+            by0 -= bpad
+            bx1 += bpad
+            by1 += bpad
             corners = [(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1), (bx0, by0)]
-            strokes += [Edge.make_line(Vector(a[0], a[1], 0), Vector(b[0], b[1], 0))
-                        for a, b in zip(corners, corners[1:])]
+            strokes += [
+                Edge.make_line(Vector(a[0], a[1], 0), Vector(b[0], b[1], 0))
+                for a, b in zip(corners, corners[1:], strict=False)
+            ]
             label_bbox_tuple = (bx0, by0, bx1, by1)
 
         # Combine ExtensionLine faces, any box strokes (as thin faces) and extra text.
@@ -408,8 +439,15 @@ class Dimension(_Annotation):
         # segments come from the ExtensionLine's straight edges + box strokes
         seg = _segments(el.edges()) + _segments(strokes)
 
-        super().__init__(sk, label=label_str, label_bbox=label_bbox_tuple,
-                         segments=seg, rotation=rotation, align=align, mode=mode)
+        super().__init__(
+            sk,
+            label=label_str,
+            label_bbox=label_bbox_tuple,
+            segments=seg,
+            rotation=rotation,
+            align=align,
+            mode=mode,
+        )
         self.measured_length = measured
         self.dim_level_y = dim_level_y
         self.is_basic = basic
@@ -467,14 +505,22 @@ class SafeDimension(_Annotation):
         else:
             sk = Sketch(children=faces)
 
-        super().__init__(sk, label=chosen_label, label_bbox=None, segments=seg,
-                         rotation=rotation, align=align, mode=mode)
+        super().__init__(
+            sk,
+            label=chosen_label,
+            label_bbox=None,
+            segments=seg,
+            rotation=rotation,
+            align=align,
+            mode=mode,
+        )
         self.measured_length = measured
 
 
 # ---------------------------------------------------------------------------
 # centerline  ->  Centerline
 # ---------------------------------------------------------------------------
+
 
 class Centerline(_Annotation):
     """A centreline between two points — a single thin line rendered as a face.
@@ -496,14 +542,16 @@ class Centerline(_Annotation):
         v2 = Vector(p2[0], p2[1], p2[2] if len(p2) > 2 else 0.0)
         edge = Edge.make_line(v1, v2)
         sk, seg = _strokes_and_text([edge], [], line_width)
-        super().__init__(sk, label="", label_bbox=None, segments=seg,
-                         rotation=rotation, align=align, mode=mode)
+        super().__init__(
+            sk, label="", label_bbox=None, segments=seg, rotation=rotation, align=align, mode=mode
+        )
         self.is_centerline = True
 
 
 # ---------------------------------------------------------------------------
 # leader  ->  Leader
 # ---------------------------------------------------------------------------
+
 
 class Leader(_Annotation):
     """Leader annotation with arrowhead at *tip* and label hanging from *elbow*.
@@ -539,8 +587,11 @@ class Leader(_Annotation):
         elbow_v = Vector(elbow[0], elbow[1], 0.0)
 
         probe = Text(
-            txt=label, font_size=draft.font_size, font=draft.font,
-            align=Align.CENTER, mode=Mode.PRIVATE,
+            txt=label,
+            font_size=draft.font_size,
+            font=draft.font,
+            align=Align.CENTER,
+            mode=Mode.PRIVATE,
         )
         text_w = probe.bounding_box().size.X  # noqa: F841 — kept for clarity/parity
         gap = draft.pad_around_text
@@ -588,18 +639,27 @@ class Leader(_Annotation):
             text_x = elbow_v.X - gap
 
         text_shape = Text(
-            txt=label, font_size=draft.font_size, font=draft.font,
-            align=text_align, mode=Mode.PRIVATE,
+            txt=label,
+            font_size=draft.font_size,
+            font=draft.font,
+            align=text_align,
+            mode=Mode.PRIVATE,
         ).moved(Location(Vector(text_x, elbow_v.Y, 0.0)))
         _tb = text_shape.bounding_box()
         faces.append(text_shape)
 
         sk = Sketch(children=faces)
-        seg = (_segments([shaft_edge, shelf_edge]))
+        seg = _segments([shaft_edge, shelf_edge])
 
-        super().__init__(sk, label=label,
-                         label_bbox=(_tb.min.X, _tb.min.Y, _tb.max.X, _tb.max.Y),
-                         segments=seg, rotation=rotation, align=align, mode=mode)
+        super().__init__(
+            sk,
+            label=label,
+            label_bbox=(_tb.min.X, _tb.min.Y, _tb.max.X, _tb.max.Y),
+            segments=seg,
+            rotation=rotation,
+            align=align,
+            mode=mode,
+        )
         self._tip_local = self._bake_point((tip_v.X, tip_v.Y))
         self._elbow_local = self._bake_point((elbow_v.X, elbow_v.Y))
 
@@ -613,8 +673,14 @@ class Leader(_Annotation):
 
 
 _COMPASS_ANGLES = {
-    "E":  0.0, "NE": 45.0, "N":  90.0, "NW": 135.0,
-    "W":  180.0, "SW": 225.0, "S":  270.0, "SE": 315.0,
+    "E": 0.0,
+    "NE": 45.0,
+    "N": 90.0,
+    "NW": 135.0,
+    "W": 180.0,
+    "SW": 225.0,
+    "S": 270.0,
+    "SE": 315.0,
 }
 
 
@@ -653,15 +719,26 @@ def leader_offset(
 # view_axes — pure Python helpers (no OCC import)
 # ---------------------------------------------------------------------------
 
-def _dot3(a, b): return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
-def _sub3(a, b): return (a[0]-b[0], a[1]-b[1], a[2]-b[2])
-def _scale3(s, v): return (s*v[0], s*v[1], s*v[2])
-def _cross3(a, b): return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+
+def _dot3(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _sub3(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _scale3(s, v):
+    return (s * v[0], s * v[1], s * v[2])
+
+
+def _cross3(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
 
 
 def _norm3(v):
     mag = math.sqrt(_dot3(v, v))
-    return (v[0]/mag, v[1]/mag, v[2]/mag) if mag > 1e-10 else (0.0, 0.0, 0.0)
+    return (v[0] / mag, v[1] / mag, v[2] / mag) if mag > 1e-10 else (0.0, 0.0, 0.0)
 
 
 def view_axes(
@@ -700,6 +777,7 @@ def view_axes(
 # place_dims
 # ---------------------------------------------------------------------------
 
+
 def place_dims(
     specs: list[tuple],
     draft: Draft,
@@ -730,7 +808,8 @@ def place_dims(
         toward = _SIDE_VECTORS[side] if isinstance(side, str) else tuple(side)
         use_x = abs(toward[1]) >= abs(toward[0])
         span = (
-            (min(p1[0], p2[0]), max(p1[0], p2[0])) if use_x
+            (min(p1[0], p2[0]), max(p1[0], p2[0]))
+            if use_x
             else (min(p1[1], p2[1]), max(p1[1], p2[1]))
         )
 
@@ -745,9 +824,7 @@ def place_dims(
             tier_occupancy.append([span])
 
         offset = base_distance + assigned * tier_spacing
-        results.append(
-            Dimension(p1, p2, side, offset, draft, label=label, tolerance=tolerance)
-        )
+        results.append(Dimension(p1, p2, side, offset, draft, label=label, tolerance=tolerance))
 
     return results
 
@@ -755,6 +832,7 @@ def place_dims(
 # ---------------------------------------------------------------------------
 # place_labels
 # ---------------------------------------------------------------------------
+
 
 def _centerline_extent(cl_item):
     """Return (min_x, min_y, max_x, max_y) for a centreline.
@@ -823,8 +901,16 @@ def place_labels(
         dim = Dimension(p1, p2, side, distance, draft, label=label, tolerance=tolerance)
         offset_x = _compute_label_offset_x(dim, centerlines, gap)
         if offset_x != 0.0:
-            dim = Dimension(p1, p2, side, distance, draft, label=label,
-                            tolerance=tolerance, label_offset_x=offset_x)
+            dim = Dimension(
+                p1,
+                p2,
+                side,
+                distance,
+                draft,
+                label=label,
+                tolerance=tolerance,
+                label_offset_x=offset_x,
+            )
         results.append(dim)
     return results
 
@@ -833,9 +919,14 @@ def place_labels(
 # lint_drawing — generic / duck-typed
 # ---------------------------------------------------------------------------
 
-def lint_drawing(items, part_bbox=None, page_bbox=None,
-                 drawing_scale: float = 1.0,
-                 view_shapes: list | None = None) -> list[LintIssue]:
+
+def lint_drawing(
+    items,
+    part_bbox=None,
+    page_bbox=None,
+    drawing_scale: float = 1.0,
+    view_shapes: list | None = None,
+) -> list[LintIssue]:
     """Structural checks on a composed annotation list, duck-typed.
 
     Dispatch is by attribute presence, not type:
@@ -898,7 +989,7 @@ def lint_drawing(items, part_bbox=None, page_bbox=None,
             _lint_dim(item, part_bbox, issues, drawing_scale)
 
     for i, item_a in enumerate(items):
-        for item_b in items[i + 1:]:
+        for item_b in items[i + 1 :]:
             try:
                 is_cl_a = getattr(item_a, "is_centerline", False)
                 is_cl_b = getattr(item_b, "is_centerline", False)
@@ -931,15 +1022,17 @@ def lint_drawing(items, part_bbox=None, page_bbox=None,
                 if ox > 0.5 and oy > 0.5:
                     la = getattr(item_a, "label", "?")
                     lb = getattr(item_b, "label", "?")
-                    issues.append(LintIssue(
-                        severity="warning",
-                        message=(
-                            f"labels '{la}' and '{lb}' overlap by "
-                            f"{ox:.1f}×{oy:.1f} mm — use label_offset_x or "
-                            f"increase dim offset to separate them"
-                        ),
-                        code="annotation_overlap",
-                    ))
+                    issues.append(
+                        LintIssue(
+                            severity="warning",
+                            message=(
+                                f"labels '{la}' and '{lb}' overlap by "
+                                f"{ox:.1f}×{oy:.1f} mm — use label_offset_x or "
+                                f"increase dim offset to separate them"
+                            ),
+                            code="annotation_overlap",
+                        )
+                    )
             except Exception:
                 pass
 
@@ -960,12 +1053,16 @@ def lint_drawing(items, part_bbox=None, page_bbox=None,
                     overshoots.append(f"above by {bb.max.Y - py1:.1f} mm")
                 for detail in overshoots:
                     lbl = getattr(item, "label", None) or "?"
-                    issues.append(LintIssue(
-                        severity="error",
-                        message=(f"annotation '{lbl}' extends past drawable area "
-                                 f"({detail}) — increase margin or reduce offset"),
-                        code="annotation_out_of_bounds",
-                    ))
+                    issues.append(
+                        LintIssue(
+                            severity="error",
+                            message=(
+                                f"annotation '{lbl}' extends past drawable area "
+                                f"({detail}) — increase margin or reduce offset"
+                            ),
+                            code="annotation_out_of_bounds",
+                        )
+                    )
             except Exception:
                 pass
 
@@ -1015,37 +1112,45 @@ def _lint_view_shapes(view_shapes, ann_items, issues) -> None:
                 if ab is None:
                     continue
                 if _bboxes_overlap_2d(vbb, ab):
-                    albl = getattr(ann, "label", None) or getattr(ann, "name", None) or type(ann).__name__
-                    issues.append(LintIssue(
-                        severity="warning",
-                        message=(
-                            f"view '{vname}' bbox "
-                            f"[x={vx0:.1f}–{vx1:.1f}, y={vy0:.1f}–{vy1:.1f}] "
-                            f"overlaps annotation '{albl}' — increase view spacing "
-                            f"or move the annotation"
-                        ),
-                        code="view_annotation_overlap",
-                    ))
+                    albl = (
+                        getattr(ann, "label", None)
+                        or getattr(ann, "name", None)
+                        or type(ann).__name__
+                    )
+                    issues.append(
+                        LintIssue(
+                            severity="warning",
+                            message=(
+                                f"view '{vname}' bbox "
+                                f"[x={vx0:.1f}–{vx1:.1f}, y={vy0:.1f}–{vy1:.1f}] "
+                                f"overlaps annotation '{albl}' — increase view spacing "
+                                f"or move the annotation"
+                            ),
+                            code="view_annotation_overlap",
+                        )
+                    )
             except Exception:
                 pass
 
     # #160 — view shape vs view shape bounding box overlaps
     for i, (aname, abb) in enumerate(named_bboxes):
         ax0, ay0, ax1, ay1 = abb
-        for bname, bbb in named_bboxes[i + 1:]:
+        for bname, bbb in named_bboxes[i + 1 :]:
             bx0, by0, bx1, by1 = bbb
             if _bboxes_overlap_2d(abb, bbb):
-                issues.append(LintIssue(
-                    severity="warning",
-                    message=(
-                        f"view '{aname}' bbox "
-                        f"[x={ax0:.1f}–{ax1:.1f}, y={ay0:.1f}–{ay1:.1f}] "
-                        f"overlaps view '{bname}' "
-                        f"[x={bx0:.1f}–{bx1:.1f}, y={by0:.1f}–{by1:.1f}] "
-                        f"— increase spacing between views"
-                    ),
-                    code="view_overlap",
-                ))
+                issues.append(
+                    LintIssue(
+                        severity="warning",
+                        message=(
+                            f"view '{aname}' bbox "
+                            f"[x={ax0:.1f}–{ax1:.1f}, y={ay0:.1f}–{ay1:.1f}] "
+                            f"overlaps view '{bname}' "
+                            f"[x={bx0:.1f}–{bx1:.1f}, y={by0:.1f}–{by1:.1f}] "
+                            f"— increase spacing between views"
+                        ),
+                        code="view_overlap",
+                    )
+                )
 
 
 def _lint_centerline_dim_overlap(dim_item, cl_item, issues) -> None:
@@ -1078,15 +1183,17 @@ def _lint_centerline_dim_overlap(dim_item, cl_item, issues) -> None:
 
         if ox > 0.5 and oy > 0.5:
             dim_label = getattr(dim_item, "label", "?")
-            issues.append(LintIssue(
-                severity="warning",
-                message=(
-                    f"label '{dim_label}' overlaps centerline by "
-                    f"{ox:.1f}×{oy:.1f} mm — use label_offset_x to shift "
-                    f"or increase dim offset to clear the centerline"
-                ),
-                code="label_centerline_overlap",
-            ))
+            issues.append(
+                LintIssue(
+                    severity="warning",
+                    message=(
+                        f"label '{dim_label}' overlaps centerline by "
+                        f"{ox:.1f}×{oy:.1f} mm — use label_offset_x to shift "
+                        f"or increase dim offset to clear the centerline"
+                    ),
+                    code="label_centerline_overlap",
+                )
+            )
     except Exception:
         pass
 
@@ -1109,18 +1216,23 @@ def _lint_dim(item, part_bbox, issues, drawing_scale: float = 1.0) -> None:
             if effective_measured > 1e-6:
                 ratio = abs(label_val - effective_measured) / effective_measured
                 if ratio > 0.005:
-                    issues.append(LintIssue(
-                        severity="warning",
-                        message=(
-                            f"Dim '{label}': label value {label_val:.3f} differs from "
-                            f"measured path length {measured:.3f}"
-                            + (f" (÷{drawing_scale} = {effective_measured:.3f})"
-                               if drawing_scale != 1.0 else "")
-                            + f" by {ratio*100:.1f}% "
-                            f"— possible axis swap or wrong endpoint"
-                        ),
-                        code="label_vs_measured",
-                    ))
+                    issues.append(
+                        LintIssue(
+                            severity="warning",
+                            message=(
+                                f"Dim '{label}': label value {label_val:.3f} differs from "
+                                f"measured path length {measured:.3f}"
+                                + (
+                                    f" (÷{drawing_scale} = {effective_measured:.3f})"
+                                    if drawing_scale != 1.0
+                                    else ""
+                                )
+                                + f" by {ratio * 100:.1f}% "
+                                f"— possible axis swap or wrong endpoint"
+                            ),
+                            code="label_vs_measured",
+                        )
+                    )
         except ValueError:
             pass
 
@@ -1134,14 +1246,16 @@ def _lint_dim(item, part_bbox, issues, drawing_scale: float = 1.0) -> None:
         overlap = ox * oy
         dim_area = max((db.max.X - db.min.X) * (db.max.Y - db.min.Y), 1e-9)
         if overlap / dim_area > 0.10:
-            issues.append(LintIssue(
-                severity="warning",
-                message=(
-                    f"Dim '{label}': annotation bbox overlaps part outline by "
-                    f"{overlap/dim_area*100:.0f}% — offset sign may place it inside the view"
-                ),
-                code="dim_inside_part",
-            ))
+            issues.append(
+                LintIssue(
+                    severity="warning",
+                    message=(
+                        f"Dim '{label}': annotation bbox overlaps part outline by "
+                        f"{overlap / dim_area * 100:.0f}% — offset sign may place it inside the view"
+                    ),
+                    code="dim_inside_part",
+                )
+            )
 
 
 def _lint_leader(item, issues) -> None:
@@ -1154,16 +1268,18 @@ def _lint_leader(item, issues) -> None:
             minx, miny, maxx, maxy = tb.min.X, tb.min.Y, tb.max.X, tb.max.Y
         ex, ey = item.elbow
         if minx <= ex <= maxx and miny <= ey <= maxy:
-            issues.append(LintIssue(
-                severity="error",
-                message=(
-                    f"Leader '{getattr(item, 'label', '?')}': elbow point "
-                    f"({ex:.2f}, {ey:.2f}) is inside the label bbox — leader "
-                    f"line passes through the text"
-                ),
-                location=item.elbow,
-                code="leader_line_through_text",
-            ))
+            issues.append(
+                LintIssue(
+                    severity="error",
+                    message=(
+                        f"Leader '{getattr(item, 'label', '?')}': elbow point "
+                        f"({ex:.2f}, {ey:.2f}) is inside the label bbox — leader "
+                        f"line passes through the text"
+                    ),
+                    location=item.elbow,
+                    code="leader_line_through_text",
+                )
+            )
     except Exception:
         pass
 
@@ -1171,6 +1287,7 @@ def _lint_leader(item, issues) -> None:
 # ---------------------------------------------------------------------------
 # iso_title_block  ->  TitleBlock
 # ---------------------------------------------------------------------------
+
 
 def format_drawing_scale(scale: float) -> str:
     """Format an N:1 drawing-scale factor as a conventional ISO scale string.
@@ -1308,9 +1425,13 @@ class TitleBlock(_Annotation):
         def _cell_txt(value, cx, cy):
             if not value:
                 return None
-            return Text(txt=value, font_size=fs, font=font,
-                        align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE,
-                        ).moved(Location(Vector(cx, cy, 0.0)))
+            return Text(
+                txt=value,
+                font_size=fs,
+                font=font,
+                align=(Align.CENTER, Align.CENTER),
+                mode=Mode.PRIVATE,
+            ).moved(Location(Vector(cx, cy, 0.0)))
 
         # Small field-identifier labels anchored to bottom-left of each cell.
         lfs = fs * 0.5
@@ -1322,35 +1443,39 @@ class TitleBlock(_Annotation):
         def _label(text, x_left, y_bottom):
             if not show_labels or not _label_fits:
                 return None
-            return Text(txt=text, font_size=lfs, font=font,
-                        align=(Align.MIN, Align.MIN), mode=Mode.PRIVATE,
-                        ).moved(Location(Vector(x_left + lpad, y_bottom + lpad, 0.0)))
+            return Text(
+                txt=text,
+                font_size=lfs,
+                font=font,
+                align=(Align.MIN, Align.MIN),
+                mode=Mode.PRIVATE,
+            ).moved(Location(Vector(x_left + lpad, y_bottom + lpad, 0.0)))
 
         top_y_mid = (y1 + y2) / 2.0
         # revision takes priority over date in the top-right cell (ISO 7200 field 4).
         col5_value, col5_label = (revision, "REV") if revision else (date, "DATE")
         top_cells = [
-            (part_name,      (x[0] + x[1]) / 2.0),
+            (part_name, (x[0] + x[1]) / 2.0),
             (drawing_number, (x[1] + x[2]) / 2.0),
-            (scale,          (x[2] + x[3]) / 2.0),
-            (material,       (x[3] + x[4]) / 2.0),
-            (col5_value,     (x[4] + x[5]) / 2.0),
+            (scale, (x[2] + x[3]) / 2.0),
+            (material, (x[3] + x[4]) / 2.0),
+            (col5_value, (x[4] + x[5]) / 2.0),
         ]
         top_label_specs = [
-            ("TITLE",   x[0], y1),
+            ("TITLE", x[0], y1),
             ("DWG NO.", x[1], y1),
-            ("SCALE",   x[2], y1),
-            ("MAT.",    x[3], y1),
+            ("SCALE", x[2], y1),
+            ("MAT.", x[3], y1),
             (col5_label, x[4], y1),
         ]
         bot_y_mid = (y0 + y1) / 2.0
         bot_cells = [
             (general_tolerance, (x[0] + x[1]) / 2.0),
-            (designed_by,       (x[1] + x[-1]) / 2.0),
+            (designed_by, (x[1] + x[-1]) / 2.0),
         ]
         bot_label_specs = [
             ("GEN. TOL.", x[0], y0),
-            ("DRAWN BY",  x[1], y0),
+            ("DRAWN BY", x[1], y0),
         ]
 
         text_faces = [_cell_txt(v, cx, top_y_mid) for v, cx in top_cells]
@@ -1364,18 +1489,29 @@ class TitleBlock(_Annotation):
         text_faces = [t for t in text_faces if t is not None]
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
-        super().__init__(sk, label=part_name, label_bbox=None, segments=seg,
-                         rotation=rotation, align=align, mode=mode)
+        super().__init__(
+            sk,
+            label=part_name,
+            label_bbox=None,
+            segments=seg,
+            rotation=rotation,
+            align=align,
+            mode=mode,
+        )
         self.block_bbox = {
-            "min_x": 0.0, "min_y": 0.0,
-            "max_x": width, "max_y": y_top,
-            "width": width, "height": y_top,
+            "min_x": 0.0,
+            "min_y": 0.0,
+            "max_x": width,
+            "max_y": y_top,
+            "width": width,
+            "height": y_top,
         }
 
 
 # ---------------------------------------------------------------------------
 # surface_finish_mark  ->  SurfaceFinish
 # ---------------------------------------------------------------------------
+
 
 class SurfaceFinish(_Annotation):
     """ISO 1302 surface finish check-mark symbol with Ra annotation.
@@ -1415,8 +1551,11 @@ class SurfaceFinish(_Annotation):
         leg2 = Edge.make_line(elbow_v, top_v)
 
         probe = Text(
-            txt=ra_value, font_size=draft.font_size, font=draft.font,
-            align=Align.CENTER, mode=Mode.PRIVATE,
+            txt=ra_value,
+            font_size=draft.font_size,
+            font=draft.font,
+            align=Align.CENTER,
+            mode=Mode.PRIVATE,
         )
         text_w = probe.bounding_box().size.X
         gap = draft.pad_around_text
@@ -1427,8 +1566,11 @@ class SurfaceFinish(_Annotation):
 
         v_gap = 0.3 * draft.font_size
         label_text = Text(
-            txt=ra_value, font_size=draft.font_size, font=draft.font,
-            align=(Align.MIN, Align.MIN), mode=Mode.PRIVATE,
+            txt=ra_value,
+            font_size=draft.font_size,
+            font=draft.font,
+            align=(Align.MIN, Align.MIN),
+            mode=Mode.PRIVATE,
         ).moved(Location(Vector(elbow_x + gap, elbow_y + v_gap, 0.0)))
 
         # Rotate around origin then translate to position — apply to geometry
@@ -1444,8 +1586,15 @@ class SurfaceFinish(_Annotation):
         label_text = label_text.moved(trans_loc)
 
         sk, seg = _strokes_and_text(strokes, [label_text], line_width)
-        super().__init__(sk, label=ra_value, label_bbox=None, segments=seg,
-                         rotation=rotation, align=align, mode=mode)
+        super().__init__(
+            sk,
+            label=ra_value,
+            label_bbox=None,
+            segments=seg,
+            rotation=rotation,
+            align=align,
+            mode=mode,
+        )
         self.mark_position = (pos_v.X, pos_v.Y)
 
 
@@ -1454,19 +1603,37 @@ class SurfaceFinish(_Annotation):
 # ---------------------------------------------------------------------------
 
 GDTCharacteristic = Literal[
-    "straightness", "flatness", "circularity", "cylindricity",
-    "profile_line", "profile_surface",
-    "angularity", "perpendicularity", "parallelism",
-    "position", "concentricity", "symmetry",
-    "circular_runout", "total_runout",
+    "straightness",
+    "flatness",
+    "circularity",
+    "cylindricity",
+    "profile_line",
+    "profile_surface",
+    "angularity",
+    "perpendicularity",
+    "parallelism",
+    "position",
+    "concentricity",
+    "symmetry",
+    "circular_runout",
+    "total_runout",
 ]
 
 _GDT_GLYPHS: dict[str, str] = {
-    "straightness": "—", "flatness": "▱", "circularity": "○",
-    "cylindricity": "⌭", "profile_line": "⌒", "profile_surface": "⌓",
-    "angularity": "∠", "perpendicularity": "⊥", "parallelism": "∥",
-    "position": "⌖", "concentricity": "◎", "symmetry": "⌯",
-    "circular_runout": "↗", "total_runout": "⏍",
+    "straightness": "—",
+    "flatness": "▱",
+    "circularity": "○",
+    "cylindricity": "⌭",
+    "profile_line": "⌒",
+    "profile_surface": "⌓",
+    "angularity": "∠",
+    "perpendicularity": "⊥",
+    "parallelism": "∥",
+    "position": "⌖",
+    "concentricity": "◎",
+    "symmetry": "⌯",
+    "circular_runout": "↗",
+    "total_runout": "⏍",
 }
 
 _MODIFIER_LETTER = {"M": "M", "L": "L", "P": "P"}
@@ -1480,10 +1647,12 @@ def _arrowhead(tip, back, size) -> list[Edge]:
     out = []
     for da in (math.radians(20), math.radians(-20)):
         a = ang + da
-        out.append(Edge.make_line(
-            Vector(tx, ty, 0),
-            Vector(tx + size * math.cos(a), ty + size * math.sin(a), 0),
-        ))
+        out.append(
+            Edge.make_line(
+                Vector(tx, ty, 0),
+                Vector(tx + size * math.cos(a), ty + size * math.sin(a), 0),
+            )
+        )
     return out
 
 
@@ -1496,8 +1665,12 @@ def _characteristic_edges(name: str, h: float) -> list[Edge]:
     if name == "flatness":
         p1, p2 = Vector(-s, -0.5 * s, 0), Vector(0.3 * s, -0.5 * s, 0)
         p3, p4 = Vector(s, 0.5 * s, 0), Vector(-0.3 * s, 0.5 * s, 0)
-        return [Edge.make_line(p1, p2), Edge.make_line(p2, p3),
-                Edge.make_line(p3, p4), Edge.make_line(p4, p1)]
+        return [
+            Edge.make_line(p1, p2),
+            Edge.make_line(p2, p3),
+            Edge.make_line(p3, p4),
+            Edge.make_line(p4, p1),
+        ]
     if name == "circularity":
         return list(Edge.make_circle(s).edges())
     if name == "cylindricity":
@@ -1512,24 +1685,34 @@ def _characteristic_edges(name: str, h: float) -> list[Edge]:
         chord = Edge.make_line(Vector(-s, 0, 0), Vector(s, 0, 0))
         return arc + [chord]
     if name == "angularity":
-        return [Edge.make_line(Vector(-s, -s, 0), Vector(s, s, 0)),
-                Edge.make_line(Vector(-s, -s, 0), Vector(s, -s, 0))]
+        return [
+            Edge.make_line(Vector(-s, -s, 0), Vector(s, s, 0)),
+            Edge.make_line(Vector(-s, -s, 0), Vector(s, -s, 0)),
+        ]
     if name == "perpendicularity":
-        return [Edge.make_line(Vector(0, -s, 0), Vector(0, s, 0)),
-                Edge.make_line(Vector(-s, -s, 0), Vector(s, -s, 0))]
+        return [
+            Edge.make_line(Vector(0, -s, 0), Vector(0, s, 0)),
+            Edge.make_line(Vector(-s, -s, 0), Vector(s, -s, 0)),
+        ]
     if name == "parallelism":
-        return [Edge.make_line(Vector(-0.7 * s, -s, 0), Vector(0.1 * s, s, 0)),
-                Edge.make_line(Vector(-0.1 * s, -s, 0), Vector(0.7 * s, s, 0))]
+        return [
+            Edge.make_line(Vector(-0.7 * s, -s, 0), Vector(0.1 * s, s, 0)),
+            Edge.make_line(Vector(-0.1 * s, -s, 0), Vector(0.7 * s, s, 0)),
+        ]
     if name == "position":
         ring = list(Edge.make_circle(0.6 * s).edges())
-        return ring + [Edge.make_line(Vector(-s, 0, 0), Vector(s, 0, 0)),
-                       Edge.make_line(Vector(0, -s, 0), Vector(0, s, 0))]
+        return ring + [
+            Edge.make_line(Vector(-s, 0, 0), Vector(s, 0, 0)),
+            Edge.make_line(Vector(0, -s, 0), Vector(0, s, 0)),
+        ]
     if name == "concentricity":
         return list(Edge.make_circle(s).edges()) + list(Edge.make_circle(0.5 * s).edges())
     if name == "symmetry":
-        return [Edge.make_line(Vector(0, -s, 0), Vector(0, s, 0)),
-                Edge.make_line(Vector(-0.7 * s, 0.45 * s, 0), Vector(0.7 * s, 0.45 * s, 0)),
-                Edge.make_line(Vector(-0.7 * s, -0.45 * s, 0), Vector(0.7 * s, -0.45 * s, 0))]
+        return [
+            Edge.make_line(Vector(0, -s, 0), Vector(0, s, 0)),
+            Edge.make_line(Vector(-0.7 * s, 0.45 * s, 0), Vector(0.7 * s, 0.45 * s, 0)),
+            Edge.make_line(Vector(-0.7 * s, -0.45 * s, 0), Vector(0.7 * s, -0.45 * s, 0)),
+        ]
     if name == "circular_runout":
         shaft = Edge.make_line(Vector(-s, -s, 0), Vector(s, s, 0))
         return [shaft] + _arrowhead((s, s), (-s, -s), 0.5 * s)
@@ -1540,9 +1723,7 @@ def _characteristic_edges(name: str, h: float) -> list[Edge]:
             out += _arrowhead((s - 0.6 * s + dx, s), (-s + dx, -s), 0.45 * s)
         return out
 
-    raise ValueError(
-        f"Unknown characteristic '{name}'. Supported: {', '.join(_GDT_GLYPHS)}"
-    )
+    raise ValueError(f"Unknown characteristic '{name}'. Supported: {', '.join(_GDT_GLYPHS)}")
 
 
 class FeatureControlFrame(_Annotation):
@@ -1572,8 +1753,7 @@ class FeatureControlFrame(_Annotation):
         name = characteristic.lower()
         if name not in _GDT_GLYPHS:
             raise ValueError(
-                f"Unknown characteristic '{characteristic}'. "
-                f"Supported: {', '.join(_GDT_GLYPHS)}"
+                f"Unknown characteristic '{characteristic}'. Supported: {', '.join(_GDT_GLYPHS)}"
             )
 
         h = draft.font_size
@@ -1588,8 +1768,13 @@ class FeatureControlFrame(_Annotation):
             tol_str = f"{round(tolerance, prec):.{prec}f}"
 
         def _text(txt, fs):
-            return Text(txt=txt, font_size=fs, font=draft.font,
-                        align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE)
+            return Text(
+                txt=txt,
+                font_size=fs,
+                font=draft.font,
+                align=(Align.CENTER, Align.CENTER),
+                mode=Mode.PRIVATE,
+            )
 
         w_sym = H
         r_pre = 0.42 * h
@@ -1627,11 +1812,15 @@ class FeatureControlFrame(_Annotation):
         x_cursor = xs[1] + pad
         if diameter:
             dia_cx = x_cursor + r_pre
-            strokes += [e.moved(Location(Vector(dia_cx, cy, 0)))
-                        for e in Edge.make_circle(r_pre).edges()]
-            strokes.append(Edge.make_line(
-                Vector(dia_cx + 0.9 * r_pre, cy - 0.9 * r_pre, 0),
-                Vector(dia_cx - 0.9 * r_pre, cy + 0.9 * r_pre, 0)))
+            strokes += [
+                e.moved(Location(Vector(dia_cx, cy, 0))) for e in Edge.make_circle(r_pre).edges()
+            ]
+            strokes.append(
+                Edge.make_line(
+                    Vector(dia_cx + 0.9 * r_pre, cy - 0.9 * r_pre, 0),
+                    Vector(dia_cx - 0.9 * r_pre, cy + 0.9 * r_pre, 0),
+                )
+            )
             x_cursor = dia_cx + r_pre + pad
 
         val_cx = x_cursor + val_w / 2
@@ -1643,10 +1832,12 @@ class FeatureControlFrame(_Annotation):
             if m not in _MODIFIER_LETTER:
                 raise ValueError(f"Unknown modifier '{modifier}'. Use M, L, or P.")
             mod_cx = x_cursor + mr
-            strokes += [e.moved(Location(Vector(mod_cx, cy, 0)))
-                        for e in Edge.make_circle(mr).edges()]
-            text_faces.append(_text(_MODIFIER_LETTER[m], h * 0.8)
-                              .moved(Location(Vector(mod_cx, cy, 0))))
+            strokes += [
+                e.moved(Location(Vector(mod_cx, cy, 0))) for e in Edge.make_circle(mr).edges()
+            ]
+            text_faces.append(
+                _text(_MODIFIER_LETTER[m], h * 0.8).moved(Location(Vector(mod_cx, cy, 0)))
+            )
 
         for i, letter in enumerate(datums):
             cx = (xs[2 + i] + xs[3 + i]) / 2
@@ -1654,15 +1845,24 @@ class FeatureControlFrame(_Annotation):
             if dm:
                 text_faces.append(_text(letter, h).moved(Location(Vector(cx - 0.35 * h, cy, 0))))
                 mod_cx = cx + 0.5 * h
-                strokes += [e.moved(Location(Vector(mod_cx, cy, 0)))
-                            for e in Edge.make_circle(0.55 * h).edges()]
+                strokes += [
+                    e.moved(Location(Vector(mod_cx, cy, 0)))
+                    for e in Edge.make_circle(0.55 * h).edges()
+                ]
                 text_faces.append(_text(dm.upper(), h * 0.7).moved(Location(Vector(mod_cx, cy, 0))))
             else:
                 text_faces.append(_text(letter, h).moved(Location(Vector(cx, cy, 0))))
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
-        super().__init__(sk, label=tol_str, label_bbox=None, segments=seg,
-                         rotation=rotation, align=align, mode=mode)
+        super().__init__(
+            sk,
+            label=tol_str,
+            label_bbox=None,
+            segments=seg,
+            rotation=rotation,
+            align=align,
+            mode=mode,
+        )
         self.characteristic = name
         self.tolerance_str = tol_str
         self.datums = tuple(datums)
@@ -1698,10 +1898,10 @@ class DatumFeature(_Annotation):
         br = Vector(tri / 2, tri * 0.9, 0)
         if filled:
             from build123d import Face, Wire
+
             extra_faces.append(Face(Wire.make_polygon([apex, bl, br, apex])))
         else:
-            strokes += [Edge.make_line(apex, bl), Edge.make_line(bl, br),
-                        Edge.make_line(br, apex)]
+            strokes += [Edge.make_line(apex, bl), Edge.make_line(bl, br), Edge.make_line(br, apex)]
 
         conn_y0 = tri * 0.9
         conn_y1 = conn_y0 + 0.8 * h
@@ -1716,13 +1916,24 @@ class DatumFeature(_Annotation):
             Edge.make_line(Vector(-box / 2, by1, 0), Vector(-box / 2, by0, 0)),
         ]
 
-        glyph = Text(txt=letter, font_size=h, font=draft.font,
-                     align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE
-                     ).moved(Location(Vector(0, (by0 + by1) / 2, 0)))
+        glyph = Text(
+            txt=letter,
+            font_size=h,
+            font=draft.font,
+            align=(Align.CENTER, Align.CENTER),
+            mode=Mode.PRIVATE,
+        ).moved(Location(Vector(0, (by0 + by1) / 2, 0)))
 
         sk, seg = _strokes_and_text(strokes, extra_faces + [glyph], line_width)
-        super().__init__(sk, label=letter, label_bbox=None, segments=seg,
-                         rotation=rotation, align=align, mode=mode)
+        super().__init__(
+            sk,
+            label=letter,
+            label_bbox=None,
+            segments=seg,
+            rotation=rotation,
+            align=align,
+            mode=mode,
+        )
         self.letter = letter
 
 
@@ -1753,17 +1964,36 @@ class DatumTarget(_Annotation):
         strokes.append(Edge.make_line(Vector(-r, 0, 0), Vector(r, 0, 0)))
 
         fs = 0.8 * h
-        text_faces = [Text(txt=identifier, font_size=fs, font=draft.font,
-                           align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE
-                           ).moved(Location(Vector(0, -r / 2, 0)))]
+        text_faces = [
+            Text(
+                txt=identifier,
+                font_size=fs,
+                font=draft.font,
+                align=(Align.CENTER, Align.CENTER),
+                mode=Mode.PRIVATE,
+            ).moved(Location(Vector(0, -r / 2, 0)))
+        ]
         if area_label:
-            text_faces.append(Text(txt=area_label, font_size=fs, font=draft.font,
-                                   align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE
-                                   ).moved(Location(Vector(0, r / 2, 0))))
+            text_faces.append(
+                Text(
+                    txt=area_label,
+                    font_size=fs,
+                    font=draft.font,
+                    align=(Align.CENTER, Align.CENTER),
+                    mode=Mode.PRIVATE,
+                ).moved(Location(Vector(0, r / 2, 0)))
+            )
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
-        super().__init__(sk, label=identifier, label_bbox=None, segments=seg,
-                         rotation=rotation, align=align, mode=mode)
+        super().__init__(
+            sk,
+            label=identifier,
+            label_bbox=None,
+            segments=seg,
+            rotation=rotation,
+            align=align,
+            mode=mode,
+        )
         self.identifier = identifier
         self.area_label = area_label or ""
 
@@ -1773,18 +2003,22 @@ def _feature_symbol_edges(name: str, h: float) -> list[Edge]:
     s = 0.42 * h
     if name == "diameter":
         ring = list(Edge.make_circle(s).edges())
-        return ring + [Edge.make_line(Vector(0.9 * s, -0.9 * s, 0),
-                                      Vector(-0.9 * s, 0.9 * s, 0))]
+        return ring + [Edge.make_line(Vector(0.9 * s, -0.9 * s, 0), Vector(-0.9 * s, 0.9 * s, 0))]
     if name == "counterbore":
-        return [Edge.make_line(Vector(-s, s, 0), Vector(-s, -s, 0)),
-                Edge.make_line(Vector(-s, -s, 0), Vector(s, -s, 0)),
-                Edge.make_line(Vector(s, -s, 0), Vector(s, s, 0))]
+        return [
+            Edge.make_line(Vector(-s, s, 0), Vector(-s, -s, 0)),
+            Edge.make_line(Vector(-s, -s, 0), Vector(s, -s, 0)),
+            Edge.make_line(Vector(s, -s, 0), Vector(s, s, 0)),
+        ]
     if name == "countersink":
-        return [Edge.make_line(Vector(-s, s, 0), Vector(0, -s, 0)),
-                Edge.make_line(Vector(s, s, 0), Vector(0, -s, 0))]
+        return [
+            Edge.make_line(Vector(-s, s, 0), Vector(0, -s, 0)),
+            Edge.make_line(Vector(s, s, 0), Vector(0, -s, 0)),
+        ]
     if name == "depth":
-        return [Edge.make_line(Vector(0, s, 0), Vector(0, -s, 0))] + \
-               _arrowhead((0, -s), (0, s), 0.55 * s)
+        return [Edge.make_line(Vector(0, s, 0), Vector(0, -s, 0))] + _arrowhead(
+            (0, -s), (0, s), 0.55 * s
+        )
     raise ValueError(f"Unknown feature symbol '{name}'.")
 
 
@@ -1813,8 +2047,9 @@ class CompositeFeatureControlFrame(_Annotation):
         draft = draft or Draft(font_size=2.5, decimal_precision=1)
         name = characteristic.lower()
         if name not in _GDT_GLYPHS:
-            raise ValueError(f"Unknown characteristic '{characteristic}'. "
-                             f"Supported: {', '.join(_GDT_GLYPHS)}")
+            raise ValueError(
+                f"Unknown characteristic '{characteristic}'. Supported: {', '.join(_GDT_GLYPHS)}"
+            )
         if not rows:
             raise ValueError("composite frame needs at least one row")
 
@@ -1826,15 +2061,20 @@ class CompositeFeatureControlFrame(_Annotation):
         prec = draft.decimal_precision
 
         def _text(txt, fs):
-            return Text(txt=txt, font_size=fs, font=draft.font,
-                        align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE)
+            return Text(
+                txt=txt,
+                font_size=fs,
+                font=draft.font,
+                align=(Align.CENTER, Align.CENTER),
+                mode=Mode.PRIVATE,
+            )
 
         def _tol_str(t):
             return t if isinstance(t, str) else f"{round(t, prec):.{prec}f}"
 
         tol_strs = [_tol_str(r["tolerance"]) for r in rows]
         tol_w = 0.0
-        for r, ts in zip(rows, tol_strs):
+        for r, ts in zip(rows, tol_strs, strict=True):
             w = pad + _text(ts, h).bounding_box().size.X + pad
             if r.get("diameter"):
                 w += 2 * r_pre + pad
@@ -1870,11 +2110,16 @@ class CompositeFeatureControlFrame(_Annotation):
             x_cursor = w_sym + pad
             if r.get("diameter"):
                 dia_cx = x_cursor + r_pre
-                strokes += [e.moved(Location(Vector(dia_cx, cy, 0)))
-                            for e in Edge.make_circle(r_pre).edges()]
-                strokes.append(Edge.make_line(
-                    Vector(dia_cx + 0.9 * r_pre, cy - 0.9 * r_pre, 0),
-                    Vector(dia_cx - 0.9 * r_pre, cy + 0.9 * r_pre, 0)))
+                strokes += [
+                    e.moved(Location(Vector(dia_cx, cy, 0)))
+                    for e in Edge.make_circle(r_pre).edges()
+                ]
+                strokes.append(
+                    Edge.make_line(
+                        Vector(dia_cx + 0.9 * r_pre, cy - 0.9 * r_pre, 0),
+                        Vector(dia_cx - 0.9 * r_pre, cy + 0.9 * r_pre, 0),
+                    )
+                )
                 x_cursor = dia_cx + r_pre + pad
             val_w = _text(tol_strs[i], h).bounding_box().size.X
             val_cx = x_cursor + val_w / 2
@@ -1886,10 +2131,12 @@ class CompositeFeatureControlFrame(_Annotation):
                 if m not in _MODIFIER_LETTER:
                     raise ValueError(f"Unknown modifier '{mod}'. Use M, L, or P.")
                 mod_cx = x_cursor + mr
-                strokes += [e.moved(Location(Vector(mod_cx, cy, 0)))
-                            for e in Edge.make_circle(mr).edges()]
-                text_faces.append(_text(_MODIFIER_LETTER[m], h * 0.8)
-                                  .moved(Location(Vector(mod_cx, cy, 0))))
+                strokes += [
+                    e.moved(Location(Vector(mod_cx, cy, 0))) for e in Edge.make_circle(mr).edges()
+                ]
+                text_faces.append(
+                    _text(_MODIFIER_LETTER[m], h * 0.8).moved(Location(Vector(mod_cx, cy, 0)))
+                )
 
             datums = r.get("datums", ())
             dmods = r.get("datum_modifiers", {}) or {}
@@ -1900,17 +2147,30 @@ class CompositeFeatureControlFrame(_Annotation):
                     strokes.append(Edge.make_line(Vector(xr, bot, 0), Vector(xr, top, 0)))
                 dm = dmods.get(letter)
                 if dm:
-                    text_faces.append(_text(letter, h).moved(Location(Vector(cx - 0.35 * h, cy, 0))))
+                    text_faces.append(
+                        _text(letter, h).moved(Location(Vector(cx - 0.35 * h, cy, 0)))
+                    )
                     mcx = cx + 0.5 * h
-                    strokes += [e.moved(Location(Vector(mcx, cy, 0)))
-                                for e in Edge.make_circle(0.55 * h).edges()]
-                    text_faces.append(_text(dm.upper(), h * 0.7).moved(Location(Vector(mcx, cy, 0))))
+                    strokes += [
+                        e.moved(Location(Vector(mcx, cy, 0)))
+                        for e in Edge.make_circle(0.55 * h).edges()
+                    ]
+                    text_faces.append(
+                        _text(dm.upper(), h * 0.7).moved(Location(Vector(mcx, cy, 0)))
+                    )
                 else:
                     text_faces.append(_text(letter, h).moved(Location(Vector(cx, cy, 0))))
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
-        super().__init__(sk, label=tol_strs[0], label_bbox=None, segments=seg,
-                         rotation=rotation, align=align, mode=mode)
+        super().__init__(
+            sk,
+            label=tol_strs[0],
+            label_bbox=None,
+            segments=seg,
+            rotation=rotation,
+            align=align,
+            mode=mode,
+        )
         self.characteristic = name
         self.tolerances = tuple(tol_strs)
 
@@ -1972,20 +2232,26 @@ class HoleCallout(_Annotation):
         for kind, val in tokens:
             if kind == "sym":
                 cx = x + sym_w / 2
-                strokes += [e.moved(Location(Vector(cx, 0, 0)))
-                            for e in _feature_symbol_edges(val, h)]
+                strokes += [
+                    e.moved(Location(Vector(cx, 0, 0))) for e in _feature_symbol_edges(val, h)
+                ]
                 x += sym_w + gap
             else:
-                t = Text(txt=val, font_size=h, font=draft.font,
-                         align=(Align.MIN, Align.CENTER), mode=Mode.PRIVATE
-                         ).moved(Location(Vector(x, 0, 0)))
+                t = Text(
+                    txt=val,
+                    font_size=h,
+                    font=draft.font,
+                    align=(Align.MIN, Align.CENTER),
+                    mode=Mode.PRIVATE,
+                ).moved(Location(Vector(x, 0, 0)))
                 text_faces.append(t)
                 x += t.bounding_box().size.X + gap
 
         width = max(x - gap, 0.0)
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
-        super().__init__(sk, label="", label_bbox=None, segments=seg,
-                         rotation=rotation, align=align, mode=mode)
+        super().__init__(
+            sk, label="", label_bbox=None, segments=seg, rotation=rotation, align=align, mode=mode
+        )
         self.callout_width = width
         self.callout_height = h
 
@@ -1993,6 +2259,7 @@ class HoleCallout(_Annotation):
 # ---------------------------------------------------------------------------
 # find_overlaps — pure-geometry collision
 # ---------------------------------------------------------------------------
+
 
 def find_overlaps(sketches, *, min_area: float = 0.01) -> list[LintIssue]:
     """Pure-geometry collision check: pairs of sketches whose filled faces
@@ -2016,12 +2283,15 @@ def find_overlaps(sketches, *, min_area: float = 0.01) -> list[LintIssue]:
             if area > min_area:
                 la = getattr(items[i], "label", None) or f"#{i}"
                 lb = getattr(items[j], "label", None) or f"#{j}"
-                issues.append(LintIssue(
-                    severity="warning",
-                    message=(f"sketches '{la}' and '{lb}' overlap by "
-                             f"{area:.2f} mm² of filled area"),
-                    code="faces_overlap",
-                ))
+                issues.append(
+                    LintIssue(
+                        severity="warning",
+                        message=(
+                            f"sketches '{la}' and '{lb}' overlap by {area:.2f} mm² of filled area"
+                        ),
+                        code="faces_overlap",
+                    )
+                )
     return issues
 
 
@@ -2099,13 +2369,16 @@ def _seg_hits_box(p, q, box, pad=0.2):
 
 
 def _box_overlap(a, b, minov):
-    return (min(a[2], b[2]) - max(a[0], b[0]) > minov
-            and min(a[3], b[3]) - max(a[1], b[1]) > minov)
+    return min(a[2], b[2]) - max(a[0], b[0]) > minov and min(a[3], b[3]) - max(a[1], b[1]) > minov
 
 
 def _box_inside(inner, outer):
-    return (inner[0] >= outer[0] and inner[1] >= outer[1]
-            and inner[2] <= outer[2] and inner[3] <= outer[3])
+    return (
+        inner[0] >= outer[0]
+        and inner[1] >= outer[1]
+        and inner[2] <= outer[2]
+        and inner[3] <= outer[3]
+    )
 
 
 def _as_box(o):
@@ -2124,8 +2397,10 @@ def _collinear_overlap(seg_a, seg_b, tol=0.15):
     if la < 1e-9:
         return 0.0
     ux, uy = dax / la, day / la
-    if (abs((bx0 - ax0) * uy - (by0 - ay0) * ux) > tol
-            or abs((bx1 - ax0) * uy - (by1 - ay0) * ux) > tol):
+    if (
+        abs((bx0 - ax0) * uy - (by0 - ay0) * ux) > tol
+        or abs((bx1 - ax0) * uy - (by1 - ay0) * ux) > tol
+    ):
         return 0.0
     pb0 = (bx0 - ax0) * ux + (by0 - ay0) * uy
     pb1 = (bx1 - ax0) * ux + (by1 - ay0) * uy
@@ -2134,8 +2409,9 @@ def _collinear_overlap(seg_a, seg_b, tol=0.15):
     return max(0.0, hi - lo)
 
 
-def find_interferences(items, *, part_bbox=None, page_bbox=None, obstacles=None,
-                       min_overlap=0.5, pad=0.2, min_run=1.5):
+def find_interferences(
+    items, *, part_bbox=None, page_bbox=None, obstacles=None, min_overlap=0.5, pad=0.2, min_run=1.5
+):
     """Geometry-precise interference detection between drafting annotations.
 
     Duck-typed: each item is decomposed into a **label box**
@@ -2157,59 +2433,72 @@ def find_interferences(items, *, part_bbox=None, page_bbox=None, obstacles=None,
     for i, (box_i, _, name_i) in enumerate(geoms):
         if box_i is None:
             continue
-        for box_j, _, name_j in geoms[i + 1:]:
+        for box_j, _, name_j in geoms[i + 1 :]:
             if box_j is not None and _box_overlap(box_i, box_j, min_overlap):
-                issues.append(LintIssue(
-                    severity="error",
-                    message=f'labels "{name_i}" and "{name_j}" overlap',
-                    code="labels_overlap",
-                ))
+                issues.append(
+                    LintIssue(
+                        severity="error",
+                        message=f'labels "{name_i}" and "{name_j}" overlap',
+                        code="labels_overlap",
+                    )
+                )
         if page_bbox is not None:
             pb = (page_bbox.min.X, page_bbox.min.Y, page_bbox.max.X, page_bbox.max.Y)
             if not _box_inside(box_i, pb):
-                issues.append(LintIssue(
-                    severity="error",
-                    message=f'label "{name_i}" extends outside the drawing frame',
-                    code="label_out_of_frame",
-                ))
+                issues.append(
+                    LintIssue(
+                        severity="error",
+                        message=f'label "{name_i}" extends outside the drawing frame',
+                        code="label_out_of_frame",
+                    )
+                )
         if part_bbox is not None:
             pb = (part_bbox.min.X, part_bbox.min.Y, part_bbox.max.X, part_bbox.max.Y)
             if _box_overlap(box_i, pb, min_overlap):
-                issues.append(LintIssue(
-                    severity="error",
-                    message=f'label "{name_i}" sits on the part outline',
-                    code="label_on_part",
-                ))
+                issues.append(
+                    LintIssue(
+                        severity="error",
+                        message=f'label "{name_i}" sits on the part outline',
+                        code="label_on_part",
+                    )
+                )
         if obstacles:
             if any(_box_overlap(box_i, _as_box(o), min_overlap) for o in obstacles):
-                issues.append(LintIssue(
-                    severity="error",
-                    message=f'label "{name_i}" lands over drawing geometry',
-                    code="label_over_geometry",
-                ))
+                issues.append(
+                    LintIssue(
+                        severity="error",
+                        message=f'label "{name_i}" lands over drawing geometry',
+                        code="label_over_geometry",
+                    )
+                )
 
     for i, (_, segs_i, name_i) in enumerate(geoms):
         for j, (box_j, _, name_j) in enumerate(geoms):
             if i == j or box_j is None:
                 continue
             if any(_seg_hits_box(p, q, box_j, pad) for (p, q) in segs_i):
-                issues.append(LintIssue(
-                    severity="error",
-                    message=f'a line from "{name_i}" pierces label "{name_j}"',
-                    code="line_pierces_label",
-                ))
+                issues.append(
+                    LintIssue(
+                        severity="error",
+                        message=f'a line from "{name_i}" pierces label "{name_j}"',
+                        code="line_pierces_label",
+                    )
+                )
 
     for i, (_, segs_i, name_i) in enumerate(geoms):
         for j in range(i + 1, len(geoms)):
             _, segs_j, name_j = geoms[j]
-            if any(_collinear_overlap(a, b) > min_run
-                   for a in segs_i for b in segs_j):
-                issues.append(LintIssue(
-                    severity="warning",
-                    message=(f'redundant overlapping lines between "{name_i}" '
-                             f'and "{name_j}" — shared witness/edge drawn twice'),
-                    code="redundant_lines",
-                ))
+            if any(_collinear_overlap(a, b) > min_run for a in segs_i for b in segs_j):
+                issues.append(
+                    LintIssue(
+                        severity="warning",
+                        message=(
+                            f'redundant overlapping lines between "{name_i}" '
+                            f'and "{name_j}" — shared witness/edge drawn twice'
+                        ),
+                        code="redundant_lines",
+                    )
+                )
 
     return issues
 
@@ -2250,9 +2539,13 @@ def set_page(width: float, height: float, margin: float = 5.0) -> dict:
     """
     global _DRAWING_PAGE
     _DRAWING_PAGE = {
-        "width": width, "height": height, "margin": margin,
-        "min_x": margin, "min_y": margin,
-        "max_x": width - margin, "max_y": height - margin,
+        "width": width,
+        "height": height,
+        "margin": margin,
+        "min_x": margin,
+        "min_y": margin,
+        "max_x": width - margin,
+        "max_y": height - margin,
     }
     return _DRAWING_PAGE
 

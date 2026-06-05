@@ -1,4 +1,5 @@
 """examples/part_drawing.py builds a real part drawing, lints clean, exports SVG."""
+
 import importlib.util
 from pathlib import Path
 
@@ -11,7 +12,7 @@ _EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "part_drawing.p
 def mod():
     spec = importlib.util.spec_from_file_location("part_drawing", _EXAMPLE)
     m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)   # builds the drawing at import
+    spec.loader.exec_module(m)  # builds the drawing at import
     return m
 
 

@@ -1,4 +1,5 @@
 """The examples/specimen_sheet.py A3 drawing builds and exports a valid SVG."""
+
 import importlib.util
 from pathlib import Path
 
@@ -11,7 +12,7 @@ _EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "specimen_sheet
 def sheet_module():
     spec = importlib.util.spec_from_file_location("specimen_sheet", _EXAMPLE)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)   # builds the drawing at import
+    spec.loader.exec_module(mod)  # builds the drawing at import
     return mod
 
 

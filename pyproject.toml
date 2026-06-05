@@ -53,8 +53,39 @@ dev = [
     # example-only: examples/part_drawing.py draws a real bd_warehouse fastener.
     # NOT a runtime dependency of the library (which needs only build123d).
     "bd_warehouse",
+    "ruff>=0.15.16",
+    "mypy>=2.1.0",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 timeout = 300
+addopts = "--cov=build123d_drafting --cov-report=term-missing --cov-report=xml"
+
+[tool.coverage.run]
+source = ["src/build123d_drafting"]
+omit = ["src/build123d_drafting/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E501",   # line-length enforced by formatter, not linter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = true
