@@ -637,6 +637,100 @@ class TestTitleBlock:
         explicit = TitleBlock("Part", "001", scale="5:1", draft=draft)
         assert self._fingerprint(both) == self._fingerprint(explicit)
 
+    # --- ISO 7200 fields: revision and legal_owner ---
+
+    def test_revision_renders_in_col5(self, draft):
+        # revision="A" and date="A" render the same value glyph in col5.
+        # Use show_labels=False so the "REV" vs "DATE" label text doesn't confound.
+        with_revision = TitleBlock("Part", "001", revision="A", show_labels=False, draft=draft)
+        with_date = TitleBlock("Part", "001", date="A", show_labels=False, draft=draft)
+        assert self._fingerprint(with_revision) == self._fingerprint(with_date)
+
+    def test_revision_overrides_date(self, draft):
+        # When both are set, revision wins — result equals revision-only.
+        # Use show_labels=False to isolate value content from label content.
+        both = TitleBlock("Part", "001", revision="B", date="2026-01-01", show_labels=False, draft=draft)
+        rev_only = TitleBlock("Part", "001", revision="B", show_labels=False, draft=draft)
+        assert self._fingerprint(both) == self._fingerprint(rev_only)
+
+    def test_legal_owner_increases_height(self, draft):
+        without = TitleBlock("Part", "001", cell_height=8, draft=draft)
+        with_lo = TitleBlock("Part", "001", legal_owner="ACME Corp", cell_height=8, draft=draft)
+        assert with_lo.block_bbox["height"] == pytest.approx(24.0)
+        assert without.block_bbox["height"] == pytest.approx(16.0)
+
+    def test_legal_owner_bbox_height_is_three_rows(self, draft):
+        tb = TitleBlock("Part", "001", legal_owner="X", width=170, cell_height=8, draft=draft)
+        assert tb.block_bbox["max_y"] == pytest.approx(24.0)
+
+    def test_no_legal_owner_bbox_unchanged(self, draft):
+        tb = TitleBlock("Part", "001", width=170, cell_height=8, draft=draft)
+        assert tb.block_bbox["height"] == pytest.approx(16.0)
+
+    def test_legal_owner_produces_extra_stroke(self, draft):
+        # With legal_owner, one extra horizontal divider is added (row 1/2 separator).
+        without = TitleBlock("Part", "001", draft=draft)
+        with_lo = TitleBlock("Part", "001", legal_owner="ACME", draft=draft)
+        assert len(with_lo.segments) > len(without.segments)
+
+    def test_legal_owner_renders_as_sketch(self, draft):
+        tb = TitleBlock("Part", "DRW-001", legal_owner="ACME Corp",
+                        revision="B", draft=draft)
+        assert isinstance(tb, Sketch)
+        assert len(tb.faces()) > 0
+
+    def test_show_labels_adds_faces(self, draft):
+        # Labels add glyph faces, so the labelled block has more faces than unlabelled.
+        with_labels = TitleBlock("Part", "001", show_labels=True, draft=draft)
+        without_labels = TitleBlock("Part", "001", show_labels=False, draft=draft)
+        assert len(with_labels.faces()) > len(without_labels.faces())
+
+    def test_show_labels_false_matches_legacy(self, draft):
+        # show_labels=False should match the pre-0.4.0 fingerprint (no label glyphs).
+        legacy = TitleBlock("Part", "001", show_labels=False, draft=draft)
+        assert isinstance(legacy, Sketch)
+        assert len(legacy.faces()) > 0
+
+    def test_rev_label_differs_from_date_label(self, draft):
+        # "REV" label glyph differs from "DATE" label — fingerprints must differ.
+        with_rev = TitleBlock("Part", "001", revision="A", show_labels=True, draft=draft)
+        with_date = TitleBlock("Part", "001", date="A", show_labels=True, draft=draft)
+        assert self._fingerprint(with_rev) != self._fingerprint(with_date)
+
+    def test_legal_owner_label_present(self, draft):
+        # Block with legal_owner + labels should have more faces than without label.
+        with_lo_labelled = TitleBlock("Part", "001", legal_owner="X", show_labels=True, draft=draft)
+        with_lo_unlabelled = TitleBlock("Part", "001", legal_owner="X", show_labels=False, draft=draft)
+        assert len(with_lo_labelled.faces()) > len(with_lo_unlabelled.faces())
+
+    def test_show_labels_does_not_affect_block_bbox(self, draft):
+        # Labels are glyphs only — they must not change the reported block dimensions.
+        with_labels = TitleBlock("Part", "001", legal_owner="X", cell_height=8,
+                                 show_labels=True, draft=draft)
+        without_labels = TitleBlock("Part", "001", legal_owner="X", cell_height=8,
+                                    show_labels=False, draft=draft)
+        assert with_labels.block_bbox == without_labels.block_bbox
+
+    def test_whitespace_only_legal_owner_treated_as_empty(self, draft):
+        # "   " is truthy in Python but must not create a spurious third row.
+        tb_spaces = TitleBlock("Part", "001", legal_owner="   ", cell_height=8, draft=draft)
+        tb_empty = TitleBlock("Part", "001", legal_owner="", cell_height=8, draft=draft)
+        assert tb_spaces.block_bbox["height"] == pytest.approx(tb_empty.block_bbox["height"])
+        assert tb_spaces.block_bbox["height"] == pytest.approx(16.0)
+
+    def test_labels_suppressed_when_cell_too_short(self, draft):
+        # At cell_height=4 the label text would overlap content text; _label_fits
+        # should suppress all labels, so the face count equals show_labels=False.
+        small = TitleBlock("Part", "001", cell_height=4, show_labels=True, draft=draft)
+        no_labels = TitleBlock("Part", "001", cell_height=4, show_labels=False, draft=draft)
+        assert len(small.faces()) == len(no_labels.faces())
+
+    def test_labels_shown_at_standard_cell_height(self, draft):
+        # At the default cell_height=8 labels fit without overlap; they must appear.
+        with_labels = TitleBlock("Part", "001", cell_height=8, show_labels=True, draft=draft)
+        without_labels = TitleBlock("Part", "001", cell_height=8, show_labels=False, draft=draft)
+        assert len(with_labels.faces()) > len(without_labels.faces())
+
 
 # ---------------------------------------------------------------------------
 # SurfaceFinish
