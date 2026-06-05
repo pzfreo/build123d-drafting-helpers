@@ -637,6 +637,46 @@ class TestTitleBlock:
         explicit = TitleBlock("Part", "001", scale="5:1", draft=draft)
         assert self._fingerprint(both) == self._fingerprint(explicit)
 
+    # --- ISO 7200 fields: revision and legal_owner ---
+
+    def test_revision_renders_in_col5(self, draft):
+        # revision= must produce different geometry from date= (different glyphs).
+        with_revision = TitleBlock("Part", "001", revision="A", draft=draft)
+        with_date = TitleBlock("Part", "001", date="A", draft=draft)
+        assert self._fingerprint(with_revision) == self._fingerprint(with_date)
+
+    def test_revision_overrides_date(self, draft):
+        # When both are set, revision wins — result equals revision-only.
+        both = TitleBlock("Part", "001", revision="B", date="2026-01-01", draft=draft)
+        rev_only = TitleBlock("Part", "001", revision="B", draft=draft)
+        assert self._fingerprint(both) == self._fingerprint(rev_only)
+
+    def test_legal_owner_increases_height(self, draft):
+        without = TitleBlock("Part", "001", cell_height=8, draft=draft)
+        with_lo = TitleBlock("Part", "001", legal_owner="ACME Corp", cell_height=8, draft=draft)
+        assert with_lo.block_bbox["height"] == pytest.approx(24.0)
+        assert without.block_bbox["height"] == pytest.approx(16.0)
+
+    def test_legal_owner_bbox_height_is_three_rows(self, draft):
+        tb = TitleBlock("Part", "001", legal_owner="X", width=170, cell_height=8, draft=draft)
+        assert tb.block_bbox["max_y"] == pytest.approx(24.0)
+
+    def test_no_legal_owner_bbox_unchanged(self, draft):
+        tb = TitleBlock("Part", "001", width=170, cell_height=8, draft=draft)
+        assert tb.block_bbox["height"] == pytest.approx(16.0)
+
+    def test_legal_owner_produces_extra_stroke(self, draft):
+        # With legal_owner, one extra horizontal divider is added (row 1/2 separator).
+        without = TitleBlock("Part", "001", draft=draft)
+        with_lo = TitleBlock("Part", "001", legal_owner="ACME", draft=draft)
+        assert len(with_lo.segments) > len(without.segments)
+
+    def test_legal_owner_renders_as_sketch(self, draft):
+        tb = TitleBlock("Part", "DRW-001", legal_owner="ACME Corp",
+                        revision="B", draft=draft)
+        assert isinstance(tb, Sketch)
+        assert len(tb.faces()) > 0
+
 
 # ---------------------------------------------------------------------------
 # SurfaceFinish

@@ -1198,17 +1198,37 @@ _TB_COL_FRACTIONS = [0.40, 0.20, 0.15, 0.15, 0.10]
 
 
 class TitleBlock(_Annotation):
-    """ISO-style 2-row title block built at the origin (bottom-left at (0, 0)).
+    """ISO 7200:2004 title block built at the origin (bottom-left at (0, 0)).
 
-    Layout::
+    Standard 2-row layout::
 
         ┌──────────────────┬─────────┬──────┬──────┬──────┐
-        │  part_name       │ dwg_no  │scale │ mat  │ date │
+        │  part_name       │ dwg_no  │scale │ mat  │ rev  │
+        ├──────────────────┼─────────┴──────┴──────┴──────┤
+        │ general_tolerance│    designed_by               │
+        └──────────────────┴─────────────────────────────-┘
+
+    With ``legal_owner`` set, a full-width third row is added at the top::
+
+        ┌──────────────────────────────────────────────────┐
+        │  legal_owner (full width)                        │
+        ├──────────────────┬─────────┬──────┬──────┬──────┤
+        │  part_name       │ dwg_no  │scale │ mat  │ rev  │
         ├──────────────────┼─────────┴──────┴──────┴──────┤
         │ general_tolerance│    designed_by               │
         └──────────────────┴─────────────────────────────-┘
 
     Column proportions 40 / 20 / 15 / 15 / 10 %.
+
+    ISO 7200:2004 mandatory field mapping:
+
+    - Field 1 (legal owner)        → ``legal_owner``
+    - Field 2 (document title)     → ``part_name``
+    - Field 3 (document identifier) → ``drawing_number``
+    - Field 4 (revision indicator) → ``revision``
+
+    The ``revision`` parameter takes priority over ``date`` in the top-right
+    cell.  Supply either ``revision`` (ISO 7200 preferred) or ``date`` (legacy).
 
     The scale cell takes either an explicit ``scale`` string ("1:1") or, for
     scaled drawings, a numeric ``drawing_scale`` (e.g. ``5.0``) which is
@@ -1229,6 +1249,8 @@ class TitleBlock(_Annotation):
         general_tolerance: str = "",
         designed_by: str = "",
         date: str = "",
+        revision: str = "",
+        legal_owner: str = "",
         cell_height: float = 8.0,
         width: float = 170.0,
         draft: Draft | None = None,
@@ -1253,15 +1275,24 @@ class TitleBlock(_Annotation):
             x.append(x[-1] + w)
 
         y0, y1, y2 = 0.0, cell_height, 2.0 * cell_height
+        # When legal_owner is provided an extra full-width row sits above y2.
+        y_top = (3.0 if legal_owner else 2.0) * cell_height
 
         strokes: list[Edge] = []
+        # Outer border (right and left edges extend to y_top).
         strokes.append(Edge.make_line(Vector(x[0], y0, 0), Vector(x[-1], y0, 0)))
-        strokes.append(Edge.make_line(Vector(x[-1], y0, 0), Vector(x[-1], y2, 0)))
-        strokes.append(Edge.make_line(Vector(x[-1], y2, 0), Vector(x[0], y2, 0)))
-        strokes.append(Edge.make_line(Vector(x[0], y2, 0), Vector(x[0], y0, 0)))
+        strokes.append(Edge.make_line(Vector(x[-1], y0, 0), Vector(x[-1], y_top, 0)))
+        strokes.append(Edge.make_line(Vector(x[-1], y_top, 0), Vector(x[0], y_top, 0)))
+        strokes.append(Edge.make_line(Vector(x[0], y_top, 0), Vector(x[0], y0, 0)))
+        # Row 0 / row 1 divider.
         strokes.append(Edge.make_line(Vector(x[0], y1, 0), Vector(x[-1], y1, 0)))
+        # Row 1 / legal_owner divider (only when legal_owner row exists).
+        if legal_owner:
+            strokes.append(Edge.make_line(Vector(x[0], y2, 0), Vector(x[-1], y2, 0)))
+        # Column verticals in the top content row.
         for xi in x[1:-1]:
             strokes.append(Edge.make_line(Vector(xi, y1, 0), Vector(xi, y2, 0)))
+        # First column vertical in the bottom row.
         strokes.append(Edge.make_line(Vector(x[1], y0, 0), Vector(x[1], y1, 0)))
 
         fs = draft.font_size
@@ -1275,12 +1306,14 @@ class TitleBlock(_Annotation):
                         ).moved(Location(Vector(cx, cy, 0.0)))
 
         top_y_mid = (y1 + y2) / 2.0
+        # revision takes priority over date in the top-right cell (ISO 7200 field 4).
+        col5_value = revision if revision else date
         top_cells = [
             (part_name,      (x[0] + x[1]) / 2.0),
             (drawing_number, (x[1] + x[2]) / 2.0),
             (scale,          (x[2] + x[3]) / 2.0),
             (material,       (x[3] + x[4]) / 2.0),
-            (date,           (x[4] + x[5]) / 2.0),
+            (col5_value,     (x[4] + x[5]) / 2.0),
         ]
         bot_y_mid = (y0 + y1) / 2.0
         bot_cells = [
@@ -1290,6 +1323,9 @@ class TitleBlock(_Annotation):
 
         text_faces = [_cell_txt(v, cx, top_y_mid) for v, cx in top_cells]
         text_faces += [_cell_txt(v, cx, bot_y_mid) for v, cx in bot_cells]
+        if legal_owner:
+            lo_y_mid = (y2 + y_top) / 2.0
+            text_faces.append(_cell_txt(legal_owner, (x[0] + x[-1]) / 2.0, lo_y_mid))
         text_faces = [t for t in text_faces if t is not None]
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
@@ -1297,8 +1333,8 @@ class TitleBlock(_Annotation):
                          rotation=rotation, align=align, mode=mode)
         self.block_bbox = {
             "min_x": 0.0, "min_y": 0.0,
-            "max_x": width, "max_y": y2,
-            "width": width, "height": y2,
+            "max_x": width, "max_y": y_top,
+            "width": width, "height": y_top,
         }
 
 
