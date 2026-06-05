@@ -2288,7 +2288,7 @@ def find_overlaps(sketches, *, min_area: float = 0.01) -> list[LintIssue]:
     items = list(sketches)
     issues: list[LintIssue] = []
     # Pre-compute bboxes once; fall back to None on failure.
-    bboxes = []
+    bboxes: list[tuple[Any, Any, Any, Any] | None] = []
     for item in items:
         try:
             bb = item.bounding_box()
