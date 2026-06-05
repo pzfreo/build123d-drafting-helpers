@@ -703,6 +703,14 @@ class TestTitleBlock:
         with_lo_unlabelled = TitleBlock("Part", "001", legal_owner="X", show_labels=False, draft=draft)
         assert len(with_lo_labelled.faces()) > len(with_lo_unlabelled.faces())
 
+    def test_show_labels_does_not_affect_block_bbox(self, draft):
+        # Labels are glyphs only — they must not change the reported block dimensions.
+        with_labels = TitleBlock("Part", "001", legal_owner="X", cell_height=8,
+                                 show_labels=True, draft=draft)
+        without_labels = TitleBlock("Part", "001", legal_owner="X", cell_height=8,
+                                    show_labels=False, draft=draft)
+        assert with_labels.block_bbox == without_labels.block_bbox
+
 
 # ---------------------------------------------------------------------------
 # SurfaceFinish

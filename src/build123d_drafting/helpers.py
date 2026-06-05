@@ -1313,7 +1313,7 @@ class TitleBlock(_Annotation):
 
         # Small field-identifier labels anchored to bottom-left of each cell.
         lfs = max(fs * 0.5, 1.0)
-        lpad = 0.8
+        lpad = draft.pad_around_text * 0.4
 
         def _label(text, x_left, y_bottom):
             if not show_labels:
@@ -1324,8 +1324,7 @@ class TitleBlock(_Annotation):
 
         top_y_mid = (y1 + y2) / 2.0
         # revision takes priority over date in the top-right cell (ISO 7200 field 4).
-        col5_value = revision if revision else date
-        col5_label = "REV" if revision else "DATE"
+        col5_value, col5_label = (revision, "REV") if revision else (date, "DATE")
         top_cells = [
             (part_name,      (x[0] + x[1]) / 2.0),
             (drawing_number, (x[1] + x[2]) / 2.0),
