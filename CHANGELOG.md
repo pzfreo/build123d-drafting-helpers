@@ -2,16 +2,25 @@
 
 ## Unreleased
 
+## v0.3.2 — 2026-06-05
+
 ### Added
 
 - **`TitleBlock` gains `revision`, `legal_owner`, and `show_labels` parameters**
-  for ISO 7200:2004 compliance.
+  for ISO 7200:2004 compliance (#45).
   - `revision` (field 4) takes priority over `date` in the top-right cell.
   - `legal_owner` (field 1) adds a full-width third row above the content rows;
     `block_bbox["height"]` grows by one `cell_height`.
   - `show_labels=True` (default) renders small field-identifier labels
     ("TITLE", "DWG NO.", "SCALE", "MAT.", "REV"/"DATE", "GEN. TOL.", "DRAWN BY",
     "LEGAL OWNER") in the bottom-left corner of each cell.
+
+### Fixed
+
+- **`find_overlaps()` adds an AABB pre-filter** (#38) to skip expensive OCC
+  boolean operations for obviously non-overlapping pairs, improving performance
+  on drawings with many annotations. Boolean failures now surface as
+  `geometry_check_failed` warnings instead of raising.
 
 ## v0.3.1 — 2026-06-04
 
