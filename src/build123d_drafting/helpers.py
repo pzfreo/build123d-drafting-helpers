@@ -120,7 +120,7 @@ def _strokes_and_text(strokes, text_faces, line_width):
     overlapping thin bands render identically on a fill layer.
     """
     seg = _segments(strokes)
-    faces = []
+    faces: list[Any] = []
     for e in _split_circles(strokes):
         try:
             faces += trace([e], line_width=line_width).faces()
