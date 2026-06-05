@@ -35,3 +35,19 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  notify-mcp:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: File repin issue in build123d-mcp
+        env:
+          GH_TOKEN: ${{ secrets.NOTIFY_PAT }}
+        run: |
+          VERSION=${{ github.event.release.tag_name }}
+          gh issue create \
+            --repo pzfreo/build123d-mcp \
+            --title "Repin build123d-drafting-helpers to ${VERSION}" \
+            --body "build123d-drafting-helpers ${VERSION} has been published to PyPI. Please update the pinned version and cut a release of build123d-mcp."
