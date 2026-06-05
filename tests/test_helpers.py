@@ -711,6 +711,26 @@ class TestTitleBlock:
                                     show_labels=False, draft=draft)
         assert with_labels.block_bbox == without_labels.block_bbox
 
+    def test_whitespace_only_legal_owner_treated_as_empty(self, draft):
+        # "   " is truthy in Python but must not create a spurious third row.
+        tb_spaces = TitleBlock("Part", "001", legal_owner="   ", cell_height=8, draft=draft)
+        tb_empty = TitleBlock("Part", "001", legal_owner="", cell_height=8, draft=draft)
+        assert tb_spaces.block_bbox["height"] == pytest.approx(tb_empty.block_bbox["height"])
+        assert tb_spaces.block_bbox["height"] == pytest.approx(16.0)
+
+    def test_labels_suppressed_when_cell_too_short(self, draft):
+        # At cell_height=4 the label text would overlap content text; _label_fits
+        # should suppress all labels, so the face count equals show_labels=False.
+        small = TitleBlock("Part", "001", cell_height=4, show_labels=True, draft=draft)
+        no_labels = TitleBlock("Part", "001", cell_height=4, show_labels=False, draft=draft)
+        assert len(small.faces()) == len(no_labels.faces())
+
+    def test_labels_shown_at_standard_cell_height(self, draft):
+        # At the default cell_height=8 labels fit without overlap; they must appear.
+        with_labels = TitleBlock("Part", "001", cell_height=8, show_labels=True, draft=draft)
+        without_labels = TitleBlock("Part", "001", cell_height=8, show_labels=False, draft=draft)
+        assert len(with_labels.faces()) > len(without_labels.faces())
+
 
 # ---------------------------------------------------------------------------
 # SurfaceFinish

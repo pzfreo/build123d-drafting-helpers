@@ -1267,6 +1267,7 @@ class TitleBlock(_Annotation):
         drawing_scale: float | None = None,
     ):
         draft = draft or Draft(font_size=2.5, decimal_precision=1)
+        legal_owner = legal_owner.strip()
 
         # A numeric drawing_scale is the single source of truth: it derives the
         # printed "5:1" indicator AND is the divisor lint_drawing() uses for the
@@ -1312,11 +1313,14 @@ class TitleBlock(_Annotation):
                         ).moved(Location(Vector(cx, cy, 0.0)))
 
         # Small field-identifier labels anchored to bottom-left of each cell.
-        lfs = max(fs * 0.5, 1.0)
+        lfs = fs * 0.5
         lpad = draft.pad_around_text * 0.4
+        # Labels sit in the lower portion of a cell; suppress them if the label
+        # text would overlap the (center-aligned) content text above it.
+        _label_fits = (cell_height * 0.5 - fs * 0.5) > (lpad + lfs)
 
         def _label(text, x_left, y_bottom):
-            if not show_labels:
+            if not show_labels or not _label_fits:
                 return None
             return Text(txt=text, font_size=lfs, font=font,
                         align=(Align.MIN, Align.MIN), mode=Mode.PRIVATE,
