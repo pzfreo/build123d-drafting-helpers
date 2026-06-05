@@ -830,6 +830,18 @@ class TestSurfaceFinish:
     def test_renders_on_single_ink_layer(self, draft):
         _export_ink(SurfaceFinish("Ra 1.6", (5, 5), draft=draft))
 
+    def test_ra_value_sits_above_shelf(self, draft):
+        # ISO 1302: the Ra value must sit ABOVE the lead-out shelf line.
+        # The bottom of the text area (label_bbox[1]) must be >= the tip Y.
+        sf = SurfaceFinish("Ra 1.6", (0, 0), draft=draft)
+        tip_y = sf.mark_position[1]
+        # The annotation extends upward from the tip; the label occupies the
+        # upper portion.  Verify the text-area min-Y is above the tip.
+        bb = sf.bounding_box()
+        assert bb.max.Y > tip_y + draft.font_size * 0.5, (
+            "Ra text should extend above the shelf/tip; it may be below the shelf"
+        )
+
 
 # ---------------------------------------------------------------------------
 # FeatureControlFrame
@@ -843,7 +855,12 @@ class TestFeatureControlFrame:
     def test_all_14_characteristics_draw(self, draft):
         for c in _GDT_GLYPHS:
             fcf = FeatureControlFrame(c, 0.1, ("A",), draft)
-            assert len(fcf.faces()) > 3, f"{c} produced too few faces"
+            # Threshold: frame (4 edges → faces) + characteristic glyph + tolerance
+            # text + datum letter. Every characteristic needs at least 6 faces so
+            # a glyph that loses all its strokes (silently collapses) is detected.
+            assert len(fcf.faces()) >= 6, (
+                f"{c} produced only {len(fcf.faces())} faces — glyph may have collapsed"
+            )
             _export_ink(fcf)  # every characteristic must export cleanly (no flood)
 
     def test_bottom_left_at_origin(self, draft):
@@ -921,11 +938,38 @@ class TestDatumFeature:
     def test_tip_at_origin(self, draft):
         assert DatumFeature("A", draft).bounding_box().min.Y == pytest.approx(0.0, abs=0.1)
 
-    def test_filled_has_more_faces_than_outline(self, draft):
+    def test_filled_has_solid_triangle(self, draft):
+        # filled=True: triangle is a solid Face (large area).
+        # filled=False: triangle is three thin stroke-faces (each small area).
         filled = DatumFeature("A", draft, filled=True)
         outline = DatumFeature("A", draft, filled=False)
-        # filled adds a solid triangle face; outline draws it as three strokes
-        assert len(filled.faces()) > 0 and len(outline.faces()) > 0
+        # The filled variant should have at least one face whose area is
+        # significantly larger than any stroke face (i.e. the solid triangle).
+        filled_max_area = max(f.area for f in filled.faces())
+        outline_max_area = max(f.area for f in outline.faces())
+        # At font_size=2.5 the solid triangle (~5.5 mm²) is ~5.5× the largest
+        # stroke face (~1.0 mm², from the datum box).  Use 5× as a tight lower
+        # bound — still catches a degraded fill that produces only strokes.
+        assert filled_max_area > outline_max_area * 5, (
+            "filled=True should produce a large solid triangle face "
+            f"(max area {filled_max_area:.2f}) larger than outline's "
+            f"max stroke area ({outline_max_area:.2f})"
+        )
+
+    def test_outline_triangle_has_only_thin_strokes(self, draft):
+        # ISO 5459 outline mode: the triangle must stroke (thin faces from trace).
+        # All faces should be thin (small area) — no solid polygon.
+        outline = DatumFeature("A", draft, filled=False)
+        areas = sorted(f.area for f in outline.faces())
+        # The largest face in outline mode should be a thin stroke.
+        # At font_size=2.5, line_width=0.1: stroke area ≈ 0.5 mm²; use 1.5×
+        # headroom. Expressed as a multiple of font_size² so the threshold
+        # scales if the fixture ever changes.
+        draft_area_unit = draft.font_size * draft.font_size
+        assert areas[-1] < draft_area_unit * 0.25, (
+            f"outline=False has a large face (area {areas[-1]:.2f} mm²) — "
+            "the triangle may be rendering as a solid"
+        )
 
     def test_default_draft_used_when_none(self):
         assert isinstance(DatumFeature("A"), Sketch)
@@ -1231,6 +1275,43 @@ class TestFindOverlaps:
         # they cross at origin -> thin faces intersect
         issues = find_overlaps([a, b], min_area=0.001)
         assert isinstance(issues, list)
+
+    def test_aabb_prefilter_skips_distant_pairs(self, draft, monkeypatch):
+        # Two sketches far apart: AABB pre-filter should skip the OCC boolean
+        # entirely.  Verify by patching Shape.__and__ to raise — if it were
+        # called the test would fail with geometry_check_failed, not a clean [].
+        import build123d.topology.shape_core as sc
+        from build123d import Pos
+
+        def _should_not_run(self, other):
+            raise AssertionError("AABB filter should have skipped this pair")
+
+        monkeypatch.setattr(sc.Shape, "__and__", _should_not_run)
+        a = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20")
+        b = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="20").moved(
+            Pos(1000, 1000, 0)
+        )
+        issues = find_overlaps([a, b])
+        assert issues == []
+
+    def test_error_on_boolean_surfaces_warning(self, draft, monkeypatch):
+        # When the OCC boolean raises, a geometry_check_failed warning is emitted
+        # rather than silently continuing (so the caller knows the check didn't run).
+        import build123d.topology.shape_core as sc
+
+        import build123d_drafting.helpers as h
+
+        a = Dimension((-5, 0, 0), (5, 0, 0), "above", 6, draft, label="10")
+        b = Dimension((-5, 0, 0), (5, 0, 0), "above", 6, draft, label="10")
+
+        def broken_and(self, other):
+            raise RuntimeError("simulated OCC failure")
+
+        monkeypatch.setattr(sc.Shape, "__and__", broken_and)
+        issues = h.find_overlaps([a, b])
+        assert any(i.code == "geometry_check_failed" for i in issues), (
+            "expected geometry_check_failed warning when boolean raises"
+        )
 
 
 # ---------------------------------------------------------------------------
