@@ -1,8 +1,10 @@
 # build123d-drafting-helpers
 
+[![CI](https://github.com/pzfreo/build123d-drafting-helpers/actions/workflows/ci.yml/badge.svg)](https://github.com/pzfreo/build123d-drafting-helpers/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/build123d-drafting-helpers.svg)](https://pypi.org/project/build123d-drafting-helpers/)
 [![Python](https://img.shields.io/pypi/pyversions/build123d-drafting-helpers.svg)](https://pypi.org/project/build123d-drafting-helpers/)
 [![License](https://img.shields.io/pypi/l/build123d-drafting-helpers.svg)](LICENSE)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 Third-party drawing-annotation helpers for [build123d](https://github.com/gumyr/build123d) — pure Python, no MCP dependency. Not affiliated with the upstream build123d project.
 
