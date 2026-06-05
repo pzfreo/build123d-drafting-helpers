@@ -640,15 +640,17 @@ class TestTitleBlock:
     # --- ISO 7200 fields: revision and legal_owner ---
 
     def test_revision_renders_in_col5(self, draft):
-        # revision= must produce different geometry from date= (different glyphs).
-        with_revision = TitleBlock("Part", "001", revision="A", draft=draft)
-        with_date = TitleBlock("Part", "001", date="A", draft=draft)
+        # revision="A" and date="A" render the same value glyph in col5.
+        # Use show_labels=False so the "REV" vs "DATE" label text doesn't confound.
+        with_revision = TitleBlock("Part", "001", revision="A", show_labels=False, draft=draft)
+        with_date = TitleBlock("Part", "001", date="A", show_labels=False, draft=draft)
         assert self._fingerprint(with_revision) == self._fingerprint(with_date)
 
     def test_revision_overrides_date(self, draft):
         # When both are set, revision wins — result equals revision-only.
-        both = TitleBlock("Part", "001", revision="B", date="2026-01-01", draft=draft)
-        rev_only = TitleBlock("Part", "001", revision="B", draft=draft)
+        # Use show_labels=False to isolate value content from label content.
+        both = TitleBlock("Part", "001", revision="B", date="2026-01-01", show_labels=False, draft=draft)
+        rev_only = TitleBlock("Part", "001", revision="B", show_labels=False, draft=draft)
         assert self._fingerprint(both) == self._fingerprint(rev_only)
 
     def test_legal_owner_increases_height(self, draft):
@@ -676,6 +678,30 @@ class TestTitleBlock:
                         revision="B", draft=draft)
         assert isinstance(tb, Sketch)
         assert len(tb.faces()) > 0
+
+    def test_show_labels_adds_faces(self, draft):
+        # Labels add glyph faces, so the labelled block has more faces than unlabelled.
+        with_labels = TitleBlock("Part", "001", show_labels=True, draft=draft)
+        without_labels = TitleBlock("Part", "001", show_labels=False, draft=draft)
+        assert len(with_labels.faces()) > len(without_labels.faces())
+
+    def test_show_labels_false_matches_legacy(self, draft):
+        # show_labels=False should match the pre-0.4.0 fingerprint (no label glyphs).
+        legacy = TitleBlock("Part", "001", show_labels=False, draft=draft)
+        assert isinstance(legacy, Sketch)
+        assert len(legacy.faces()) > 0
+
+    def test_rev_label_differs_from_date_label(self, draft):
+        # "REV" label glyph differs from "DATE" label — fingerprints must differ.
+        with_rev = TitleBlock("Part", "001", revision="A", show_labels=True, draft=draft)
+        with_date = TitleBlock("Part", "001", date="A", show_labels=True, draft=draft)
+        assert self._fingerprint(with_rev) != self._fingerprint(with_date)
+
+    def test_legal_owner_label_present(self, draft):
+        # Block with legal_owner + labels should have more faces than without label.
+        with_lo_labelled = TitleBlock("Part", "001", legal_owner="X", show_labels=True, draft=draft)
+        with_lo_unlabelled = TitleBlock("Part", "001", legal_owner="X", show_labels=False, draft=draft)
+        assert len(with_lo_labelled.faces()) > len(with_lo_unlabelled.faces())
 
 
 # ---------------------------------------------------------------------------

@@ -1230,6 +1230,11 @@ class TitleBlock(_Annotation):
     The ``revision`` parameter takes priority over ``date`` in the top-right
     cell.  Supply either ``revision`` (ISO 7200 preferred) or ``date`` (legacy).
 
+    When ``show_labels`` is ``True`` (the default), each cell carries a small
+    bottom-left field identifier: ``TITLE``, ``DWG NO.``, ``SCALE``, ``MAT.``,
+    ``REV`` / ``DATE``, ``GEN. TOL.``, ``DRAWN BY``, and ``LEGAL OWNER``.
+    Pass ``show_labels=False`` to suppress labels (legacy appearance).
+
     The scale cell takes either an explicit ``scale`` string ("1:1") or, for
     scaled drawings, a numeric ``drawing_scale`` (e.g. ``5.0``) which is
     formatted to "5:1" via :func:`format_drawing_scale` and overrides ``scale``.
@@ -1251,6 +1256,7 @@ class TitleBlock(_Annotation):
         date: str = "",
         revision: str = "",
         legal_owner: str = "",
+        show_labels: bool = True,
         cell_height: float = 8.0,
         width: float = 170.0,
         draft: Draft | None = None,
@@ -1305,9 +1311,21 @@ class TitleBlock(_Annotation):
                         align=(Align.CENTER, Align.CENTER), mode=Mode.PRIVATE,
                         ).moved(Location(Vector(cx, cy, 0.0)))
 
+        # Small field-identifier labels anchored to bottom-left of each cell.
+        lfs = max(fs * 0.5, 1.0)
+        lpad = 0.8
+
+        def _label(text, x_left, y_bottom):
+            if not show_labels:
+                return None
+            return Text(txt=text, font_size=lfs, font=font,
+                        align=(Align.MIN, Align.MIN), mode=Mode.PRIVATE,
+                        ).moved(Location(Vector(x_left + lpad, y_bottom + lpad, 0.0)))
+
         top_y_mid = (y1 + y2) / 2.0
         # revision takes priority over date in the top-right cell (ISO 7200 field 4).
         col5_value = revision if revision else date
+        col5_label = "REV" if revision else "DATE"
         top_cells = [
             (part_name,      (x[0] + x[1]) / 2.0),
             (drawing_number, (x[1] + x[2]) / 2.0),
@@ -1315,17 +1333,31 @@ class TitleBlock(_Annotation):
             (material,       (x[3] + x[4]) / 2.0),
             (col5_value,     (x[4] + x[5]) / 2.0),
         ]
+        top_label_specs = [
+            ("TITLE",   x[0], y1),
+            ("DWG NO.", x[1], y1),
+            ("SCALE",   x[2], y1),
+            ("MAT.",    x[3], y1),
+            (col5_label, x[4], y1),
+        ]
         bot_y_mid = (y0 + y1) / 2.0
         bot_cells = [
             (general_tolerance, (x[0] + x[1]) / 2.0),
             (designed_by,       (x[1] + x[-1]) / 2.0),
         ]
+        bot_label_specs = [
+            ("GEN. TOL.", x[0], y0),
+            ("DRAWN BY",  x[1], y0),
+        ]
 
         text_faces = [_cell_txt(v, cx, top_y_mid) for v, cx in top_cells]
         text_faces += [_cell_txt(v, cx, bot_y_mid) for v, cx in bot_cells]
+        text_faces += [_label(lbl, xl, yb) for lbl, xl, yb in top_label_specs]
+        text_faces += [_label(lbl, xl, yb) for lbl, xl, yb in bot_label_specs]
         if legal_owner:
             lo_y_mid = (y2 + y_top) / 2.0
             text_faces.append(_cell_txt(legal_owner, (x[0] + x[-1]) / 2.0, lo_y_mid))
+            text_faces.append(_label("LEGAL OWNER", x[0], y2))
         text_faces = [t for t in text_faces if t is not None]
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
