@@ -2301,8 +2301,7 @@ def find_overlaps(sketches, *, min_area: float = 0.01) -> list[LintIssue]:
             # AABB pre-filter — skip if bboxes don't overlap at all.
             bi, bj = bboxes[i], bboxes[j]
             if bi is not None and bj is not None:
-                if (bi[2] <= bj[0] or bj[2] <= bi[0] or
-                        bi[3] <= bj[1] or bj[3] <= bi[1]):
+                if bi[2] <= bj[0] or bj[2] <= bi[0] or bi[3] <= bj[1] or bj[3] <= bi[1]:
                     continue
             la = getattr(items[i], "label", None) or f"#{i}"
             lb = getattr(items[j], "label", None) or f"#{j}"
@@ -2310,12 +2309,16 @@ def find_overlaps(sketches, *, min_area: float = 0.01) -> list[LintIssue]:
                 inter = items[i] & items[j]
                 area = inter.area
             except Exception as exc:
-                issues.append(LintIssue(
-                    severity="warning",
-                    message=(f"geometry check failed for '{la}' vs '{lb}': {exc} "
-                             f"— overlap status unknown"),
-                    code="geometry_check_failed",
-                ))
+                issues.append(
+                    LintIssue(
+                        severity="warning",
+                        message=(
+                            f"geometry check failed for '{la}' vs '{lb}': {exc} "
+                            f"— overlap status unknown"
+                        ),
+                        code="geometry_check_failed",
+                    )
+                )
                 continue
             if area > min_area:
                 issues.append(
