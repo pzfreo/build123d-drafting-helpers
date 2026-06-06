@@ -89,7 +89,8 @@ def _analyse_cylinders(part):
     z_cyls: cylinders whose axis is approximately Z.
     cross_cyls: cylinders whose axis is approximately X or Y.
     """
-    z_cyls, cross_cyls = [], []
+    z_cyls: list[dict] = []
+    cross_cyls: list[dict] = []
     for face in part.faces():
         surf = BRepAdaptor_Surface(face.wrapped)
         if surf.GetType() != GeomAbs_Cylinder:
@@ -115,7 +116,7 @@ def _analyse_cylinders(part):
 def _dedup_diams(cyls, tol: float = 0.15) -> list:
     """Return sorted-descending deduplicated diameter list from cylinder records."""
     raw = sorted({c["diameter"] for c in cyls}, reverse=True)
-    merged = []
+    merged: list[float] = []
     for d in raw:
         if not merged or abs(d - merged[-1]) > tol:
             merged.append(round(d, 2))
