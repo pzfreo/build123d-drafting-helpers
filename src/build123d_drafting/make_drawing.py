@@ -82,7 +82,7 @@ def fix_svg_page_size(svg_path: str, page_w: float, page_h: float) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _analyse_cylinders(part):
+def analyse_cylinders(part):
     """Return (z_cyls, cross_cyls) from OCP cylindrical face analysis.
 
     Each entry is a dict with keys: diameter, area, cx, cy, cz, axis.
@@ -113,7 +113,7 @@ def _analyse_cylinders(part):
     return z_cyls, cross_cyls
 
 
-def _dedup_diams(cyls, tol: float = 0.15) -> list:
+def dedup_diams(cyls, tol: float = 0.15) -> list:
     """Return sorted-descending deduplicated diameter list from cylinder records."""
     raw = sorted({c["diameter"] for c in cyls}, reverse=True)
     merged: list[float] = []
@@ -128,7 +128,7 @@ def _fmt(v: float) -> str:
     return str(int(v)) if v == int(v) else f"{v:.1f}"
 
 
-def _analyse_face_levels(part, tol: float = 0.5) -> list:
+def analyse_face_levels(part, tol: float = 0.5) -> list:
     """Return sorted unique Z-coords of horizontal (normal≈±Z) planar faces.
 
     Uses tol-bucket deduplication but returns the actual face Z, not the rounded
@@ -147,7 +147,7 @@ def _analyse_face_levels(part, tol: float = 0.5) -> list:
     return sorted(buckets.values())
 
 
-def _choose_scale(x_size: float, y_size: float, z_size: float) -> tuple:
+def choose_scale(x_size: float, y_size: float, z_size: float) -> tuple:
     """Return (SCALE, PAGE_W, PAGE_H, TB_W) for a 4-view layout.
 
     Layout columns: [front(x×z)] [side(y×z)] [iso(~0.7*max)] [title block].
@@ -207,15 +207,15 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out):
 
     _log.info("Loaded %s  bbox: %.2f × %.2f × %.2f mm", step_file, x_size, y_size, z_size)
 
-    z_cyls, cross_cyls = _analyse_cylinders(part)
-    z_diams = _dedup_diams(z_cyls)
-    cross_diams = _dedup_diams(cross_cyls)
+    z_cyls, cross_cyls = analyse_cylinders(part)
+    z_diams = dedup_diams(z_cyls)
+    cross_diams = dedup_diams(cross_cyls)
 
     _log.info("Z-axis diameters: %s", z_diams)
     if cross_diams:
         _log.info("Cross-hole diams: %s", cross_diams)
 
-    SCALE, PAGE_W, PAGE_H, TB_W = _choose_scale(x_size, y_size, z_size)
+    SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(x_size, y_size, z_size)
     DIM_PAD = _DIM_PAD
     margin = _MARGIN
 
@@ -244,7 +244,7 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out):
     ISO_X = sv_right + right_avail / 2
     ISO_Y = PV_Y
 
-    face_zs = _analyse_face_levels(part)
+    face_zs = analyse_face_levels(part)
     step_zs = [z for z in face_zs if z > bb.min.Z + 0.6 and z < bb.max.Z - 0.6]
 
     page_label = {297: "A4", 420: "A3", 594: "A2", 841: "A1", 1189: "A0"}.get(
@@ -622,7 +622,7 @@ def _write_script(a) -> str:
         "try:\n"
         "    cog  # NameError → not under cog; use output section below\n"
         "    from build123d_drafting.make_drawing import (\n"
-        "        _analyse_cylinders, _choose_scale, _dedup_diams,\n"
+        "        analyse_cylinders, choose_scale, dedup_diams,\n"
         "    )\n"
         "    from build123d import import_step as _imp\n"
         "    _part = _imp(_STEP_FILE)\n"
@@ -634,10 +634,10 @@ def _write_script(a) -> str:
         "    cy = (_bb.min.Y + _bb.max.Y) / 2\n"
         "    cz = (_bb.min.Z + _bb.max.Z) / 2\n"
         "    bbox_max = max(x_size, y_size, z_size)\n"
-        "    _zc, _xc = _analyse_cylinders(_part)\n"
-        "    z_diams     = _dedup_diams(_zc)\n"
-        "    cross_diams = _dedup_diams(_xc)\n"
-        "    SCALE, PAGE_W, PAGE_H, TB_W = _choose_scale(x_size, y_size, z_size)\n"
+        "    _zc, _xc = analyse_cylinders(_part)\n"
+        "    z_diams     = dedup_diams(_zc)\n"
+        "    cross_diams = dedup_diams(_xc)\n"
+        "    SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(x_size, y_size, z_size)\n"
         "    _DIM_PAD = 18.0; _margin = 10.0\n"
         "    _fv_hw = x_size * SCALE / 2; _fv_hh = z_size * SCALE / 2\n"
         "    _sv_hw = y_size * SCALE / 2; _pv_hh = y_size * SCALE / 2\n"

@@ -24,6 +24,7 @@ from build123d_drafting.helpers import (
     SafeDimension,
     SurfaceFinish,
     TitleBlock,
+    ViewCoordinates,
     annotate,
     clear_page,
     draft_preset,
@@ -37,12 +38,24 @@ from build123d_drafting.helpers import (
     set_page,
     view_axes,
 )
-from build123d_drafting.make_drawing import fix_svg_page_size, generate_script, make_drawing
+from build123d_drafting.make_drawing import (
+    analyse_cylinders,
+    analyse_face_levels,
+    choose_scale,
+    dedup_diams,
+    fix_svg_page_size,
+    generate_script,
+    make_drawing,
+)
 
 __all__ = [
     "fix_svg_page_size",
     "generate_script",
     "make_drawing",
+    "analyse_cylinders",
+    "analyse_face_levels",
+    "choose_scale",
+    "dedup_diams",
     "Centerline",
     "CompositeFeatureControlFrame",
     "DatumFeature",
@@ -55,6 +68,7 @@ __all__ = [
     "SafeDimension",
     "SurfaceFinish",
     "TitleBlock",
+    "ViewCoordinates",
     "annotate",
     "clear_page",
     "draft_preset",
