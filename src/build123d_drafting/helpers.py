@@ -773,6 +773,61 @@ def view_axes(
     return result
 
 
+class ViewCoordinates:
+    """Page-coordinate helpers for a projected view.
+
+    Wraps the ``view_axes()`` result with the view page-centre, part
+    centroid, and scale so that ``px()`` / ``py()`` map world coordinates
+    to page coordinates without manual axis-sign look-up.
+
+    Example::
+
+        axes = view_axes((cxs, cys - DIST, czs), (0, 0, 1), (cxs, cys, czs))
+        vc = ViewCoordinates(axes, FV_X, FV_Y, cx, cy, cz, SCALE)
+        # Front view: world X → page X, world Z → page Y
+        page_x = vc.px(part.bounding_box().max.X)
+        page_y = vc.py(part.bounding_box().max.Z)
+    """
+
+    def __init__(
+        self,
+        axes: dict[str, tuple[str, float]],
+        view_x: float,
+        view_y: float,
+        cx: float,
+        cy: float,
+        cz: float,
+        scale: float,
+    ) -> None:
+        centers: dict[str, float] = {"world_X": cx, "world_Y": cy, "world_Z": cz}
+        self._view_x = view_x
+        self._view_y = view_y
+        self._scale = scale
+        self._px_center: float | None = None
+        self._px_sign: float = 1.0
+        self._py_center: float | None = None
+        self._py_sign: float = 1.0
+        for world_ax, (page_ax, sign) in axes.items():
+            if page_ax == "page_X":
+                self._px_center = centers[world_ax]
+                self._px_sign = sign
+            elif page_ax == "page_Y":
+                self._py_center = centers[world_ax]
+                self._py_sign = sign
+
+    def px(self, world_val: float) -> float:
+        """Map a value on the world axis that projects to page X."""
+        if self._px_center is None:
+            raise ValueError("No world axis projects to page_X in this view")
+        return self._view_x + (world_val - self._px_center) * self._px_sign * self._scale
+
+    def py(self, world_val: float) -> float:
+        """Map a value on the world axis that projects to page Y."""
+        if self._py_center is None:
+            raise ValueError("No world axis projects to page_Y in this view")
+        return self._view_y + (world_val - self._py_center) * self._py_sign * self._scale
+
+
 # ---------------------------------------------------------------------------
 # place_dims
 # ---------------------------------------------------------------------------
