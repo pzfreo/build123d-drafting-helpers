@@ -12,7 +12,6 @@ from build123d_drafting.make_drawing import (
     make_drawing,
 )
 
-
 # ---------------------------------------------------------------------------
 # Pure-function unit tests (fast, no OCP projection)
 # ---------------------------------------------------------------------------
@@ -47,7 +46,11 @@ class TestDedupDiams:
         assert len(result) == 2
 
     def test_sorted_descending(self):
-        cyls = [{"diameter": 5.0, "area": 1}, {"diameter": 20.0, "area": 1}, {"diameter": 10.0, "area": 1}]
+        cyls = [
+            {"diameter": 5.0, "area": 1},
+            {"diameter": 20.0, "area": 1},
+            {"diameter": 10.0, "area": 1},
+        ]
         result = _dedup_diams(cyls)
         assert result == [20.0, 10.0, 5.0]
 
@@ -77,7 +80,18 @@ class TestChooseScale:
         scale, pw, ph, tbw = _choose_scale(x, y, z)
         margin, dim_pad = 10.0, 18.0
         bbox_max = max(x, y, z)
-        w = margin + dim_pad + x * scale + dim_pad + y * scale + dim_pad + bbox_max * scale * 0.7 + dim_pad + tbw + margin
+        w = (
+            margin
+            + dim_pad
+            + x * scale
+            + dim_pad
+            + y * scale
+            + dim_pad
+            + bbox_max * scale * 0.7
+            + dim_pad
+            + tbw
+            + margin
+        )
         h = margin + dim_pad + y * scale + dim_pad + z * scale + dim_pad + margin
         assert w <= pw
         assert h <= ph
