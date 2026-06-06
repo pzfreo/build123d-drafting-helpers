@@ -125,15 +125,22 @@ def _fmt(v: float) -> str:
 
 
 def _analyse_face_levels(part, tol: float = 0.5) -> list:
-    """Return sorted unique Z-coords of horizontal (normal≈±Z) planar faces."""
-    zs = set()
+    """Return sorted unique Z-coords of horizontal (normal≈±Z) planar faces.
+
+    Uses tol-bucket deduplication but returns the actual face Z, not the rounded
+    bucket centre, so dimension labels match the true geometry.
+    """
+    buckets = {}
     for face in part.faces():
         surf = BRepAdaptor_Surface(face.wrapped)
         if surf.GetType() == GeomAbs_Plane:
             ax = surf.Plane().Axis().Direction()
             if abs(ax.Z()) > 0.99:
-                zs.add(round(surf.Plane().Location().Z() / tol) * tol)
-    return sorted(zs)
+                z = surf.Plane().Location().Z()
+                key = round(z / tol) * tol
+                if key not in buckets:
+                    buckets[key] = z
+    return sorted(buckets.values())
 
 
 def _choose_scale(x_size: float, y_size: float, z_size: float) -> tuple:
@@ -436,7 +443,7 @@ def make_drawing(
 
     # Step heights — only where the step is tall enough to fit a label
     if a.step_zs:
-        right_x0 = FX(a.bb.max.X + 2) + a.DIM_PAD + 10
+        right_x0 = FX(a.bb.max.X) + 2 + a.DIM_PAD + 10
         step_col = 0
         for z in a.step_zs[:3]:
             step_h = z - a.bb.min.Z
@@ -700,7 +707,7 @@ def _write_script(a) -> str:
         "_ann(Dimension(\n"
         "    (FX(cx + x_size / 2) + 2, FZ(cz - z_size / 2), 0),\n"
         "    (FX(cx + x_size / 2) + 2, FZ(cz + z_size / 2), 0),\n"
-        '    "right", 8, draft, label=f"{z_size:.0f}",\n'
+        '    "right", 8, draft, label=f"{_fmt(z_size)}",\n'
         '), "dim_height")\n'
         "\n"
         "# Outer diameter (only for parts with cylindrical faces)\n"
@@ -722,7 +729,7 @@ def _write_script(a) -> str:
     lint_export = (
         "# ── Lint + Export ────────────────────────────────────────────────────────────\n"
         "set_page(PAGE_W, PAGE_H, margin=10)\n"
-        "issues = lint_drawing(all_anns, drawing_scale=SCALE)\n"
+        "issues = lint_drawing(all_anns, drawing_scale=SCALE, view_shapes=[v for v in (front, plan, side, iso) if v])\n"
         "if issues:\n"
         "    for iss in issues:\n"
         '        print(f"  [{iss.severity}] {iss.code}: {iss.message}")\n'
