@@ -225,7 +225,7 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out):
     y_offset = max(0.0, (PAGE_H - total_h) / 2)
 
     total_content_w = 4 * DIM_PAD + x_size * SCALE + y_size * SCALE + bbox_max * SCALE * 0.7
-    x_offset = max(0.0, (PAGE_W - 2 * margin - total_content_w) / 2)
+    x_offset = max(0.0, (PAGE_W - 2 * margin - TB_W - total_content_w) / 2)
 
     FV_X = margin + x_offset + DIM_PAD + fv_hw
     FV_Y = y_offset + margin + DIM_PAD + fv_hh
@@ -476,28 +476,17 @@ def make_drawing(
         )
 
     # Title block
-    try:
-        tb = TitleBlock(
-            title,
-            number,
-            drawing_scale=a.SCALE,
-            general_tolerance=tolerance,
-            designed_by=drawn_by,
-            revision="A",
-            legal_owner="",
-            width=a.TB_W,
-            draft=draft,
-        ).locate(Location((a.PAGE_W - a.TB_W - 11, 11, 0)))
-    except TypeError:
-        tb = TitleBlock(
-            title,
-            number,
-            drawing_scale=a.SCALE,
-            general_tolerance=tolerance,
-            designed_by=drawn_by,
-            width=a.TB_W,
-            draft=draft,
-        ).locate(Location((a.PAGE_W - a.TB_W - 11, 11, 0)))
+    tb = TitleBlock(
+        title,
+        number,
+        drawing_scale=a.SCALE,
+        general_tolerance=tolerance,
+        designed_by=drawn_by,
+        revision="A",
+        legal_owner="",
+        width=a.TB_W,
+        draft=draft,
+    ).locate(Location((a.PAGE_W - a.TB_W - 11, 11, 0)))
     _ann(tb, "title_block")
 
     set_page(a.PAGE_W, a.PAGE_H, margin=10)
@@ -633,7 +622,7 @@ def _write_script(a) -> str:
         "    _total_h = 2*_margin + 3*_DIM_PAD + z_size*SCALE + y_size*SCALE\n"
         "    _y_off = max(0.0, (PAGE_H - _total_h) / 2)\n"
         "    _total_w = 4*_DIM_PAD + x_size*SCALE + y_size*SCALE + bbox_max*SCALE*0.7\n"
-        "    _x_off = max(0.0, (PAGE_W - 2*_margin - _total_w) / 2)\n"
+        "    _x_off = max(0.0, (PAGE_W - 2*_margin - TB_W - _total_w) / 2)\n"
         "    FV_X = _margin + _x_off + _DIM_PAD + _fv_hw\n"
         "    FV_Y = _y_off + _margin + _DIM_PAD + _fv_hh\n"
         "    PV_X = FV_X; PV_Y = FV_Y + _fv_hh + _DIM_PAD + _pv_hh\n"
@@ -713,23 +702,18 @@ def _write_script(a) -> str:
         '), "dim_height")\n'
         "\n"
         "# Outer diameter\n"
+        "_od = z_diams[0] if z_diams else min(x_size, y_size)\n"
         "_ann(Dimension(\n"
-        "    (FX(cx - z_diams[0] / 2), FZ(cz + z_size / 2) + 2, 0),\n"
-        "    (FX(cx + z_diams[0] / 2), FZ(cz + z_size / 2) + 2, 0),\n"
-        '    "above", 8, draft, label=f"ø{z_diams[0]:.0f}",\n'
+        "    (FX(cx - _od / 2), FZ(cz + z_size / 2) + 2, 0),\n"
+        "    (FX(cx + _od / 2), FZ(cz + z_size / 2) + 2, 0),\n"
+        '    "above", 8, draft, label=f"ø{_od:.0f}",\n'
         '), "dim_od")\n'
         "\n"
         "# Title block\n"
-        "try:\n"
-        "    tb = TitleBlock(\n"
-        '        TITLE, NUMBER, drawing_scale=SCALE, general_tolerance=TOLERANCE,\n'
-        '        designed_by=DRAWN_BY, revision="A", legal_owner="", width=TB_W, draft=draft,\n'
-        "    ).locate(Location((PAGE_W - TB_W - 11, 11, 0)))\n"
-        "except TypeError:\n"
-        "    tb = TitleBlock(\n"
-        '        TITLE, NUMBER, drawing_scale=SCALE, general_tolerance=TOLERANCE,\n'
-        '        designed_by=DRAWN_BY, width=TB_W, draft=draft,\n'
-        "    ).locate(Location((PAGE_W - TB_W - 11, 11, 0)))\n"
+        "tb = TitleBlock(\n"
+        '    TITLE, NUMBER, drawing_scale=SCALE, general_tolerance=TOLERANCE,\n'
+        '    designed_by=DRAWN_BY, revision="A", legal_owner="", width=TB_W, draft=draft,\n'
+        ").locate(Location((PAGE_W - TB_W - 11, 11, 0)))\n"
         '_ann(tb, "title_block")\n'
     )
 

@@ -1,6 +1,5 @@
 """Tests for build123d_drafting.make_drawing."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
