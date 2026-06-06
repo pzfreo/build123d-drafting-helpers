@@ -777,16 +777,31 @@ class ViewCoordinates:
     """Page-coordinate helpers for a projected view.
 
     Wraps the ``view_axes()`` result with the view page-centre, part
-    centroid, and scale so that ``px()`` / ``py()`` map world coordinates
-    to page coordinates without manual axis-sign look-up.
+    centroid, and scale.
 
-    Example::
+    **General method** — works for all views including ISO/oblique::
+
+        pp(world_x, world_y, world_z) -> (page_x, page_y)
+
+    **Orthographic-only scalar methods** — valid only when exactly one world
+    axis projects to each page direction (front, plan, side views)::
+
+        px(world_val)  — pass the coordinate on the world axis named by .px_axis
+        py(world_val)  — pass the coordinate on the world axis named by .py_axis
+
+    Attributes:
+        px_axis: which world axis (``'world_X'``, ``'world_Y'``, or
+                 ``'world_Z'``) feeds ``px()``. ``None`` for ISO/oblique views
+                 where multiple world axes project to page_X.
+        py_axis: same for ``py()``.
+
+    Example (front view)::
 
         axes = view_axes((cxs, cys - DIST, czs), (0, 0, 1), (cxs, cys, czs))
         vc = ViewCoordinates(axes, FV_X, FV_Y, cx, cy, cz, SCALE)
-        # Front view: world X → page X, world Z → page Y
-        page_x = vc.px(part.bounding_box().max.X)
-        page_y = vc.py(part.bounding_box().max.Z)
+        # vc.px_axis == 'world_X', vc.py_axis == 'world_Z'
+        page_pt = vc.pp(bb.max.X, bb.max.Y, bb.max.Z)  # always correct
+        page_x = vc.px(bb.max.X)  # orthographic shortcut
     """
 
     def __init__(
@@ -799,32 +814,87 @@ class ViewCoordinates:
         cz: float,
         scale: float,
     ) -> None:
-        centers: dict[str, float] = {"world_X": cx, "world_Y": cy, "world_Z": cz}
+        self._axes = axes
+        self._centers: dict[str, float] = {"world_X": cx, "world_Y": cy, "world_Z": cz}
         self._view_x = view_x
         self._view_y = view_y
         self._scale = scale
-        self._px_center: float | None = None
-        self._px_sign: float = 1.0
-        self._py_center: float | None = None
-        self._py_sign: float = 1.0
-        for world_ax, (page_ax, sign) in axes.items():
-            if page_ax == "page_X":
-                self._px_center = centers[world_ax]
-                self._px_sign = sign
-            elif page_ax == "page_Y":
-                self._py_center = centers[world_ax]
-                self._py_sign = sign
+
+        px_axes = [(w, s) for w, (p, s) in axes.items() if p == "page_X"]
+        py_axes = [(w, s) for w, (p, s) in axes.items() if p == "page_Y"]
+
+        if len(px_axes) == 1:
+            w, s = px_axes[0]
+            self._px_center: float | None = self._centers[w]
+            self._px_sign: float = s
+            self.px_axis: str | None = w
+        else:
+            self._px_center = None
+            self._px_sign = 1.0
+            self.px_axis = None
+
+        if len(py_axes) == 1:
+            w, s = py_axes[0]
+            self._py_center: float | None = self._centers[w]
+            self._py_sign: float = s
+            self.py_axis: str | None = w
+        else:
+            self._py_center = None
+            self._py_sign = 1.0
+            self.py_axis = None
+
+    def pp(
+        self, world_x: float, world_y: float, world_z: float
+    ) -> tuple[float, float]:
+        """Map a world point to (page_x, page_y). Works for all views including ISO."""
+        vals = {"world_X": world_x, "world_Y": world_y, "world_Z": world_z}
+        page_x = self._view_x + sum(
+            (vals[w] - self._centers[w]) * s * self._scale
+            for w, (p, s) in self._axes.items()
+            if p == "page_X"
+        )
+        page_y = self._view_y + sum(
+            (vals[w] - self._centers[w]) * s * self._scale
+            for w, (p, s) in self._axes.items()
+            if p == "page_Y"
+        )
+        return page_x, page_y
 
     def px(self, world_val: float) -> float:
-        """Map a value on the world axis that projects to page X."""
+        """Map a value on the world axis that projects to page X.
+
+        Only valid for orthographic views where exactly one world axis maps to
+        page_X. Check ``.px_axis`` to confirm which world coordinate to pass.
+        For ISO/oblique views use ``pp()`` instead.
+
+        Raises:
+            ValueError: if the view has zero or multiple world axes projecting
+                to page_X (e.g. ISO views have two).
+        """
         if self._px_center is None:
-            raise ValueError("No world axis projects to page_X in this view")
+            raise ValueError(
+                "px() requires exactly one world axis to project to page_X, "
+                "but this view has none or multiple (e.g. ISO views). "
+                "Use pp(world_x, world_y, world_z) instead."
+            )
         return self._view_x + (world_val - self._px_center) * self._px_sign * self._scale
 
     def py(self, world_val: float) -> float:
-        """Map a value on the world axis that projects to page Y."""
+        """Map a value on the world axis that projects to page Y.
+
+        Only valid for orthographic views. Check ``.py_axis`` for which world
+        coordinate to pass. For ISO/oblique views use ``pp()`` instead.
+
+        Raises:
+            ValueError: if the view has zero or multiple world axes projecting
+                to page_Y.
+        """
         if self._py_center is None:
-            raise ValueError("No world axis projects to page_Y in this view")
+            raise ValueError(
+                "py() requires exactly one world axis to project to page_Y, "
+                "but this view has none or multiple (e.g. ISO views). "
+                "Use pp(world_x, world_y, world_z) instead."
+            )
         return self._view_y + (world_val - self._py_center) * self._py_sign * self._scale
 
 
