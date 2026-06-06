@@ -32,6 +32,9 @@ from build123d import (
     Location,
     import_step,
 )
+from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
+
 from build123d_drafting.helpers import (
     Dimension,
     Leader,
@@ -43,8 +46,6 @@ from build123d_drafting.helpers import (
     set_page,
     view_axes,
 )
-from OCP.BRepAdaptor import BRepAdaptor_Surface
-from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
 
 _log = logging.getLogger(__name__)
 
@@ -180,15 +181,7 @@ def _choose_scale(x_size: float, y_size: float, z_size: float) -> tuple:
             + TB_W
             + _MARGIN
         )
-        h = (
-            _MARGIN
-            + _DIM_PAD
-            + y_size * SCALE
-            + _DIM_PAD
-            + z_size * SCALE
-            + _DIM_PAD
-            + _MARGIN
-        )
+        h = _MARGIN + _DIM_PAD + y_size * SCALE + _DIM_PAD + z_size * SCALE + _DIM_PAD + _MARGIN
         if w <= PAGE_W and h <= PAGE_H:
             return SCALE, PAGE_W, PAGE_H, TB_W
     return 0.2, 1189.0, 841.0, 150.0
@@ -434,9 +427,7 @@ def make_drawing(
                 f"ldr_z{i}",
             )
     elif len(a.z_diams) > 1:
-        _log.info(
-            "Additional diameters %s not annotated (insufficient left margin)", a.z_diams[1:]
-        )
+        _log.info("Additional diameters %s not annotated (insufficient left margin)", a.z_diams[1:])
 
     if a.cross_diams:
         _log.info(
@@ -454,9 +445,7 @@ def make_drawing(
                 "right",
                 _fmt(z - a.bb.min.Z),
             )
-            for col, z in enumerate(
-                [z for z in a.step_zs[:3] if (z - a.bb.min.Z) * a.SCALE >= 20]
-            )
+            for col, z in enumerate([z for z in a.step_zs[:3] if (z - a.bb.min.Z) * a.SCALE >= 20])
         ]
         for col, dim in enumerate(place_dims(step_specs, draft)):
             _ann(dim, f"dim_step_{col}")
@@ -744,7 +733,7 @@ def _write_script(a) -> str:
         "\n"
         "# Title block\n"
         "tb = TitleBlock(\n"
-        '    TITLE, NUMBER, drawing_scale=SCALE, general_tolerance=TOLERANCE,\n'
+        "    TITLE, NUMBER, drawing_scale=SCALE, general_tolerance=TOLERANCE,\n"
         '    designed_by=DRAWN_BY, revision="A", legal_owner="", width=TB_W, draft=draft,\n'
         ").locate(Location((PAGE_W - TB_W - 11, 11, 0)))\n"
         '_ann(tb, "title_block")\n'
