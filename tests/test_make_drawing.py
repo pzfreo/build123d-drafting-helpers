@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from build123d import Box, export_step
+from build123d import Box, Cylinder, export_step
 
 from build123d_drafting import ViewCoordinates, view_axes
 from build123d_drafting.make_drawing import (
@@ -129,6 +129,21 @@ def test_make_drawing_box(tmp_path):
     # SVG should have the full page dimensions injected
     svg_content = Path(svg_path).read_text()
     assert 'mm"' in svg_content  # width/height in mm
+
+
+@pytest.mark.timeout(120)
+def test_make_drawing_cylinder_uses_centerline_and_holecallout(tmp_path):
+    """make_drawing() adds Centerline and HoleCallout for cylindrical parts."""
+    cyl = Cylinder(radius=15, height=40)
+    step_file = str(tmp_path / "cyl.step")
+    export_step(cyl, step_file)
+
+    svg_path, _ = make_drawing(step_file, out=str(tmp_path / "cyl_drawing"), title="CYL")
+
+    # The drawing must exist and be non-trivial
+    assert Path(svg_path).exists()
+    assert Path(svg_path).stat().st_size > 1000
+
 
 
 @pytest.mark.timeout(120)

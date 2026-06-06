@@ -36,11 +36,13 @@ from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
 
 from build123d_drafting.helpers import (
+    Centerline,
     Dimension,
-    Leader,
+    HoleCallout,
     TitleBlock,
     annotate,
     draft_preset,
+    format_drawing_scale,
     lint_drawing,
     place_dims,
     set_page,
@@ -374,6 +376,12 @@ def make_drawing(
     def FZ(z):
         return a.FV_Y + (z - a.cz) * a.SCALE
 
+    def SX(y):
+        return a.SV_X + (y - a.cy) * a.SCALE
+
+    def SZ(z):
+        return a.SV_Y + (z - a.cz) * a.SCALE
+
     draft = draft_preset(font_size=3.0, decimal_precision=1)
     all_anns = []
 
@@ -409,22 +417,32 @@ def make_drawing(
             ),
             "dim_od",
         )
+        # Centreline through the rotation axis — front and side views
+        _ann(
+            Centerline(
+                (FX(a.cx), FZ(a.bb.min.Z) - 5, 0),
+                (FX(a.cx), FZ(a.bb.max.Z) + 5, 0),
+            ),
+            "centerline_front",
+        )
+        _ann(
+            Centerline(
+                (SX(a.cy), SZ(a.bb.min.Z) - 5, 0),
+                (SX(a.cy), SZ(a.bb.max.Z) + 5, 0),
+            ),
+            "centerline_side",
+        )
 
-    # Additional Z-axis diameter leaders to the left of the front view
+    # Additional Z-axis bore callouts (HoleCallout) to the left of the front view
     left_edge = FX(a.bb.min.X)
     left_space = left_edge - a.margin
     if left_space >= a.DIM_PAD and len(a.z_diams) > 1:
         ldr_length = a.DIM_PAD * 0.6
-        elbow_x = left_edge - ldr_length
         for i, d in enumerate(a.z_diams[1:4]):
             tip_z = FZ(a.cz) + (i - 1) * 10
+            hc = HoleCallout(d, draft=draft)
             _ann(
-                Leader(
-                    tip=(FX(a.cx - d / 2), tip_z, 0),
-                    elbow=(elbow_x, tip_z + 4, 0),
-                    label=f"ø{_fmt(d)}",
-                    draft=draft,
-                ),
+                hc.locate(Location((left_edge - ldr_length - hc.callout_width, tip_z, 0))),
                 f"ldr_z{i}",
             )
     elif len(a.z_diams) > 1:
@@ -476,7 +494,7 @@ def make_drawing(
     tb = TitleBlock(
         title,
         number,
-        drawing_scale=a.SCALE,
+        scale=format_drawing_scale(a.SCALE),
         general_tolerance=tolerance,
         designed_by=drawn_by,
         revision="A",
@@ -577,8 +595,6 @@ def _write_script(a) -> str:
     )
 
     unannotated = []
-    if len(a.z_diams) > 1:
-        unannotated.append(f"inner diameters {a.z_diams[1:]}")
     if a.cross_diams:
         unannotated.append(f"cross-hole ø{_fmt(a.cross_diams[0])}")
     unannotated_note = (
@@ -724,17 +740,25 @@ def _write_script(a) -> str:
         '    "right", 8, draft, label=f"{_fmt(z_size)}",\n'
         '), "dim_height")\n'
         "\n"
-        "# Outer diameter (only for parts with cylindrical faces)\n"
+        "# Outer diameter, centreline, and inner bore callouts (cylindrical parts only)\n"
         "if z_diams:\n"
         "    _ann(Dimension(\n"
         "        (FX(cx - z_diams[0] / 2), FZ(cz + z_size / 2) + 2, 0),\n"
         "        (FX(cx + z_diams[0] / 2), FZ(cz + z_size / 2) + 2, 0),\n"
         '        "above", 8, draft, label=f"ø{_fmt(z_diams[0])}",\n'
         '    ), "dim_od")\n'
+        "    _ann(Centerline((FX(cx), FZ(cz - z_size / 2) - 5, 0),\n"
+        "                    (FX(cx), FZ(cz + z_size / 2) + 5, 0)), 'centerline_front')\n"
+        "if len(z_diams) > 1:\n"
+        "    _left = FX(cx - x_size / 2)\n"
+        "    for _i, _d in enumerate(z_diams[1:4]):\n"
+        "        _hc = HoleCallout(_d, draft=draft)\n"
+        "        _ann(_hc.locate(Location((_left - 8 - _hc.callout_width,\n"
+        "                                   FZ(cz) + (_i - 1) * 10, 0))), f'bore_z{_i}')\n"
         "\n"
         "# Title block\n"
         "tb = TitleBlock(\n"
-        "    TITLE, NUMBER, drawing_scale=SCALE, general_tolerance=TOLERANCE,\n"
+        "    TITLE, NUMBER, scale=format_drawing_scale(SCALE), general_tolerance=TOLERANCE,\n"
         '    designed_by=DRAWN_BY, revision="A", legal_owner="", width=TB_W, draft=draft,\n'
         ").locate(Location((PAGE_W - TB_W - 11, 11, 0)))\n"
         '_ann(tb, "title_block")\n'
@@ -800,7 +824,7 @@ def _write_script(a) -> str:
         f'"""\n'
         f"import math\n"
         f"from build123d import import_step, Compound, Location, Color, LineType, ExportSVG, ExportDXF\n"
-        f"from build123d_drafting import Dimension, Leader, TitleBlock, annotate, draft_preset, set_page, lint_drawing, fix_svg_page_size\n"
+        f"from build123d_drafting import Dimension, Leader, HoleCallout, Centerline, TitleBlock, annotate, draft_preset, set_page, lint_drawing, fix_svg_page_size, format_drawing_scale\n"
         f"\n"
         f"# ── Layout (auto-updated by cog) ──────────────────────────────────────────────\n"
         f"# Edit _STEP_FILE etc. in the cog block below, then run:\n"
