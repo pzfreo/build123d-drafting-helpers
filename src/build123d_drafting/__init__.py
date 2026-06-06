@@ -11,7 +11,7 @@ scripts — no MCP server required::
     )
 """
 
-from build123d_drafting.make_drawing import generate_script, make_drawing
+from build123d_drafting.make_drawing import fix_svg_page_size, generate_script, make_drawing
 from build123d_drafting.helpers import (
     Centerline,
     CompositeFeatureControlFrame,
@@ -40,6 +40,7 @@ from build123d_drafting.helpers import (
 )
 
 __all__ = [
+    "fix_svg_page_size",
     "generate_script",
     "make_drawing",
     "Centerline",

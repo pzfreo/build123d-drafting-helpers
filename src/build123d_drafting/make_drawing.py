@@ -38,8 +38,11 @@ from build123d_drafting.helpers import (
     TitleBlock,
     annotate,
     draft_preset,
+    leader_offset,
     lint_drawing,
+    place_dims,
     set_page,
+    view_axes,
 )
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
@@ -56,13 +59,13 @@ _DIM_PAD = 18.0
 # ---------------------------------------------------------------------------
 
 
-def _fix_svg_page_size(svg_path: str, page_w: float, page_h: float) -> None:
+def fix_svg_page_size(svg_path: str, page_w: float, page_h: float) -> None:
     """Rewrite the SVG width/height/viewBox to match the full ISO page size.
 
     ExportSVG crops to content bounding box; this expands it to the declared
     page so the rendering fills the correct A-series sheet.
     """
-    data = Path(svg_path).read_text()
+    data = Path(svg_path).read_text(encoding="utf-8")
     data = re.sub(r'width="[^"]*"', f'width="{page_w:.3f}mm"', data, count=1)
     data = re.sub(r'height="[^"]*"', f'height="{page_h:.3f}mm"', data, count=1)
     data = re.sub(
@@ -71,7 +74,7 @@ def _fix_svg_page_size(svg_path: str, page_w: float, page_h: float) -> None:
         data,
         count=1,
     )
-    Path(svg_path).write_text(data)
+    Path(svg_path).write_text(data, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -418,13 +421,14 @@ def make_drawing(
     left_edge = FX(a.bb.min.X)
     left_space = left_edge - a.margin
     if left_space >= a.DIM_PAD and len(a.z_diams) > 1:
-        elbow_x = left_edge - a.DIM_PAD * 0.6
+        ldr_length = a.DIM_PAD * 0.6
         for i, d in enumerate(a.z_diams[1:4]):
             tip_z = FZ(a.cz) + (i - 1) * 10
             _ann(
-                Leader(
+                leader_offset(
                     tip=(FX(a.cx - d / 2), tip_z, 0),
-                    elbow=(elbow_x, tip_z + 4, 0),
+                    direction="W",
+                    length=ldr_length,
                     label=f"ø{_fmt(d)}",
                     draft=draft,
                 ),
@@ -444,23 +448,20 @@ def make_drawing(
     # Step heights — only where the step is tall enough to fit a label
     if a.step_zs:
         right_x0 = FX(a.bb.max.X) + 2 + a.DIM_PAD + 10
-        step_col = 0
-        for z in a.step_zs[:3]:
-            step_h = z - a.bb.min.Z
-            if step_h * a.SCALE < 20:
-                continue
-            _ann(
-                Dimension(
-                    (right_x0 + step_col * 14, FZ(a.bb.min.Z), 0),
-                    (right_x0 + step_col * 14, FZ(z), 0),
-                    "right",
-                    8,
-                    draft,
-                    label=_fmt(step_h),
-                ),
-                f"dim_step_{step_col}",
+        step_specs = [
+            (
+                (right_x0 + col * 14, FZ(a.bb.min.Z), 0),
+                (right_x0 + col * 14, FZ(z), 0),
+                "right",
+                8,
+                _fmt(z - a.bb.min.Z),
             )
-            step_col += 1
+            for col, z in enumerate(
+                [z for z in a.step_zs[:3] if (z - a.bb.min.Z) * a.SCALE >= 20]
+            )
+        ]
+        for col, dim in enumerate(place_dims(step_specs, draft)):
+            _ann(dim, f"dim_step_{col}")
 
     # Width (non-round / non-square parts only)
     if abs(a.x_size - a.y_size) > max(a.x_size, a.y_size) * 0.05:
@@ -528,7 +529,7 @@ def make_drawing(
         svg.add_shape(ann, layer="dims")
     svg_path = out + ".svg"
     svg.write(svg_path)
-    _fix_svg_page_size(svg_path, a.PAGE_W, a.PAGE_H)
+    fix_svg_page_size(svg_path, a.PAGE_W, a.PAGE_H)
     _log.info("SVG → %s", svg_path)
 
     dxf = ExportDXF()
@@ -557,10 +558,35 @@ def make_drawing(
 # ---------------------------------------------------------------------------
 
 
+def _axis_comment(axes: dict) -> str:
+    """Format a view_axes result as a one-line comment string."""
+    parts = []
+    for world in ("world_X", "world_Y", "world_Z"):
+        page_name, sign = axes[world]
+        if page_name == "depth":
+            continue
+        axis_letter = world.replace("world_", "")
+        page_letter = page_name.replace("page_", "")
+        sign_str = f"+{int(sign)}" if sign > 0 else str(int(sign))
+        parts.append(f"{axis_letter} → page_{page_letter} ({sign_str})")
+    return ", ".join(parts)
+
+
 def _write_script(a) -> str:
     """Write a Cog-enabled drawing script at ``a.out + '.py'``."""
     py_path = a.out + ".py"
     py_name = Path(py_path).name
+
+    # Compute axis mappings at generation time so comments are always accurate.
+    cxs, cys, czs = a.cx * a.SCALE, a.cy * a.SCALE, a.cz * a.SCALE
+    look_at = (cxs, cys, czs)
+    DIST = a.bbox_max * a.SCALE + 100
+    front_comment = "# Front view: " + _axis_comment(
+        view_axes((cxs, cys - DIST, czs), (0, 0, 1), look_at)
+    )
+    side_comment = "# Side view: " + _axis_comment(
+        view_axes((cxs + DIST, cys, czs), (0, 0, 1), look_at)
+    )
 
     unannotated = []
     if len(a.z_diams) > 1:
@@ -685,10 +711,10 @@ def _write_script(a) -> str:
         "iso   = Compound(children=list(vis_i)).locate(Location((ISO_X, ISO_Y, 0)))\n"
         "iso_h = Compound(children=list(hid_i)).locate(Location((ISO_X, ISO_Y, 0))) if list(hid_i) else None\n"
         "\n"
-        "# Front view coordinate helpers: world_X → page_X (+1), world_Z → page_Y (+1)\n"
+        f"{front_comment}\n"
         "def FX(x): return FV_X + (x - cx) * SCALE\n"
         "def FZ(z): return FV_Y + (z - cz) * SCALE\n"
-        "# Side view coordinate helpers: world_Y → page_X (+1), world_Z → page_Y (+1)\n"
+        f"{side_comment}\n"
         "def SX(y): return SV_X + (y - cy) * SCALE\n"
         "def SZ(z): return SV_Y + (z - cz) * SCALE\n"
     )
@@ -753,14 +779,7 @@ def _write_script(a) -> str:
         "for _ann_obj in all_anns:\n"
         '    svg.add_shape(_ann_obj, layer="dims")\n'
         'svg.write(_stem + ".svg")\n'
-        "# Fix SVG to full page size (ExportSVG crops to content by default)\n"
-        "import re as _re\n"
-        "from pathlib import Path as _Path\n"
-        '_svgdata = _Path(_stem + ".svg").read_text()\n'
-        "_svgdata = _re.sub(r'width=\"[^\"]*\"', f'width=\"{PAGE_W:.3f}mm\"', _svgdata, count=1)\n"
-        "_svgdata = _re.sub(r'height=\"[^\"]*\"', f'height=\"{PAGE_H:.3f}mm\"', _svgdata, count=1)\n"
-        "_svgdata = _re.sub(r'viewBox=\"[^\"]*\"', f'viewBox=\"0 -{PAGE_H:.3f} {PAGE_W:.3f} {PAGE_H:.3f}\"', _svgdata, count=1)\n"
-        '_Path(_stem + ".svg").write_text(_svgdata)\n'
+        'fix_svg_page_size(_stem + ".svg", PAGE_W, PAGE_H)\n'
         'print(f"SVG → {_stem}.svg")\n'
         "\n"
         "dxf = ExportDXF()\n"
@@ -793,7 +812,7 @@ def _write_script(a) -> str:
         f'"""\n'
         f"import math\n"
         f"from build123d import import_step, Compound, Location, Color, LineType, ExportSVG, ExportDXF\n"
-        f"from build123d_drafting import Dimension, Leader, TitleBlock, annotate, draft_preset, set_page, lint_drawing\n"
+        f"from build123d_drafting import Dimension, Leader, TitleBlock, annotate, draft_preset, set_page, lint_drawing, fix_svg_page_size\n"
         f"\n"
         f"# ── Layout (auto-updated by cog) ──────────────────────────────────────────────\n"
         f"# Edit _STEP_FILE etc. in the cog block below, then run:\n"
