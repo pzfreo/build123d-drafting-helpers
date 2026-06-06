@@ -38,7 +38,6 @@ from build123d_drafting.helpers import (
     TitleBlock,
     annotate,
     draft_preset,
-    leader_offset,
     lint_drawing,
     place_dims,
     set_page,
@@ -422,13 +421,13 @@ def make_drawing(
     left_space = left_edge - a.margin
     if left_space >= a.DIM_PAD and len(a.z_diams) > 1:
         ldr_length = a.DIM_PAD * 0.6
+        elbow_x = left_edge - ldr_length
         for i, d in enumerate(a.z_diams[1:4]):
             tip_z = FZ(a.cz) + (i - 1) * 10
             _ann(
-                leader_offset(
+                Leader(
                     tip=(FX(a.cx - d / 2), tip_z, 0),
-                    direction="W",
-                    length=ldr_length,
+                    elbow=(elbow_x, tip_z + 4, 0),
                     label=f"ø{_fmt(d)}",
                     draft=draft,
                 ),
@@ -453,7 +452,6 @@ def make_drawing(
                 (right_x0 + col * 14, FZ(a.bb.min.Z), 0),
                 (right_x0 + col * 14, FZ(z), 0),
                 "right",
-                8,
                 _fmt(z - a.bb.min.Z),
             )
             for col, z in enumerate(
