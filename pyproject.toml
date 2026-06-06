@@ -27,6 +27,9 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 
+[project.scripts]
+make-drawing = "build123d_drafting.make_drawing:_cli"
+
 [project.urls]
 Homepage = "https://github.com/pzfreo/build123d-drafting-helpers"
 Repository = "https://github.com/pzfreo/build123d-drafting-helpers"
