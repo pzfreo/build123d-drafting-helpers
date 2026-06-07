@@ -30,6 +30,7 @@ from build123d import (
     ExportSVG,
     LineType,
     Location,
+    Shape,
     import_step,
 )
 from OCP.BRepAdaptor import BRepAdaptor_Surface
@@ -195,8 +196,16 @@ def choose_scale(x_size: float, y_size: float, z_size: float) -> tuple:
 
 
 def _analyse(step_file, title, number, tolerance, drawn_by, out):
-    """Load STEP, analyse geometry, compute layout. Returns SimpleNamespace."""
-    part = import_step(step_file)
+    """Load STEP or use a build123d Shape, analyse geometry, compute layout.
+
+    Returns SimpleNamespace.
+    """
+    if isinstance(step_file, Shape):
+        part = step_file
+        src = "build123d object"
+    else:
+        part = import_step(step_file)
+        src = str(step_file)
     bb = part.bounding_box()
     x_size = bb.max.X - bb.min.X
     y_size = bb.max.Y - bb.min.Y
@@ -206,7 +215,7 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out):
     cz = (bb.min.Z + bb.max.Z) / 2
     bbox_max = max(x_size, y_size, z_size)
 
-    _log.info("Loaded %s  bbox: %.2f × %.2f × %.2f mm", step_file, x_size, y_size, z_size)
+    _log.info("Loaded %s  bbox: %.2f × %.2f × %.2f mm", src, x_size, y_size, z_size)
 
     z_cyls, cross_cyls = analyse_cylinders(part)
     z_diams = dedup_diams(z_cyls)
@@ -308,18 +317,20 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out):
 
 
 def make_drawing(
-    step_file: str,
+    step_file: str | Path | Shape,
     out: str | None = None,
     title: str | None = None,
     number: str = "DWG-001",
     tolerance: str = "ISO 2768-m",
     drawn_by: str = "",
 ) -> tuple[str, str]:
-    """Generate a 4-view technical drawing from a STEP file.
+    """Generate a 4-view technical drawing from a STEP file or build123d object.
 
     Args:
-        step_file: Path to the input STEP/STP file.
-        out: Output path stem (default: input filename stem).
+        step_file: Path to a STEP/STP file, or a build123d ``Shape`` (e.g. a
+            ``Part``, ``Solid``, or ``Compound``) to draw directly.
+        out: Output path stem (default: input filename stem, or ``"drawing"``
+            when a build123d object is passed).
         title: Part title for the title block (default: stem uppercased).
         number: Drawing number (e.g. ``"DWG-042"``).
         tolerance: General tolerance string (e.g. ``"ISO 2768-m"``).
@@ -328,7 +339,7 @@ def make_drawing(
     Returns:
         Tuple of ``(svg_path, dxf_path)`` for the generated files.
     """
-    stem = Path(step_file).stem
+    stem = "drawing" if isinstance(step_file, Shape) else Path(step_file).stem
     out = out or stem
     for _ext in (".svg", ".dxf"):
         if out.endswith(_ext):
@@ -666,6 +677,12 @@ def generate_script(
     Returns:
         Path to the generated ``.py`` file.
     """
+    if isinstance(step_file, Shape):
+        raise TypeError(
+            "generate_script() requires a STEP file path — the generated script "
+            "reloads geometry from disk and cannot embed a live build123d object. "
+            "Use make_drawing() directly to draw an in-memory object."
+        )
     stem = Path(step_file).stem
     out = out or stem
     for _ext in (".py", ".svg", ".dxf"):
