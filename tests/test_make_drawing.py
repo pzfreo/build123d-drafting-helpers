@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from build123d import Box, Cylinder, export_step
 
-from build123d_drafting import ViewCoordinates, view_axes
+from build123d_drafting import Drawing, Leader, ViewCoordinates, build_drawing, view_axes
 from build123d_drafting.make_drawing import (
     _fmt,
     analyse_cylinders,
@@ -387,3 +387,92 @@ def test_analyse_face_levels_returns_sorted():
     box = Box(30, 20, 10)
     levels = analyse_face_levels(box)
     assert levels == sorted(levels)
+
+
+# ---------------------------------------------------------------------------
+# Drawing builder (build_drawing / Drawing / add_view)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(60)
+def test_build_drawing_returns_populated_drawing(tmp_path):
+    dwg = build_drawing(Box(30, 20, 10), out=str(tmp_path / "b"), title="B", number="DWG-1")
+    assert isinstance(dwg, Drawing)
+    assert set(dwg.views) == {"front", "plan", "side", "iso"}
+    assert dwg.annotations, "expected automatic annotations"
+    # build_drawing must not write any files — that is export()'s job.
+    assert not (tmp_path / "b.svg").exists()
+    assert not (tmp_path / "b.dxf").exists()
+
+
+@pytest.mark.timeout(60)
+def test_build_drawing_export_writes_files(tmp_path):
+    stem = str(tmp_path / "b")
+    dwg = build_drawing(Box(30, 20, 10), out=stem)
+    svg, dxf = dwg.export(stem)
+    assert Path(svg).exists() and Path(dxf).exists()
+    assert dwg.svg_path == svg and dwg.dxf_path == dxf
+
+
+@pytest.mark.timeout(60)
+def test_drawing_add_and_remove():
+    dwg = build_drawing(Box(30, 20, 10))
+    n0 = len(dwg.annotations)
+    ldr = Leader(tip=dwg.at("front", 0, 0, 0), elbow=(5, 5, 0), label="X", draft=dwg.draft)
+    dwg.add(ldr, "ldr_test")
+    assert len(dwg.annotations) == n0 + 1
+    removed = dwg.remove("ldr_test")
+    assert removed is ldr
+    assert len(dwg.annotations) == n0
+    with pytest.raises(KeyError):
+        dwg.remove("does_not_exist")
+
+
+@pytest.mark.timeout(60)
+def test_drawing_add_replaces_reused_name():
+    dwg = build_drawing(Box(30, 20, 10))
+    n0 = len(dwg.annotations)
+    first = Leader(tip=dwg.at("front", 0, 0, 0), elbow=(5, 5, 0), label="A", draft=dwg.draft)
+    second = Leader(tip=dwg.at("front", 0, 0, 0), elbow=(6, 6, 0), label="B", draft=dwg.draft)
+    dwg.add(first, "ldr")
+    dwg.add(second, "ldr")  # same name → replaces, no orphan left behind
+    assert len(dwg.annotations) == n0 + 1
+    assert first not in dwg.annotations
+    assert dwg.remove("ldr") is second
+
+
+@pytest.mark.timeout(60)
+def test_drawing_at_maps_world_to_page():
+    dwg = build_drawing(Box(30, 20, 10))
+    cx, cy, cz = dwg.centroid
+    base = dwg.at("front", cx, cy, cz)
+    # Front view: world +X → page +X, world +Z → page +Y.
+    dx = dwg.at("front", cx + 10, cy, cz)
+    dz = dwg.at("front", cx, cy, cz + 10)
+    assert dx[0] > base[0] and dx[1] == pytest.approx(base[1])
+    assert dz[1] > base[1] and dz[0] == pytest.approx(base[0])
+
+
+@pytest.mark.timeout(60)
+def test_drawing_add_view(tmp_path):
+    dwg = build_drawing(Box(30, 20, 10))
+    look = dwg.look_at
+    bottom_cam = (look[0], look[1], look[2] - dwg.dist)
+    vc = dwg.add_view("bottom", Box(30, 20, 10), bottom_cam, (0, 1, 0), (260.0, 60.0))
+    assert "bottom" in dwg.views
+    assert isinstance(vc, ViewCoordinates)
+    # The custom view exports alongside the standard ones.
+    svg, _ = dwg.export(str(tmp_path / "b"))
+    assert Path(svg).exists()
+
+
+@pytest.mark.timeout(60)
+def test_generate_script_emits_build_drawing(tmp_path):
+    box = Box(30, 20, 10)
+    step = tmp_path / "p.step"
+    export_step(box, str(step))
+    py = generate_script(str(step), out=str(tmp_path / "p"))
+    content = Path(py).read_text(encoding="utf-8")
+    assert "build_drawing(" in content
+    assert "dwg.export(" in content
+    assert "Customise here" in content

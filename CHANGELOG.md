@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+
+- **`build_drawing()` and the `Drawing` builder** — the composable form of
+  `make_drawing()`. `build_drawing(...)` returns a live `Drawing` with the
+  standard four views projected and the automatic dimensions + title block
+  already added, but not yet exported. Customise it before writing files:
+  `dwg.add(obj, name)` / `dwg.remove(name)` to edit annotations,
+  `dwg.at(view, x, y, z)` to map a world point to page coordinates in any view,
+  `dwg.add_view(name, shape, camera, up, position)` for section/auxiliary views,
+  then `dwg.export(out)`. `make_drawing(...)` is now exactly
+  `build_drawing(...).export()` — fully backward compatible.
+- **`generate_script()` / `make-drawing --script` emit a `build_drawing()`
+  script** with the customisation block placed *before* export, so hand- or
+  LLM-edited annotations actually land in the output (previously the seam sat
+  after `make_drawing()` had already written the files, making it a no-op).
+
 ## v0.4.0 — 2026-06-07
 
 ### Added
