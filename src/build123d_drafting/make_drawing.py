@@ -823,7 +823,7 @@ def _write_script(a) -> str:
     )
 
     content = header + cog_block + run_section
-    Path(py_path).write_text(content)
+    Path(py_path).write_text(content, encoding="utf-8")
     _log.info("Script → %s", py_path)
     return py_path
 

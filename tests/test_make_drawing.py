@@ -472,7 +472,7 @@ def test_generate_script_emits_build_drawing(tmp_path):
     step = tmp_path / "p.step"
     export_step(box, str(step))
     py = generate_script(str(step), out=str(tmp_path / "p"))
-    content = Path(py).read_text()
+    content = Path(py).read_text(encoding="utf-8")
     assert "build_drawing(" in content
     assert "dwg.export(" in content
     assert "Customise here" in content
