@@ -47,6 +47,71 @@ uv add build123d-drafting-helpers
 
 Requires `build123d >= 0.9.0` and Python ≥ 3.10.
 
+## Automated drawing generation
+
+For a fully automatic STEP → SVG + DXF pipeline with no drawing code required, use
+`make_drawing()` or the bundled `make-drawing` CLI. It analyses the part geometry,
+chooses a scale and page size, projects four views, and annotates diameter callouts,
+centrelines, and a title block automatically.
+
+### CLI
+
+```
+make-drawing part.step
+make-drawing part.step --title "BRACKET" --number DWG-042 --drawn-by "Paul"
+make-drawing part.step --out drawings/bracket   # explicit output prefix
+make-drawing part.step --tolerance "ISO 2768-f"
+```
+
+All options:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--title` | stem of STEP file | Part title in the title block |
+| `--number` | `DWG-001` | Drawing number |
+| `--tolerance` | `ISO 2768-m` | General tolerance field |
+| `--drawn-by` | _(empty)_ | Designer name |
+| `--out` | STEP file stem | Output path prefix (`.svg` and `.dxf` appended) |
+| `--script` | — | Write an editable `.py` script instead of SVG+DXF (see below) |
+
+### Python API
+
+```python
+from build123d_drafting import make_drawing
+
+svg_path, dxf_path = make_drawing(
+    "part.step",
+    title="BRACKET",
+    number="DWG-042",
+    drawn_by="Paul",
+)
+```
+
+### Editable script
+
+`--script` (or `generate_script()`) writes a `.py` file that calls `make_drawing()` with
+all parameters wired up. Run it as-is for the same output, or open it and add custom
+annotations beneath the `make_drawing()` call:
+
+```
+make-drawing part.step --script
+python part.py          # produces part.svg + part.dxf
+```
+
+### Scale selection
+
+`choose_scale(x_size, y_size, z_size)` returns `(SCALE, PAGE_W, PAGE_H, TB_W)` — the
+same thresholds used by `make_drawing()`. Call it directly when writing your own drawing
+script to stay consistent with the automated pipeline:
+
+```python
+from build123d_drafting import choose_scale
+
+SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(x_size, y_size, z_size)
+```
+
+---
+
 ## Helpers
 
 ### `draft_preset(font_size=2.5, decimal_precision=2, **overrides)`

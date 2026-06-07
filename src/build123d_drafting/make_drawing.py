@@ -573,13 +573,15 @@ def _write_script(a) -> str:
     py_path = a.out + ".py"
     py_name = Path(py_path).name
 
-    cog_output = "\n".join([
-        f"STEP_FILE = {a.step_file!r}",
-        f"TITLE = {a.title!r}",
-        f"NUMBER = {a.number!r}",
-        f"TOLERANCE = {a.tolerance!r}",
-        f"DRAWN_BY = {a.drawn_by!r}",
-    ])
+    cog_output = "\n".join(
+        [
+            f"STEP_FILE = {a.step_file!r}",
+            f"TITLE = {a.title!r}",
+            f"NUMBER = {a.number!r}",
+            f"TOLERANCE = {a.tolerance!r}",
+            f"DRAWN_BY = {a.drawn_by!r}",
+        ]
+    )
 
     cog_block = (
         "# [[[cog\n"

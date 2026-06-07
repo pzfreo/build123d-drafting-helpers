@@ -843,9 +843,7 @@ class ViewCoordinates:
             self._py_sign = 1.0
             self.py_axis = None
 
-    def pp(
-        self, world_x: float, world_y: float, world_z: float
-    ) -> tuple[float, float]:
+    def pp(self, world_x: float, world_y: float, world_z: float) -> tuple[float, float]:
         """Map a world point to (page_x, page_y). Works for all views including ISO."""
         vals = {"world_X": world_x, "world_Y": world_y, "world_Z": world_z}
         page_x = self._view_x + sum(
