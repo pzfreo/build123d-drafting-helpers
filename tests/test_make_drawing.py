@@ -12,6 +12,7 @@ from build123d_drafting.make_drawing import (
     analyse_face_levels,
     choose_scale,
     dedup_diams,
+    generate_script,
     make_drawing,
 )
 
@@ -154,6 +155,39 @@ def test_make_drawing_default_title(tmp_path):
 
     svg_path, _ = make_drawing(step_file, out=str(tmp_path / "out"))
     assert Path(svg_path).exists()
+
+
+@pytest.mark.timeout(120)
+def test_make_drawing_accepts_build123d_object(tmp_path):
+    """make_drawing() draws an in-memory build123d Shape without a STEP file."""
+    box = Box(30, 20, 10)
+    out_stem = str(tmp_path / "box_obj")
+
+    svg_path, dxf_path = make_drawing(box, out=out_stem, title="BOX OBJ")
+
+    assert Path(svg_path).exists()
+    assert Path(dxf_path).exists()
+    assert Path(svg_path).stat().st_size > 1000
+
+
+@pytest.mark.timeout(120)
+def test_make_drawing_object_defaults_out_to_drawing(tmp_path, monkeypatch):
+    """Passing an object with no out= writes to 'drawing.svg' in the cwd."""
+    monkeypatch.chdir(tmp_path)
+    box = Box(10, 10, 10)
+
+    svg_path, dxf_path = make_drawing(box)
+
+    assert Path(svg_path).name == "drawing.svg"
+    assert Path(dxf_path).name == "drawing.dxf"
+    assert (tmp_path / "drawing.svg").exists()
+
+
+def test_generate_script_rejects_build123d_object():
+    """generate_script() needs a path — a live object cannot be embedded."""
+    box = Box(10, 10, 10)
+    with pytest.raises(TypeError, match="STEP file path"):
+        generate_script(box)
 
 
 # ---------------------------------------------------------------------------

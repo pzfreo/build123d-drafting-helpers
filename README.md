@@ -76,16 +76,30 @@ All options:
 
 ### Python API
 
+`make_drawing()` accepts either a STEP file path or an in-memory build123d object
+(`Part`, `Solid`, `Compound`, …) as its first argument:
+
 ```python
+from build123d import Box
 from build123d_drafting import make_drawing
 
+# From a STEP file
 svg_path, dxf_path = make_drawing(
     "part.step",
     title="BRACKET",
     number="DWG-042",
     drawn_by="Paul",
 )
+
+# Directly from a build123d object — no STEP file needed
+part = Box(40, 30, 10)
+svg_path, dxf_path = make_drawing(part, out="bracket", title="BRACKET")
 ```
+
+When a build123d object is passed without `out=`, the files default to
+`drawing.svg` / `drawing.dxf` in the current directory. (The `--script` /
+`generate_script()` workflow is STEP-only — the generated script reloads geometry
+from disk, so it cannot embed a live object.)
 
 ### Editable script
 
