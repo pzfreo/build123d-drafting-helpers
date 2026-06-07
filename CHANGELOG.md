@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.4.1 — 2026-06-07
+
 ### Added
 
 - **`build_drawing()` and the `Drawing` builder** — the composable form of
@@ -17,6 +19,13 @@
   script** with the customisation block placed *before* export, so hand- or
   LLM-edited annotations actually land in the output (previously the seam sat
   after `make_drawing()` had already written the files, making it a no-op).
+
+### Fixed
+
+- **Generated drawing scripts are now written as UTF-8.** `generate_script()` /
+  `make-drawing --script` previously used the platform default codec and crashed
+  on Windows (cp1252) on the non-ASCII characters in the script's comment
+  separators.
 
 ## v0.4.0 — 2026-06-07
 
