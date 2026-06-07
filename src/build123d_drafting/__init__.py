@@ -39,8 +39,10 @@ from build123d_drafting.helpers import (
     view_axes,
 )
 from build123d_drafting.make_drawing import (
+    Drawing,
     analyse_cylinders,
     analyse_face_levels,
+    build_drawing,
     choose_scale,
     dedup_diams,
     fix_svg_page_size,
@@ -49,6 +51,8 @@ from build123d_drafting.make_drawing import (
 )
 
 __all__ = [
+    "Drawing",
+    "build_drawing",
     "fix_svg_page_size",
     "generate_script",
     "make_drawing",

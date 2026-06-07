@@ -41,12 +41,14 @@ from build123d_drafting.helpers import (
     Dimension,
     Leader,
     TitleBlock,
+    ViewCoordinates,
     annotate,
     draft_preset,
     format_drawing_scale,
     lint_drawing,
     place_dims,
     set_page,
+    view_axes,
 )
 
 _log = logging.getLogger(__name__)
@@ -312,73 +314,176 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out):
 
 
 # ---------------------------------------------------------------------------
-# Direct export (SVG + DXF)
+# Drawing builder (composable; make_drawing == build_drawing + export)
 # ---------------------------------------------------------------------------
 
 
-def make_drawing(
-    step_file: str | Path | Shape,
-    out: str | None = None,
-    title: str | None = None,
-    number: str = "DWG-001",
-    tolerance: str = "ISO 2768-m",
-    drawn_by: str = "",
-) -> tuple[str, str]:
-    """Generate a 4-view technical drawing from a STEP file or build123d object.
+class Drawing:
+    """A composable technical drawing — the editable form of :func:`make_drawing`.
 
-    Args:
-        step_file: Path to a STEP/STP file, or a build123d ``Shape`` (e.g. a
-            ``Part``, ``Solid``, or ``Compound``) to draw directly.
-        out: Output path stem (default: input filename stem, or ``"drawing"``
-            when a build123d object is passed).
-        title: Part title for the title block (default: stem uppercased).
-        number: Drawing number (e.g. ``"DWG-042"``).
-        tolerance: General tolerance string (e.g. ``"ISO 2768-m"``).
-        drawn_by: Designer name for the title block.
+    A ``Drawing`` holds the projected views, the annotation list, and per-view
+    coordinate helpers. :func:`build_drawing` returns one pre-populated with the
+    standard 4-view layout and automatic dimensions; you then add or remove
+    annotations, add section/auxiliary views, and finally :meth:`export`.
 
-    Returns:
-        Tuple of ``(svg_path, dxf_path)`` for the generated files.
+    Attributes:
+        scale: drawing scale factor (e.g. ``2.0`` for 2:1).
+        page_w, page_h: sheet size in mm.
+        tb_w: title-block width in mm.
+        draft: the shared ``Draft`` preset used by the automatic annotations.
+        look_at: scaled centroid ``(x, y, z)`` — the default ``look_at`` and a
+            building block for custom view cameras (see :meth:`add_view`).
+        dist: orthographic camera distance in scaled space.
+        centroid: unscaled centroid ``(x, y, z)``.
+        views: ``{name: (visible_compound, hidden_compound_or_None)}``.
+        annotations: ordered list of annotation objects (mutable).
     """
-    stem = "drawing" if isinstance(step_file, Shape) else Path(step_file).stem
-    out = out or stem
-    for _ext in (".svg", ".dxf"):
-        if out.endswith(_ext):
-            out = out[: -len(_ext)]
-            break
-    title = title or stem.replace("_", " ").upper()
 
-    a = _analyse(step_file, title, number, tolerance, drawn_by, out)
+    def __init__(self, *, scale, page_w, page_h, tb_w, draft, look_at, dist, centroid, out):
+        self.scale = scale
+        self.page_w = page_w
+        self.page_h = page_h
+        self.tb_w = tb_w
+        self.draft = draft
+        self.look_at = look_at
+        self.dist = dist
+        self.centroid = centroid
+        self.out = out
+        self.views: dict = {}
+        self.annotations: list = []
+        self._coords: dict = {}
+        self._named: dict = {}
+        self.svg_path: str | None = None
+        self.dxf_path: str | None = None
 
-    cxs, cys, czs = a.cx * a.SCALE, a.cy * a.SCALE, a.cz * a.SCALE
-    look_at = (cxs, cys, czs)
-    DIST = a.bbox_max * a.SCALE + 100
-    ID = DIST / math.sqrt(3)
+    # -- views ----------------------------------------------------------------
+    def add_view(self, name, shape, camera, up, position, *, look_at=None, scaled=False):
+        """Project ``shape`` from ``camera`` and place it at ``position``.
 
-    part_s = a.part.scale(a.SCALE)
+        Args:
+            name: view name (key in :attr:`views`); also used for coordinate lookups.
+            shape: a build123d ``Shape`` to project. Given in world (unscaled)
+                coordinates and scaled internally unless ``scaled=True``.
+            camera, up, look_at: viewport parameters in **scaled** space (the same
+                convention the standard views use). ``look_at`` defaults to
+                :attr:`look_at` (the scaled centroid). Compose custom cameras from
+                :attr:`look_at` and :attr:`dist`.
+            position: ``(x, y)`` page position for the view centre, in mm.
+            scaled: set ``True`` if ``shape`` is already scaled by :attr:`scale`.
 
-    view_cfg = [
-        ("front", (cxs, cys - DIST, czs), (0, 0, 1), (a.FV_X, a.FV_Y)),
-        ("plan", (cxs, cys, czs + DIST), (0, 1, 0), (a.PV_X, a.PV_Y)),
-        ("side", (cxs + DIST, cys, czs), (0, 0, 1), (a.SV_X, a.SV_Y)),
-    ]
-    view_proj = {}
-    for vname, cam, up, pos in view_cfg:
-        vis, hid = part_s.project_to_viewport(cam, up, look_at)
+        Returns:
+            The :class:`ViewCoordinates` for this view (also via :meth:`coords`),
+            for mapping world points to page coordinates.
+        """
+        la = self.look_at if look_at is None else look_at
+        shape_s = shape if scaled else shape.scale(self.scale)
+        vis, hid = shape_s.project_to_viewport(camera, up, la)
         vl, hl = list(vis), list(hid)
-        placed = Compound(children=vl).locate(Location((pos[0], pos[1], 0)))
-        placed_hid = Compound(children=hl).locate(Location((pos[0], pos[1], 0))) if hl else None
-        view_proj[vname] = (placed, placed_hid)
-        _log.info("  %s: %d visible / %d hidden", vname, len(vl), len(hl))
+        if not vl and not hl:
+            raise ValueError(
+                f"project_to_viewport returned empty geometry for view {name!r} "
+                f"(camera {camera}) — check the camera position and look_at."
+            )
+        loc = Location((position[0], position[1], 0))
+        placed = Compound(children=vl).locate(loc)
+        placed_hid = Compound(children=hl).locate(loc) if hl else None
+        self.views[name] = (placed, placed_hid)
+        axes = view_axes(camera, up, la)
+        cx, cy, cz = la[0] / self.scale, la[1] / self.scale, la[2] / self.scale
+        self._coords[name] = ViewCoordinates(axes, position[0], position[1], cx, cy, cz, self.scale)
+        _log.info("  %s: %d visible / %d hidden", name, len(vl), len(hl))
+        return self._coords[name]
 
-    iso_vis, iso_hid = part_s.project_to_viewport(
-        (cxs + ID, cys + ID, czs + ID), (0, 0, 1), look_at
-    )
-    iso = Compound(children=list(iso_vis)).locate(Location((a.ISO_X, a.ISO_Y, 0)))
-    iso_h = (
-        Compound(children=list(iso_hid)).locate(Location((a.ISO_X, a.ISO_Y, 0)))
-        if list(iso_hid)
-        else None
-    )
+    def coords(self, view):
+        """Return the :class:`ViewCoordinates` for a named view."""
+        return self._coords[view]
+
+    def at(self, view, x, y, z):
+        """Map a world point to a page point ``(px, py, 0)`` in ``view``."""
+        px, py = self._coords[view].pp(x, y, z)
+        return (px, py, 0.0)
+
+    # -- annotations ----------------------------------------------------------
+    def add(self, obj, name=None):
+        """Register an annotation so lint and export include it; returns ``obj``."""
+        annotate(obj, name)
+        self.annotations.append(obj)
+        if name is not None:
+            self._named[name] = obj
+        return obj
+
+    def remove(self, name):
+        """Remove a previously named annotation. Raises ``KeyError`` if absent."""
+        obj = self._named.pop(name, None)
+        if obj is None:
+            raise KeyError(f"no annotation named {name!r}")
+        self.annotations.remove(obj)
+        return obj
+
+    # -- output ---------------------------------------------------------------
+    def lint(self):
+        """Lint all annotations against all views; returns the list of issues."""
+        set_page(self.page_w, self.page_h, margin=10)
+        view_shapes = [vis for vis, _ in self.views.values()]
+        return lint_drawing(self.annotations, drawing_scale=self.scale, view_shapes=view_shapes)
+
+    def export(self, out=None):
+        """Lint, then write SVG and DXF. Returns ``(svg_path, dxf_path)``."""
+        out = out if out is not None else self.out
+        for _ext in (".svg", ".dxf"):
+            if out.endswith(_ext):
+                out = out[: -len(_ext)]
+                break
+
+        issues = self.lint()
+        if issues:
+            _log.warning("Lint issues:")
+            for iss in issues:
+                _log.warning("  [%s] %s: %s", iss.severity, iss.code, iss.message)
+        else:
+            _log.info("Lint: OK")
+
+        blk = Color(0, 0, 0)
+        grey = Color(0.5, 0.5, 0.5)
+        blue = Color(0, 0.2, 0.7)
+
+        svg = ExportSVG(margin=10)
+        svg.add_layer("part", line_color=blk, line_weight=0.5)
+        svg.add_layer("hidden", line_color=grey, line_weight=0.25, line_type=LineType.HIDDEN)
+        svg.add_layer("dims", line_color=blue, fill_color=blue, line_weight=0.05)
+        for vis, hid in self.views.values():
+            svg.add_shape(vis, layer="part")
+            if hid:
+                svg.add_shape(hid, layer="hidden")
+        for ann in self.annotations:
+            svg.add_shape(ann, layer="dims")
+        svg_path = out + ".svg"
+        svg.write(svg_path)
+        fix_svg_page_size(svg_path, self.page_w, self.page_h)
+        _log.info("SVG → %s", svg_path)
+
+        dxf = ExportDXF()
+        dxf.add_layer("part", line_weight=0.5)
+        dxf.add_layer("hidden", line_weight=0.25)
+        dxf.add_layer("dims", line_weight=0.05)
+        for vis, hid in self.views.values():
+            dxf.add_shape(vis, layer="part")
+            if hid:
+                dxf.add_shape(hid, layer="hidden")
+        for ann in self.annotations:
+            dxf.add_shape(ann, layer="dims")
+        dxf_path = out + ".dxf"
+        dxf.write(dxf_path)
+        _log.info("DXF → %s", dxf_path)
+
+        self.svg_path = svg_path
+        self.dxf_path = dxf_path
+        return svg_path, dxf_path
+
+
+def _auto_annotate(dwg, a):
+    """Add the standard automatic dimensions, centrelines, and title block."""
+    draft = dwg.draft
 
     def FX(x):
         return a.FV_X + (x - a.cx) * a.SCALE
@@ -392,16 +497,8 @@ def make_drawing(
     def SZ(z):
         return a.SV_Y + (z - a.cz) * a.SCALE
 
-    draft = draft_preset(font_size=3.0, decimal_precision=1)
-    all_anns = []
-
-    def _ann(obj, name):
-        annotate(obj, name)
-        all_anns.append(obj)
-        return obj
-
     # Overall height
-    _ann(
+    dwg.add(
         Dimension(
             (FX(a.bb.max.X) + 2, FZ(a.bb.min.Z), 0),
             (FX(a.bb.max.X) + 2, FZ(a.bb.max.Z), 0),
@@ -416,7 +513,7 @@ def make_drawing(
     # Outer diameter — only for parts with cylindrical faces
     if a.z_diams:
         od = a.z_diams[0]
-        _ann(
+        dwg.add(
             Dimension(
                 (FX(a.cx - od / 2), FZ(a.bb.max.Z) + 2, 0),
                 (FX(a.cx + od / 2), FZ(a.bb.max.Z) + 2, 0),
@@ -428,14 +525,14 @@ def make_drawing(
             "dim_od",
         )
         # Centreline through the rotation axis — front and side views
-        _ann(
+        dwg.add(
             Centerline(
                 (FX(a.cx), FZ(a.bb.min.Z) - 5, 0),
                 (FX(a.cx), FZ(a.bb.max.Z) + 5, 0),
             ),
             "centerline_front",
         )
-        _ann(
+        dwg.add(
             Centerline(
                 (SX(a.cy), SZ(a.bb.min.Z) - 5, 0),
                 (SX(a.cy), SZ(a.bb.max.Z) + 5, 0),
@@ -451,7 +548,7 @@ def make_drawing(
         elbow_x = left_edge - ldr_length
         for i, d in enumerate(a.z_diams[1:4]):
             tip_z = FZ(a.cz) + (i - 1) * 10
-            _ann(
+            dwg.add(
                 Leader(
                     tip=(FX(a.cx - d / 2), tip_z, 0),
                     elbow=(elbow_x, tip_z, 0),
@@ -482,7 +579,7 @@ def make_drawing(
             for col, z in enumerate([z for z in a.step_zs[:3] if (z - a.bb.min.Z) * a.SCALE >= 20])
         ]
         for col, dim in enumerate(place_dims(step_specs, draft)):
-            _ann(dim, f"dim_step_{col}")
+            dwg.add(dim, f"dim_step_{col}")
 
     # Width (non-round / non-square parts only)
     if abs(a.x_size - a.y_size) > max(a.x_size, a.y_size) * 0.05:
@@ -493,7 +590,7 @@ def make_drawing(
         def PY(y):
             return a.PV_Y + (y - a.cy) * a.SCALE
 
-        _ann(
+        dwg.add(
             Dimension(
                 (PX(a.bb.min.X), PY(a.bb.min.Y) - 2, 0),
                 (PX(a.bb.max.X), PY(a.bb.min.Y) - 2, 0),
@@ -507,71 +604,122 @@ def make_drawing(
 
     # Title block
     tb = TitleBlock(
-        title,
-        number,
+        a.title,
+        a.number,
         scale=format_drawing_scale(a.SCALE),
-        general_tolerance=tolerance,
-        designed_by=drawn_by,
+        general_tolerance=a.tolerance,
+        designed_by=a.drawn_by,
         revision="A",
         legal_owner="",
         width=a.TB_W,
         draft=draft,
     ).locate(Location((a.PAGE_W - a.TB_W - 11, 11, 0)))
-    _ann(tb, "title_block")
+    dwg.add(tb, "title_block")
 
-    set_page(a.PAGE_W, a.PAGE_H, margin=10)
-    placed_views = [view_proj[v][0] for v in ("front", "plan", "side") if view_proj.get(v)]
-    placed_views.append(iso)
-    issues = lint_drawing(all_anns, drawing_scale=a.SCALE, view_shapes=placed_views)
-    if issues:
-        _log.warning("Lint issues:")
-        for iss in issues:
-            _log.warning("  [%s] %s: %s", iss.severity, iss.code, iss.message)
-    else:
-        _log.info("Lint: OK")
 
-    blk = Color(0, 0, 0)
-    grey = Color(0.5, 0.5, 0.5)
-    blue = Color(0, 0.2, 0.7)
+def build_drawing(
+    step_file: str | Path | Shape,
+    out: str | None = None,
+    title: str | None = None,
+    number: str = "DWG-001",
+    tolerance: str = "ISO 2768-m",
+    drawn_by: str = "",
+) -> Drawing:
+    """Build a customisable 4-view :class:`Drawing` without exporting it.
 
-    svg = ExportSVG(margin=10)
-    svg.add_layer("part", line_color=blk, line_weight=0.5)
-    svg.add_layer("hidden", line_color=grey, line_weight=0.25, line_type=LineType.HIDDEN)
-    svg.add_layer("dims", line_color=blue, fill_color=blue, line_weight=0.05)
-    for vname in ("front", "plan", "side"):
-        p, ph = view_proj[vname]
-        svg.add_shape(p, layer="part")
-        if ph:
-            svg.add_shape(ph, layer="hidden")
-    svg.add_shape(iso, layer="part")
-    if iso_h:
-        svg.add_shape(iso_h, layer="hidden")
-    for ann in all_anns:
-        svg.add_shape(ann, layer="dims")
-    svg_path = out + ".svg"
-    svg.write(svg_path)
-    fix_svg_page_size(svg_path, a.PAGE_W, a.PAGE_H)
-    _log.info("SVG → %s", svg_path)
+    Same arguments as :func:`make_drawing`, but returns the live :class:`Drawing`
+    so you can add or remove annotations and add section/auxiliary views before
+    calling :meth:`Drawing.export`. ``make_drawing(...)`` is exactly
+    ``build_drawing(...).export()``.
 
-    dxf = ExportDXF()
-    dxf.add_layer("part", line_weight=0.5)
-    dxf.add_layer("hidden", line_weight=0.25)
-    dxf.add_layer("dims", line_weight=0.05)
-    for vname in ("front", "plan", "side"):
-        p, ph = view_proj[vname]
-        dxf.add_shape(p, layer="part")
-        if ph:
-            dxf.add_shape(ph, layer="hidden")
-    dxf.add_shape(iso, layer="part")
-    if iso_h:
-        dxf.add_shape(iso_h, layer="hidden")
-    for ann in all_anns:
-        dxf.add_shape(ann, layer="dims")
-    dxf_path = out + ".dxf"
-    dxf.write(dxf_path)
-    _log.info("DXF → %s", dxf_path)
+    Returns:
+        A :class:`Drawing` with the standard front/plan/side/iso views projected
+        and the automatic dimensions + title block already added.
+    """
+    stem = "drawing" if isinstance(step_file, Shape) else Path(step_file).stem
+    out = out or stem
+    for _ext in (".svg", ".dxf"):
+        if out.endswith(_ext):
+            out = out[: -len(_ext)]
+            break
+    title = title or stem.replace("_", " ").upper()
 
-    return svg_path, dxf_path
+    a = _analyse(step_file, title, number, tolerance, drawn_by, out)
+
+    cxs, cys, czs = a.cx * a.SCALE, a.cy * a.SCALE, a.cz * a.SCALE
+    look_at = (cxs, cys, czs)
+    dist = a.bbox_max * a.SCALE + 100
+    iso_off = dist / math.sqrt(3)
+
+    dwg = Drawing(
+        scale=a.SCALE,
+        page_w=a.PAGE_W,
+        page_h=a.PAGE_H,
+        tb_w=a.TB_W,
+        draft=draft_preset(font_size=3.0, decimal_precision=1),
+        look_at=look_at,
+        dist=dist,
+        centroid=(a.cx, a.cy, a.cz),
+        out=out,
+    )
+
+    part_s = a.part.scale(a.SCALE)
+    dwg.add_view("front", part_s, (cxs, cys - dist, czs), (0, 0, 1), (a.FV_X, a.FV_Y), scaled=True)
+    dwg.add_view("plan", part_s, (cxs, cys, czs + dist), (0, 1, 0), (a.PV_X, a.PV_Y), scaled=True)
+    dwg.add_view("side", part_s, (cxs + dist, cys, czs), (0, 0, 1), (a.SV_X, a.SV_Y), scaled=True)
+    dwg.add_view(
+        "iso",
+        part_s,
+        (cxs + iso_off, cys + iso_off, czs + iso_off),
+        (0, 0, 1),
+        (a.ISO_X, a.ISO_Y),
+        scaled=True,
+    )
+
+    _auto_annotate(dwg, a)
+    return dwg
+
+
+# ---------------------------------------------------------------------------
+# Direct export (SVG + DXF)
+# ---------------------------------------------------------------------------
+
+
+def make_drawing(
+    step_file: str | Path | Shape,
+    out: str | None = None,
+    title: str | None = None,
+    number: str = "DWG-001",
+    tolerance: str = "ISO 2768-m",
+    drawn_by: str = "",
+) -> tuple[str, str]:
+    """Generate a 4-view technical drawing from a STEP file or build123d object.
+
+    Args:
+        step_file: Path to a STEP/STP file, or a build123d ``Shape`` (e.g. a
+            ``Part``, ``Solid``, or ``Compound``) to draw directly.
+        out: Output path stem (default: input filename stem, or ``"drawing"``
+            when a build123d object is passed).
+        title: Part title for the title block (default: stem uppercased).
+        number: Drawing number (e.g. ``"DWG-042"``).
+        tolerance: General tolerance string (e.g. ``"ISO 2768-m"``).
+        drawn_by: Designer name for the title block.
+
+    Returns:
+        Tuple of ``(svg_path, dxf_path)`` for the generated files.
+
+    This is a thin wrapper: ``make_drawing(...)`` is ``build_drawing(...).export()``.
+    To add or remove annotations or add section/auxiliary views before export,
+    call :func:`build_drawing` and use the returned :class:`Drawing`.
+    """
+    return build_drawing(
+        step_file,
+        out=out,
+        title=title,
+        number=number,
+        tolerance=tolerance,
+        drawn_by=drawn_by,
+    ).export()
 
 
 # ---------------------------------------------------------------------------
@@ -632,16 +780,16 @@ def _write_script(a) -> str:
         f"Run:  uv run python {py_name}\n"
         f'"""\n'
         f"import os as _os\n"
-        f"from build123d_drafting import make_drawing\n"
+        f"from build123d_drafting import build_drawing\n"
         f"\n"
         f"# ── Config (auto-updated by cog) ──────────────────────────────────────────────\n"
     )
 
     run_section = (
         "\n"
-        "# ── Generate drawing ──────────────────────────────────────────────────────────\n"
+        "# ── Build drawing (standard 4-view layout + automatic dimensions) ─────────────\n"
         "_stem = _os.path.splitext(__file__)[0]\n"
-        "svg_path, dxf_path = make_drawing(\n"
+        "dwg = build_drawing(\n"
         "    STEP_FILE,\n"
         "    out=_stem,\n"
         "    title=TITLE,\n"
@@ -649,13 +797,23 @@ def _write_script(a) -> str:
         "    tolerance=TOLERANCE,\n"
         "    drawn_by=DRAWN_BY,\n"
         ")\n"
+        "\n"
+        "# ── Customise here — runs BEFORE export, so edits land in the output ───────────\n"
+        "# dwg.views        'front' 'plan' 'side' 'iso'  → (visible, hidden) compounds\n"
+        "# dwg.annotations  mutable list of annotation objects\n"
+        "# dwg.at(view, x, y, z)  → page point (px, py, 0) mapped from world coordinates\n"
+        "# dwg.add(obj, name) / dwg.remove(name)\n"
+        "# dwg.add_view(name, shape, camera, up, position)  → section / auxiliary view\n"
+        "# Example:\n"
+        "#   from build123d_drafting import Leader\n"
+        "#   dwg.add(Leader(tip=dwg.at('front', 10, 0, 5), elbow=(8, 40, 0),\n"
+        "#                  label='ø4 BORE', draft=dwg.draft), 'ldr_bore')\n"
+        "#   dwg.remove('dim_od')\n"
+        "\n"
+        "# ── Export ────────────────────────────────────────────────────────────────────\n"
+        "svg_path, dxf_path = dwg.export(_stem)\n"
         'print(f"SVG \\u2192 {svg_path}")\n'
         'print(f"DXF \\u2192 {dxf_path}")\n'
-        "\n"
-        "# ── Add custom annotations here ───────────────────────────────────────────────\n"
-        "# Example:\n"
-        "#   from build123d_drafting import Leader, Dimension, annotate, draft_preset\n"
-        "#   draft = draft_preset(font_size=3.0)\n"
     )
 
     content = header + cog_block + run_section

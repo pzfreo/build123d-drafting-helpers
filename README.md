@@ -101,11 +101,48 @@ When a build123d object is passed without `out=`, the files default to
 `generate_script()` workflow is STEP-only — the generated script reloads geometry
 from disk, so it cannot embed a live object.)
 
+### Customising a drawing — the `Drawing` builder
+
+`make_drawing()` is a one-shot wrapper. To edit a drawing *before* it is written —
+add or remove dimensions, add a section or auxiliary view — call `build_drawing()`,
+which returns a live `Drawing` with the standard four views and automatic
+annotations already in place but **not yet exported**:
+
+```python
+from build123d_drafting import build_drawing, Leader
+
+dwg = build_drawing(part, out="bracket", title="BRACKET", number="DWG-042")
+
+# dwg.views        {"front", "plan", "side", "iso"} → (visible, hidden) compounds
+# dwg.annotations  mutable list of annotation objects
+# dwg.draft / dwg.scale / dwg.page_w / dwg.page_h
+# dwg.at(view, x, y, z)  → page point (px, py, 0) mapped from world coordinates
+
+dwg.add(Leader(tip=dwg.at("front", 10, 0, 5), elbow=(8, 40, 0),
+               label="ø4 BORE", draft=dwg.draft), "ldr_bore")
+dwg.remove("dim_od")                       # drop an automatic dimension by name
+
+svg_path, dxf_path = dwg.export("bracket")
+```
+
+`make_drawing(...)` is exactly `build_drawing(...).export()`.
+
+Add a section or auxiliary view with `add_view()` — supply a (pre-cut) shape, a
+camera in scaled space (compose it from `dwg.look_at` and `dwg.dist`), an up
+vector, and a page position; it returns that view's coordinate helper:
+
+```python
+look = dwg.look_at
+bottom = (look[0], look[1], look[2] - dwg.dist)
+vc = dwg.add_view("bottom", part, bottom, (0, 1, 0), (260.0, 60.0))
+```
+
 ### Editable script
 
-`--script` (or `generate_script()`) writes a `.py` file that calls `make_drawing()` with
-all parameters wired up. Run it as-is for the same output, or open it and add custom
-annotations beneath the `make_drawing()` call:
+`--script` (or `generate_script()`) writes a `.py` file that calls `build_drawing()`
+with all parameters wired up, an editable customisation block, and an `export()` call
+at the end. Run it as-is for the standard drawing, or open it and add annotations in
+the customisation block — they run before export, so they land in the output:
 
 ```
 make-drawing part.step --script
