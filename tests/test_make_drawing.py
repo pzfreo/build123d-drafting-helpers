@@ -429,6 +429,19 @@ def test_drawing_add_and_remove():
 
 
 @pytest.mark.timeout(60)
+def test_drawing_add_replaces_reused_name():
+    dwg = build_drawing(Box(30, 20, 10))
+    n0 = len(dwg.annotations)
+    first = Leader(tip=dwg.at("front", 0, 0, 0), elbow=(5, 5, 0), label="A", draft=dwg.draft)
+    second = Leader(tip=dwg.at("front", 0, 0, 0), elbow=(6, 6, 0), label="B", draft=dwg.draft)
+    dwg.add(first, "ldr")
+    dwg.add(second, "ldr")  # same name → replaces, no orphan left behind
+    assert len(dwg.annotations) == n0 + 1
+    assert first not in dwg.annotations
+    assert dwg.remove("ldr") is second
+
+
+@pytest.mark.timeout(60)
 def test_drawing_at_maps_world_to_page():
     dwg = build_drawing(Box(30, 20, 10))
     cx, cy, cz = dwg.centroid

@@ -405,7 +405,13 @@ class Drawing:
 
     # -- annotations ----------------------------------------------------------
     def add(self, obj, name=None):
-        """Register an annotation so lint and export include it; returns ``obj``."""
+        """Register an annotation so lint and export include it; returns ``obj``.
+
+        Re-using an existing ``name`` replaces the previously added object (it is
+        dropped from :attr:`annotations`), so a name always maps to one object.
+        """
+        if name is not None and name in self._named:
+            self.annotations.remove(self._named[name])
         annotate(obj, name)
         self.annotations.append(obj)
         if name is not None:
