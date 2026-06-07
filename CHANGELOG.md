@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## v0.4.0 — 2026-06-07
+
+### Added
+
+- **`make_drawing()` — automated STEP → SVG + DXF drawing pipeline** (#50, #53, #56).
+  Analyses part geometry, chooses scale and ISO page size, projects four views,
+  and annotates diameter callouts, centrelines, and an ISO 7200 title block with
+  no drawing code required.
+- **`make-drawing` CLI** entry point wrapping `make_drawing()`, with `--title`,
+  `--number`, `--tolerance`, `--drawn-by`, `--out`, and `--script` flags.
+- **`make_drawing()` accepts a build123d object** (`Part`, `Solid`, `Compound`)
+  as well as a STEP file path — draw in-memory geometry with no STEP round-trip
+  (#58). Object input defaults `out` to `"drawing"`; `generate_script()` remains
+  STEP-only.
+- **New public API** promoted from pipeline internals (#52): `choose_scale`,
+  `fix_svg_page_size`, `analyse_cylinders`, `analyse_face_levels`, `dedup_diams`,
+  `generate_script`, and `ViewCoordinates`.
+
+### Documentation
+
+- README now documents the automated pipeline (CLI + Python API).
+
 ## v0.3.2 — 2026-06-05
 
 ### Added
