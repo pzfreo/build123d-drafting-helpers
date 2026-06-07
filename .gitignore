@@ -6,3 +6,6 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+testenv/
+.coverage
+coverage.xml

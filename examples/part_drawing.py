@@ -18,6 +18,7 @@ collision-free by lint() before export.
 
 Requires the dev/example dependency ``bd_warehouse`` (``uv sync --group dev``).
 """
+
 from __future__ import annotations
 
 import math
@@ -25,29 +26,41 @@ from types import SimpleNamespace
 
 from bd_warehouse.fastener import HexHeadScrew, HexNut
 from build123d import (
-    Align, Axis, Color, Compound, Edge, ExportSVG, LineType, Location, Text,
+    Align,
+    Axis,
+    Color,
+    Compound,
+    Edge,
+    ExportSVG,
+    LineType,
+    Location,
+    Text,
 )
 from build123d_drafting import (
-    Dimension, draft_preset, find_interferences, Leader, TitleBlock,
+    Dimension,
+    draft_preset,
+    find_interferences,
+    Leader,
+    TitleBlock,
 )
 
 # --- the part: change these two lines and the whole drawing reflows ----------
-BOLT_SIZE = "M10-1.5"      # any bd_warehouse hex size, e.g. "M8-1.25", "M12-1.75"
+BOLT_SIZE = "M10-1.5"  # any bd_warehouse hex size, e.g. "M8-1.25", "M12-1.75"
 BOLT_LENGTH = 40.0
 
 _bolt = HexHeadScrew(size=BOLT_SIZE, length=BOLT_LENGTH, simple=True)
 _nut = HexNut(size=BOLT_SIZE, simple=True)
 
 # Every value below is read from the bd_warehouse parts — no magic numbers.
-_AF = math.sqrt(3) / 2.0                       # across-corners -> across-flats
-BOLT_L = _bolt.length                          # threaded shaft length
+_AF = math.sqrt(3) / 2.0  # across-corners -> across-flats
+BOLT_L = _bolt.length  # threaded shaft length
 HEAD_H = _bolt.head_height
 THREAD_D = _bolt.thread_diameter
 PITCH = _bolt.thread_pitch
-HEAD_AF = _bolt.head_diameter * _AF            # spanner size (across flats)
+HEAD_AF = _bolt.head_diameter * _AF  # spanner size (across flats)
 NUT_T = _nut.nut_thickness
 NUT_AF = _nut.nut_diameter * _AF
-THREAD = f"M{THREAD_D:g} × {PITCH:g}"          # e.g. "M10 × 1.5"
+THREAD = f"M{THREAD_D:g} × {PITCH:g}"  # e.g. "M10 × 1.5"
 TITLE = f"{BOLT_SIZE.split('-')[0]} HEX BOLT & NUT"
 
 # Rotate 30° about the axis so a hex flat faces the front camera — the front
@@ -56,20 +69,21 @@ bolt = _bolt.rotate(Axis.Z, 30)
 nut = _nut.rotate(Axis.Z, 30)
 
 DRAFT = draft_preset(font_size=2.2, decimal_precision=1)
-PW, PH, MARGIN = 297.0, 210.0, 6.0             # A4 landscape
+PW, PH, MARGIN = 297.0, 210.0, 6.0  # A4 landscape
 SANS = "Liberation Sans"
-D = 800.0                                       # camera distance
+D = 800.0  # camera distance
 
 border, part_v, hidden_v, dims_l, text_l = [], [], [], [], []
 lint_items: list = []
-view_labels: list = []   # FRONT/TOP/SIDE/ISO labels — linted against the dim lines
-view_boxes: list = []    # bbox of each projected view — labels must clear them
+view_labels: list = []  # FRONT/TOP/SIDE/ISO labels — linted against the dim lines
+view_boxes: list = []  # bbox of each projected view — labels must clear them
 
 
 def _label_box(t, name="text"):
     bb = t.bounding_box()
-    return SimpleNamespace(label_bbox=(bb.min.X, bb.min.Y, bb.max.X, bb.max.Y),
-                           label=name, segments=[], elbow=None)
+    return SimpleNamespace(
+        label_bbox=(bb.min.X, bb.min.Y, bb.max.X, bb.max.Y), label=name, segments=[], elbow=None
+    )
 
 
 def _project(part, origin, up, look):
@@ -88,8 +102,9 @@ def _add_view(vis, hid, cx, cy, label):
     if hid is not None:
         hidden_v.append(_place(hid, cx, cy))
     bb = v.bounding_box()
-    lbl = Text(label, font_size=2.6, font=SANS, align=(Align.CENTER, Align.MAX)
-               ).moved(Location((cx, bb.min.Y - 3.0, 0)))
+    lbl = Text(label, font_size=2.6, font=SANS, align=(Align.CENTER, Align.MAX)).moved(
+        Location((cx, bb.min.Y - 3.0, 0))
+    )
     text_l.append(lbl)
     view_labels.append(lbl)
     view_boxes.append((bb.min.X, bb.min.Y, bb.max.X, bb.max.Y))
@@ -144,9 +159,15 @@ border.extend(_rect_edges(PW, PH))
 
 TB_W = 118.0
 tb = TitleBlock(
-    TITLE, "B3D-DH-2", scale="1:1", material="Steel 8.8",
-    general_tolerance="ISO 2768-m", designed_by="build123d-drafting-helpers",
-    date="2026-06-01", width=TB_W, draft=draft_preset(font_size=2.4, decimal_precision=1),
+    TITLE,
+    "B3D-DH-2",
+    scale="1:1",
+    material="Steel 8.8",
+    general_tolerance="ISO 2768-m",
+    designed_by="build123d-drafting-helpers",
+    date="2026-06-01",
+    width=TB_W,
+    draft=draft_preset(font_size=2.4, decimal_precision=1),
 )
 tb_loc = Location((PW / 2 - MARGIN - TB_W, -PH / 2 + MARGIN, 0))
 dims_l.append(tb.moved(tb_loc))
@@ -155,26 +176,28 @@ dims_l.append(tb.moved(tb_loc))
 fb = _draw_part(bolt, -104.0, 6.0)
 y0, y_head, y_top = fb.min.Y, fb.max.Y - HEAD_H, fb.max.Y
 xL, xR = fb.center().X - HEAD_AF / 2, fb.center().X + HEAD_AF / 2
-_dim((xL - THREAD_D / 2, y0, 0), (xL - THREAD_D / 2, y_head, 0), "left", 12, f"{BOLT_L:g}")  # length
-_dim((xL, y_top, 0), (xR, y_top, 0), "above", 8, f"{HEAD_AF:g}")                             # head A/F
+_dim(
+    (xL - THREAD_D / 2, y0, 0), (xL - THREAD_D / 2, y_head, 0), "left", 12, f"{BOLT_L:g}"
+)  # length
+_dim((xL, y_top, 0), (xR, y_top, 0), "above", 8, f"{HEAD_AF:g}")  # head A/F
 # thread designation: leader from the shaft down into the clear area below the
 # views (its label must not land over the SIDE view, which the annotation lint
 # can't see — part geometry isn't a label).
-_leader((fb.center().X + THREAD_D / 2, y0 + 8, 0),
-        (fb.center().X + 30, y0 - 20, 0), THREAD)
+_leader((fb.center().X + THREAD_D / 2, y0 + 8, 0), (fb.center().X + 30, y0 - 20, 0), THREAD)
 
 # --- nut: views + dimensions (front view) -----------------------------------
 nb = _draw_part(nut, 34.0, 6.0)
-_dim((nb.min.X, nb.max.Y, 0), (nb.max.X, nb.max.Y, 0), "above", 8, f"{NUT_AF:g}")   # A/F
-_dim((nb.max.X, nb.min.Y, 0), (nb.max.X, nb.max.Y, 0), "right", 8, f"{NUT_T:g}")    # thickness
-_leader((nb.center().X, nb.min.Y, 0), (nb.center().X - 24, nb.min.Y - 14, 0),
-        f"{THREAD} thru")
+_dim((nb.min.X, nb.max.Y, 0), (nb.max.X, nb.max.Y, 0), "above", 8, f"{NUT_AF:g}")  # A/F
+_dim((nb.max.X, nb.min.Y, 0), (nb.max.X, nb.max.Y, 0), "right", 8, f"{NUT_T:g}")  # thickness
+_leader((nb.center().X, nb.min.Y, 0), (nb.center().X - 24, nb.min.Y - 14, 0), f"{THREAD} thru")
 
 # the title block is a labelled feature too
 tb_h = tb.bounding_box().size.Y
-_leader((tb_loc.position.X + 40, -PH / 2 + MARGIN + tb_h, 0),
-        (tb_loc.position.X + 30, -PH / 2 + MARGIN + tb_h + 16, 0),
-        "TitleBlock")
+_leader(
+    (tb_loc.position.X + 40, -PH / 2 + MARGIN + tb_h, 0),
+    (tb_loc.position.X + 30, -PH / 2 + MARGIN + tb_h + 16, 0),
+    "TitleBlock",
+)
 
 
 def lint():
@@ -193,13 +216,36 @@ def lint():
 
 def write_part_drawing(svg_path: str = "part_drawing.svg") -> str:
     exp = ExportSVG(margin=4)
-    exp.add_layer("border", line_color=Color(0, 0, 0), line_weight=0.3, line_type=LineType.CONTINUOUS)
-    exp.add_layer("part", line_color=Color(0, 0, 0), line_weight=0.35, line_type=LineType.CONTINUOUS)
-    exp.add_layer("hidden", line_color=Color(0.5, 0.5, 0.5), line_weight=0.18, line_type=LineType.DASHED)
-    exp.add_layer("dims", line_color=Color(0, 0, 0), fill_color=Color(0, 0, 0), line_weight=0.18, line_type=LineType.CONTINUOUS)
-    exp.add_layer("text", line_color=Color(0, 0, 0), fill_color=Color(0, 0, 0), line_weight=0.0, line_type=LineType.CONTINUOUS)
-    for bucket, layer in [(border, "border"), (part_v, "part"), (hidden_v, "hidden"),
-                          (dims_l, "dims"), (text_l, "text")]:
+    exp.add_layer(
+        "border", line_color=Color(0, 0, 0), line_weight=0.3, line_type=LineType.CONTINUOUS
+    )
+    exp.add_layer(
+        "part", line_color=Color(0, 0, 0), line_weight=0.35, line_type=LineType.CONTINUOUS
+    )
+    exp.add_layer(
+        "hidden", line_color=Color(0.5, 0.5, 0.5), line_weight=0.18, line_type=LineType.DASHED
+    )
+    exp.add_layer(
+        "dims",
+        line_color=Color(0, 0, 0),
+        fill_color=Color(0, 0, 0),
+        line_weight=0.18,
+        line_type=LineType.CONTINUOUS,
+    )
+    exp.add_layer(
+        "text",
+        line_color=Color(0, 0, 0),
+        fill_color=Color(0, 0, 0),
+        line_weight=0.0,
+        line_type=LineType.CONTINUOUS,
+    )
+    for bucket, layer in [
+        (border, "border"),
+        (part_v, "part"),
+        (hidden_v, "hidden"),
+        (dims_l, "dims"),
+        (text_l, "text"),
+    ]:
         exp.add_shape(Compound(children=bucket), layer=layer)
     exp.write(svg_path)
     return svg_path
@@ -207,6 +253,7 @@ def write_part_drawing(svg_path: str = "part_drawing.svg") -> str:
 
 if __name__ == "__main__":
     import sys
+
     for i in lint():
         print(f"[{i.severity}] {i.code}: {i.message}")
     print(f"lint: {sum(i.severity == 'error' for i in lint())} error(s)")

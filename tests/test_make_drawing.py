@@ -145,7 +145,6 @@ def test_make_drawing_cylinder_uses_centerline_and_holecallout(tmp_path):
     assert Path(svg_path).stat().st_size > 1000
 
 
-
 @pytest.mark.timeout(120)
 def test_make_drawing_default_title(tmp_path):
     """Title defaults to uppercased stem when not provided."""
@@ -194,7 +193,7 @@ class TestViewCoordinates:
         axes = view_axes((0.0, -100.0, 0.0), (0.0, 0.0, 1.0), (0.0, 0.0, 0.0))
         vc = ViewCoordinates(axes, view_x=50.0, view_y=50.0, cx=10.0, cy=0.0, cz=5.0, scale=1.0)
         assert vc.px(10.0) == pytest.approx(50.0)  # at centroid → view centre
-        assert vc.py(5.0) == pytest.approx(50.0)   # at centroid → view centre
+        assert vc.py(5.0) == pytest.approx(50.0)  # at centroid → view centre
 
     # px_axis / py_axis attributes
 
