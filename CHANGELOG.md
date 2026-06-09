@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added
+
+- **Enlargement scales for small parts** (#62). `choose_scale()` now tries
+  ISO 5455 enlargement scales — 10:1 (A4) and 5:1 (A4, A3) — before the
+  existing 2:1 entry, so small precision parts get legible drawings instead
+  of a 1:1 sheet with tiny views. The fit check also no longer reserves
+  title-block width when the view rows clear the title block vertically,
+  which lets borderline parts stay on smaller sheets (e.g. an 80 mm cube now
+  lands on A3 1:1 instead of A2).
+- **`scale=` and `page=` overrides** (#63) on `make_drawing()`,
+  `build_drawing()`, and `choose_scale()`, plus `--scale` / `--page` CLI
+  flags. `page` accepts an ISO name (`"A3"`), `"WIDTHxHEIGHT"` in mm, or a
+  `(width, height)` tuple. Give one and the other is chosen to fit; give both
+  and they are used as-is.
+
 ## v0.4.1 — 2026-06-07
 
 ### Added

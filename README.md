@@ -72,6 +72,8 @@ All options:
 | `--tolerance` | `ISO 2768-m` | General tolerance field |
 | `--drawn-by` | _(empty)_ | Designer name |
 | `--out` | STEP file stem | Output path prefix (`.svg` and `.dxf` appended) |
+| `--scale` | auto | Drawing-scale override, e.g. `5` for 5:1 or `0.5` for 1:2 |
+| `--page` | auto | Page-size override: `A4`…`A0` or `WIDTHxHEIGHT` in mm |
 | `--script` | — | Write an editable `.py` script instead of SVG+DXF (see below) |
 
 ### Python API
@@ -95,6 +97,18 @@ svg_path, dxf_path = make_drawing(
 part = Box(40, 30, 10)
 svg_path, dxf_path = make_drawing(part, out="bracket", title="BRACKET")
 ```
+
+Scale and page size are chosen automatically; pass `scale=` and/or `page=` to
+override when the heuristic can't know the answer (workshop printer, company
+sheet standard):
+
+```python
+svg_path, dxf_path = make_drawing(part, out="bracket", scale=5, page="A3")
+```
+
+`page` accepts an ISO name (`"A4"`…`"A0"`), a `"WIDTHxHEIGHT"` string in mm, or a
+`(width, height)` tuple. Give only one of the two and the other is chosen to fit.
+Both overrides also work on `build_drawing()` (below).
 
 When a build123d object is passed without `out=`, the files default to
 `drawing.svg` / `drawing.dxf` in the current directory. (The `--script` /
@@ -151,15 +165,20 @@ python part.py          # produces part.svg + part.dxf
 
 ### Scale selection
 
-`choose_scale(x_size, y_size, z_size)` returns `(SCALE, PAGE_W, PAGE_H, TB_W)` — the
-same thresholds used by `make_drawing()`. Call it directly when writing your own drawing
-script to stay consistent with the automated pipeline:
+`choose_scale(x_size, y_size, z_size, scale=None, page=None)` returns
+`(SCALE, PAGE_W, PAGE_H, TB_W)` — the same thresholds used by `make_drawing()`,
+including ISO 5455 enlargement scales (10:1, 5:1) for small parts. Call it directly
+when writing your own drawing script to stay consistent with the automated pipeline:
 
 ```python
 from build123d_drafting import choose_scale
 
 SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(x_size, y_size, z_size)
 ```
+
+`scale=` pins the scale (the page is chosen as the smallest sheet that fits);
+`page=` pins the sheet (the scale is chosen as the largest that fits); with both
+given they are returned as-is.
 
 ---
 
