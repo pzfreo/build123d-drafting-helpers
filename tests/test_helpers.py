@@ -326,6 +326,39 @@ class TestLeader:
         line_min_x = min(min(p[0], q[0]) for p, q in ld.segments)
         assert line_min_x >= ld.label_bbox[2] - 0.5
 
+    # text_side override (#64)
+
+    def test_vertical_leader_defaults_text_right(self, draft):
+        # elbow directly above tip: auto places text to the right
+        ld = Leader((10, 0, 0), (10, 20, 0), "label", draft)
+        assert ld.label_bbox[0] > 10 - 0.1
+
+    def test_text_side_left_overrides_auto(self, draft):
+        # rightward leader forced left: label ends left of the elbow
+        ld = Leader((0, 0, 0), (10, 5, 0), "label", draft, text_side="left")
+        assert ld.label_bbox[2] < 10 + 0.1
+
+    def test_text_side_right_overrides_auto(self, draft):
+        # leftward leader forced right: label starts right of the elbow
+        ld = Leader((20, 0, 0), (10, 5, 0), "label", draft, text_side="right")
+        assert ld.label_bbox[0] > 10 - 0.1
+
+    def test_text_side_auto_matches_default(self, draft):
+        a = Leader((0, 0, 0), (10, 5, 0), "label", draft)
+        b = Leader((0, 0, 0), (10, 5, 0), "label", draft, text_side="auto")
+        assert a.label_bbox == pytest.approx(b.label_bbox)
+
+    def test_text_side_forced_line_stops_before_text(self, draft):
+        # Regression #120 invariant must hold for the forced side too:
+        # vertical leader forced left — shelf stops before the text begins.
+        ld = Leader((10, 0, 0), (10, 20, 0), "⌀8.00 H7", draft, text_side="left")
+        line_min_x = min(min(p[0], q[0]) for p, q in ld.segments)
+        assert line_min_x >= ld.label_bbox[2] - 0.5
+
+    def test_text_side_invalid_raises(self, draft):
+        with pytest.raises(ValueError, match="text_side"):
+            Leader((0, 0, 0), (10, 5, 0), "label", draft, text_side="up")
+
 
 # ---------------------------------------------------------------------------
 # leader_offset

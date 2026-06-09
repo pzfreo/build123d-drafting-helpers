@@ -559,6 +559,14 @@ class Leader(_Annotation):
     The horizontal shelf runs away from *tip* so the label text sits cleanly
     after the shelf end — the line never passes through the label bbox.
 
+    **Label side**: by default the shelf and label continue in the horizontal
+    direction of tip → elbow — to the **right** of the elbow when the elbow is
+    right of the tip, to the **left** when it is left of the tip. A purely
+    vertical leader (elbow directly above or below the tip) places the label
+    to the right. Pass ``text_side="left"`` or ``"right"`` to force the side
+    when the default would run the label off-page or across a neighbouring
+    view.
+
     Args:
         tip:   arrow point on the part feature (x, y[, z]).
         elbow: where the shaft bends to become the horizontal shelf (x, y[, z]).
@@ -566,6 +574,17 @@ class Leader(_Annotation):
         draft: Draft config.
         all_around: draw the ISO 1101 all-around circle at the kink.
         all_over: draw the all-over double circle at the kink.
+        text_side: ``"auto"`` (default, the tip → elbow rule above), or
+            ``"left"`` / ``"right"`` to force which side of the elbow the
+            shelf and label extend to. Forcing the label back toward the tip
+            of a near-horizontal leader runs the shaft through the text —
+            reserve the override for steep or vertical leaders, where either
+            side is clear.
+        rotation, align, mode: standard ``BaseSketchObject`` placement options.
+            Note ``align`` positions the *whole finished sketch* (line, arrow,
+            and label together) relative to the origin — it does not control
+            which side of the elbow the label is on; use ``text_side`` for
+            that.
 
     Metadata: ``.label``, ``.label_bbox``, ``.tip``, ``.elbow``, ``.segments``.
     """
@@ -578,11 +597,14 @@ class Leader(_Annotation):
         draft: Draft,
         all_around: bool = False,
         all_over: bool = False,
+        text_side: str = "auto",
         line_width: float = 0.15,
         rotation: float = 0,
         align=None,
         mode: Mode = Mode.ADD,
     ):
+        if text_side not in ("auto", "left", "right"):
+            raise ValueError(f"text_side must be 'auto', 'left', or 'right', got {text_side!r}")
         tip_v = Vector(tip[0], tip[1], 0.0)
         elbow_v = Vector(elbow[0], elbow[1], 0.0)
 
@@ -596,7 +618,10 @@ class Leader(_Annotation):
         text_w = probe.bounding_box().size.X  # noqa: F841 — kept for clarity/parity
         gap = draft.pad_around_text
 
-        shelf_dir = 1.0 if elbow_v.X >= tip_v.X else -1.0
+        if text_side == "auto":
+            shelf_dir = 1.0 if elbow_v.X >= tip_v.X else -1.0
+        else:
+            shelf_dir = 1.0 if text_side == "right" else -1.0
         shelf_len = gap
         shelf_end_v = Vector(elbow_v.X + shelf_dir * shelf_len, elbow_v.Y, 0.0)
 
@@ -690,6 +715,7 @@ def leader_offset(
     length: float,
     label: str,
     draft: Draft,
+    text_side: str = "auto",
 ) -> Leader:
     """Leader with the elbow placed by direction + distance instead of absolute coords.
 
@@ -698,6 +724,10 @@ def leader_offset(
     Args:
         direction: compass string ("N", "NE", … case-insensitive) or an angle in
                    degrees CCW from +X.
+        text_side: which side of the elbow the label extends to — ``"auto"``
+                   follows the leader direction (westward leaders place text
+                   left, others right; see :class:`Leader`); ``"left"`` /
+                   ``"right"`` force it.
     """
     if isinstance(direction, str):
         key = direction.strip().upper()
@@ -712,7 +742,7 @@ def leader_offset(
 
     theta = math.radians(angle_deg)
     elbow = (tip[0] + math.cos(theta) * length, tip[1] + math.sin(theta) * length)
-    return Leader(tip=tip, elbow=elbow, label=label, draft=draft)
+    return Leader(tip=tip, elbow=elbow, label=label, draft=draft, text_side=text_side)
 
 
 # ---------------------------------------------------------------------------
