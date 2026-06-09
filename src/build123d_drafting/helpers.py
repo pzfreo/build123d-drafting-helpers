@@ -1086,7 +1086,12 @@ def lint_drawing(
             view outlines.  When provided, their bounding boxes are checked
             for overlap with annotations (``view_annotation_overlap``, warning)
             and for overlap with each other (``view_overlap``, warning).
-            Shapes whose bounding box cannot be computed are silently skipped.
+            Annotations whose line-work must touch the view are not
+            false-flagged: centrelines are exempt, and annotations exposing a
+            ``label_bbox`` (dimensions, leaders, callouts) are tested by the
+            label-text extents only — witness lines and leader shafts may
+            enter the view freely.  Shapes whose bounding box cannot be
+            computed are silently skipped.
 
     Returns:
         list[LintIssue].
@@ -1224,14 +1229,21 @@ def _lint_view_shapes(view_shapes, ann_items, issues) -> None:
         named_bboxes.append((name, bb))
         view_shape_ids.add(id(vs))
 
-    # #159 — view shape vs annotation bounding box overlaps
+    # #159 — view shape vs annotation overlaps. Line-work (witness lines,
+    # leader shafts, centrelines) legitimately enters the view, so test the
+    # label-text bbox where the annotation exposes one and skip centrelines
+    # entirely; only annotations without a label bbox fall back to their full
+    # bounding box.
     for vname, vbb in named_bboxes:
         vx0, vy0, vx1, vy1 = vbb
         for ann in ann_items:
             if id(ann) in view_shape_ids:
                 continue
+            if getattr(ann, "is_centerline", False):
+                continue  # a centreline must cross the feature it marks
             try:
-                ab = _bbox2d(ann)
+                label_box = getattr(ann, "label_bbox", None)
+                ab = label_box if label_box is not None else _bbox2d(ann)
                 if ab is None:
                     continue
                 if _bboxes_overlap_2d(vbb, ab):
@@ -1240,13 +1252,14 @@ def _lint_view_shapes(view_shapes, ann_items, issues) -> None:
                         or getattr(ann, "name", None)
                         or type(ann).__name__
                     )
+                    what = "label of annotation" if label_box is not None else "annotation"
                     issues.append(
                         LintIssue(
                             severity="warning",
                             message=(
                                 f"view '{vname}' bbox "
                                 f"[x={vx0:.1f}–{vx1:.1f}, y={vy0:.1f}–{vy1:.1f}] "
-                                f"overlaps annotation '{albl}' — increase view spacing "
+                                f"overlaps {what} '{albl}' — increase view spacing "
                                 f"or move the annotation"
                             ),
                             code="view_annotation_overlap",
