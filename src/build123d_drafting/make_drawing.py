@@ -56,6 +56,15 @@ _log = logging.getLogger(__name__)
 _TB_W = 150.0
 _MARGIN = 10.0
 _DIM_PAD = 18.0
+_TB_H = 35.0
+
+_PAGE_SIZES = {
+    "A4": (297.0, 210.0),
+    "A3": (420.0, 297.0),
+    "A2": (594.0, 420.0),
+    "A1": (841.0, 594.0),
+    "A0": (1189.0, 841.0),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -151,45 +160,140 @@ def analyse_face_levels(part, tol: float = 0.5) -> list:
     return sorted(buckets.values())
 
 
-def choose_scale(x_size: float, y_size: float, z_size: float) -> tuple:
+_LADDER = [
+    (10.0, 297.0, 210.0, 120.0),  # A4 10:1
+    (5.0, 297.0, 210.0, 120.0),  # A4 5:1
+    (5.0, 420.0, 297.0, 150.0),  # A3 5:1
+    (2.0, 297.0, 210.0, 120.0),  # A4 2:1
+    (1.0, 297.0, 210.0, 120.0),  # A4 1:1
+    (2.0, 420.0, 297.0, 150.0),  # A3 2:1
+    (1.0, 420.0, 297.0, 150.0),  # A3 1:1
+    (2.0, 594.0, 420.0, 150.0),  # A2 2:1
+    (1.0, 594.0, 420.0, 150.0),  # A2 1:1
+    (0.5, 594.0, 420.0, 150.0),  # A2 1:2
+    (1.0, 841.0, 594.0, 150.0),  # A1 1:1
+    (0.5, 841.0, 594.0, 150.0),  # A1 1:2
+    (0.2, 841.0, 594.0, 150.0),  # A1 1:5
+    (0.5, 1189.0, 841.0, 150.0),  # A0 1:2
+    (0.2, 1189.0, 841.0, 150.0),  # A0 1:5
+]
+
+_SCALES = [10.0, 5.0, 2.0, 1.0, 0.5, 0.2]
+
+
+def _tb_width(page_w: float) -> float:
+    """Title-block width for a page: 120 mm on A4, 150 mm on A3 and larger."""
+    return 120.0 if page_w <= 297.0 else 150.0
+
+
+def _parse_page(page) -> tuple:
+    """Resolve a page spec to ``(PAGE_W, PAGE_H, TB_W)``.
+
+    Accepts an ISO name (``"A4"``…``"A0"``, case-insensitive), a
+    ``"WIDTHxHEIGHT"`` string in mm (e.g. ``"420x297"``), or a
+    ``(width, height)`` tuple in mm.
+    """
+    if isinstance(page, str):
+        name = page.strip().upper()
+        if name in _PAGE_SIZES:
+            pw, ph = _PAGE_SIZES[name]
+        else:
+            m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)", page.strip())
+            if not m:
+                raise ValueError(
+                    f"unknown page size {page!r} — expected one of "
+                    f"{', '.join(_PAGE_SIZES)} or WIDTHxHEIGHT in mm (e.g. '420x297')"
+                )
+            pw, ph = float(m.group(1)), float(m.group(2))
+    else:
+        try:
+            pw, ph = float(page[0]), float(page[1])
+        except (TypeError, ValueError, IndexError):
+            raise ValueError(
+                f"invalid page size {page!r} — expected an ISO name, "
+                f"'WIDTHxHEIGHT', or a (width, height) tuple in mm"
+            ) from None
+    if pw <= 0 or ph <= 0:
+        raise ValueError(f"page dimensions must be positive, got {page!r}")
+    return pw, ph, _tb_width(pw)
+
+
+def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w) -> bool:
+    """True if the 4-view layout fits the page at this scale.
+
+    The title block occupies only the bottom ``_TB_H`` mm of the sheet, so when
+    the vertically-centred view rows clear its top edge, the row width does not
+    need to reserve title-block space (the iso view may extend over it).
+    """
+    bbox_max = max(x_size, y_size, z_size)
+    w = (
+        _MARGIN
+        + _DIM_PAD
+        + x_size * scale
+        + _DIM_PAD
+        + y_size * scale
+        + _DIM_PAD
+        + bbox_max * scale * 0.7
+        + _DIM_PAD
+        + tb_w
+        + _MARGIN
+    )
+    h = _MARGIN + _DIM_PAD + y_size * scale + _DIM_PAD + z_size * scale + _DIM_PAD + _MARGIN
+    if h > page_h:
+        return False
+    if w <= page_w:
+        return True
+    views_bottom = max(0.0, (page_h - h) / 2) + _MARGIN + _DIM_PAD
+    return w - _DIM_PAD - tb_w <= page_w and views_bottom >= _MARGIN + _TB_H
+
+
+def choose_scale(x_size: float, y_size: float, z_size: float, scale=None, page=None) -> tuple:
     """Return (SCALE, PAGE_W, PAGE_H, TB_W) for a 4-view layout.
 
     Layout columns: [front(x×z)] [side(y×z)] [iso(~0.7*max)] [title block].
     Rows: [plan(x×y)] above [front/side].
-    Tries ISO A-series pages (A4→A3→A2→A1→A0) at preferred scales.
-    A4 uses a 120 mm title block; A3+ use 150 mm.
+    Tries ISO A-series pages (A4→A3→A2→A1→A0) at preferred scales, including
+    ISO 5455 enlargement scales (10:1, 5:1) so small parts get legible views.
+    A4 uses a 120 mm title block; A3+ use 150 mm. The title block only
+    constrains row width when the view rows would overlap it vertically.
+
+    Args:
+        scale: optional fixed scale factor (e.g. ``5`` for 5:1, ``0.5`` for
+            1:2); the page is then chosen as the smallest A-series sheet that
+            fits.
+        page: optional fixed page — an ISO name (``"A3"``), ``"WIDTHxHEIGHT"``
+            in mm, or a ``(width, height)`` tuple; the scale is then chosen as
+            the largest standard scale that fits. When both ``scale`` and
+            ``page`` are given they are used as-is (a warning is logged if the
+            layout does not fit).
     """
-    bbox_max = max(x_size, y_size, z_size)
-    for SCALE, PAGE_W, PAGE_H, TB_W in [
-        (2.0, 297.0, 210.0, 120.0),  # A4 2:1
-        (1.0, 297.0, 210.0, 120.0),  # A4 1:1
-        (2.0, 420.0, 297.0, 150.0),  # A3 2:1
-        (1.0, 420.0, 297.0, 150.0),  # A3 1:1
-        (2.0, 594.0, 420.0, 150.0),  # A2 2:1
-        (1.0, 594.0, 420.0, 150.0),  # A2 1:1
-        (0.5, 594.0, 420.0, 150.0),  # A2 1:2
-        (1.0, 841.0, 594.0, 150.0),  # A1 1:1
-        (0.5, 841.0, 594.0, 150.0),  # A1 1:2
-        (0.2, 841.0, 594.0, 150.0),  # A1 1:5
-        (0.5, 1189.0, 841.0, 150.0),  # A0 1:2
-        (0.2, 1189.0, 841.0, 150.0),  # A0 1:5
-    ]:
-        w = (
-            _MARGIN
-            + _DIM_PAD
-            + x_size * SCALE
-            + _DIM_PAD
-            + y_size * SCALE
-            + _DIM_PAD
-            + bbox_max * SCALE * 0.7
-            + _DIM_PAD
-            + TB_W
-            + _MARGIN
-        )
-        h = _MARGIN + _DIM_PAD + y_size * SCALE + _DIM_PAD + z_size * SCALE + _DIM_PAD + _MARGIN
-        if w <= PAGE_W and h <= PAGE_H:
-            return SCALE, PAGE_W, PAGE_H, TB_W
-    return 0.2, 1189.0, 841.0, 150.0
+    if scale is not None and float(scale) <= 0:
+        raise ValueError(f"scale must be positive, got {scale!r}")
+    if scale is not None and page is not None:
+        pw, ph, tb = _parse_page(page)
+        if not _fits(x_size, y_size, z_size, float(scale), pw, ph, tb):
+            _log.warning(
+                "Requested scale %s on %s page may not fit the 4-view layout", scale, page
+            )
+        return float(scale), pw, ph, tb
+    if page is not None:
+        pw, ph, tb = _parse_page(page)
+        candidates = [(s, pw, ph, tb) for s in _SCALES]
+    elif scale is not None:
+        candidates = [(float(scale), pw, ph, _tb_width(pw)) for pw, ph in _PAGE_SIZES.values()]
+    else:
+        candidates = _LADDER
+    for cand in candidates:
+        if _fits(x_size, y_size, z_size, *cand):
+            return cand
+    _log.warning(
+        "No layout fits %.0f × %.0f × %.0f mm; falling back to %s",
+        x_size,
+        y_size,
+        z_size,
+        candidates[-1],
+    )
+    return candidates[-1]
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +301,7 @@ def choose_scale(x_size: float, y_size: float, z_size: float) -> tuple:
 # ---------------------------------------------------------------------------
 
 
-def _analyse(step_file, title, number, tolerance, drawn_by, out):
+def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, page=None):
     """Load STEP or use a build123d Shape, analyse geometry, compute layout.
 
     Returns SimpleNamespace.
@@ -227,7 +331,7 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out):
     if cross_diams:
         _log.info("Cross-hole diams: %s", cross_diams)
 
-    SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(x_size, y_size, z_size)
+    SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(x_size, y_size, z_size, scale=scale, page=page)
     DIM_PAD = _DIM_PAD
     margin = _MARGIN
 
@@ -249,7 +353,7 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out):
     SV_X = FV_X + fv_hw + DIM_PAD + sv_hw
     SV_Y = FV_Y
     sv_right = SV_X + sv_hw + DIM_PAD
-    tb_top_y = margin + 35
+    tb_top_y = margin + _TB_H
     iso_above_tb = (PV_Y - pv_hh) > tb_top_y
     iso_right_limit = (PAGE_W - margin) if iso_above_tb else (PAGE_W - TB_W - margin)
     right_avail = max(0.0, iso_right_limit - sv_right)
@@ -630,6 +734,8 @@ def build_drawing(
     number: str = "DWG-001",
     tolerance: str = "ISO 2768-m",
     drawn_by: str = "",
+    scale: float | None = None,
+    page: str | tuple | None = None,
 ) -> Drawing:
     """Build a customisable 4-view :class:`Drawing` without exporting it.
 
@@ -650,7 +756,7 @@ def build_drawing(
             break
     title = title or stem.replace("_", " ").upper()
 
-    a = _analyse(step_file, title, number, tolerance, drawn_by, out)
+    a = _analyse(step_file, title, number, tolerance, drawn_by, out, scale=scale, page=page)
 
     cxs, cys, czs = a.cx * a.SCALE, a.cy * a.SCALE, a.cz * a.SCALE
     look_at = (cxs, cys, czs)
@@ -698,6 +804,8 @@ def make_drawing(
     number: str = "DWG-001",
     tolerance: str = "ISO 2768-m",
     drawn_by: str = "",
+    scale: float | None = None,
+    page: str | tuple | None = None,
 ) -> tuple[str, str]:
     """Generate a 4-view technical drawing from a STEP file or build123d object.
 
@@ -710,6 +818,11 @@ def make_drawing(
         number: Drawing number (e.g. ``"DWG-042"``).
         tolerance: General tolerance string (e.g. ``"ISO 2768-m"``).
         drawn_by: Designer name for the title block.
+        scale: Drawing-scale override (e.g. ``5`` for 5:1, ``0.5`` for 1:2).
+            Default: chosen automatically by :func:`choose_scale`.
+        page: Page-size override — an ISO name (``"A3"``), ``"WIDTHxHEIGHT"``
+            in mm, or a ``(width, height)`` tuple. Default: chosen
+            automatically by :func:`choose_scale`.
 
     Returns:
         Tuple of ``(svg_path, dxf_path)`` for the generated files.
@@ -725,6 +838,8 @@ def make_drawing(
         number=number,
         tolerance=tolerance,
         drawn_by=drawn_by,
+        scale=scale,
+        page=page,
     ).export()
 
 
@@ -876,11 +991,25 @@ def _cli():
     ap.add_argument("--tolerance", default="ISO 2768-m", help="General tolerance")
     ap.add_argument("--drawn-by", default="", help="Designer name")
     ap.add_argument(
+        "--scale",
+        type=float,
+        default=None,
+        help="Drawing-scale override, e.g. 5 for 5:1 or 0.5 for 1:2 (default: auto)",
+    )
+    ap.add_argument(
+        "--page",
+        default=None,
+        help="Page-size override: A4..A0 or WIDTHxHEIGHT in mm, e.g. 420x297 (default: auto)",
+    )
+    ap.add_argument(
         "--script",
         action="store_true",
         help="Write an editable .py drawing script instead of SVG+DXF",
     )
     args = ap.parse_args()
+
+    if args.script and (args.scale is not None or args.page is not None):
+        ap.error("--scale/--page only apply to direct output; edit the generated script instead")
 
     if args.script:
         generate_script(
@@ -899,6 +1028,8 @@ def _cli():
             number=args.number,
             tolerance=args.tolerance,
             drawn_by=args.drawn_by,
+            scale=args.scale,
+            page=args.page,
         )
 
 

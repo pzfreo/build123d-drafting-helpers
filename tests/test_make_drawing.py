@@ -7,6 +7,7 @@ from build123d import Box, Cylinder, export_step
 
 from build123d_drafting import Drawing, Leader, ViewCoordinates, build_drawing, view_axes
 from build123d_drafting.make_drawing import (
+    _fits,
     _fmt,
     analyse_cylinders,
     analyse_face_levels,
@@ -61,14 +62,16 @@ class TestDedupDiams:
 
 class TestChooseScale:
     def test_tiny_part_fits_A4(self):
-        # 20×20×20 mm — 4-view layout at 2:1 is ~320mm wide, so falls back to A4 1:1
+        # 20×20×20 mm — enlargement scales don't fit A4/A3, lands on A4 2:1
         scale, pw, ph, tbw = choose_scale(20, 20, 20)
         assert int(pw) == 297
+        assert scale == 2.0
 
-    def test_medium_part_gets_A2(self):
-        # 80×80×80 mm — too wide for A3 at any scale, goes to A2 1:1
+    def test_medium_part_gets_A3(self):
+        # 80×80×80 mm — fits A3 1:1 because the view rows clear the title block,
+        # so its width no longer forces the jump to A2 (#62)
         scale, pw, ph, tbw = choose_scale(80, 80, 80)
-        assert int(pw) == 594
+        assert int(pw) == 420
 
     def test_large_part_gets_bigger_page(self):
         scale, pw, ph, tbw = choose_scale(300, 300, 300)
@@ -82,23 +85,60 @@ class TestChooseScale:
         # The chosen scale+page should actually fit the layout
         x, y, z = 60, 60, 15
         scale, pw, ph, tbw = choose_scale(x, y, z)
-        margin, dim_pad = 10.0, 18.0
-        bbox_max = max(x, y, z)
-        w = (
-            margin
-            + dim_pad
-            + x * scale
-            + dim_pad
-            + y * scale
-            + dim_pad
-            + bbox_max * scale * 0.7
-            + dim_pad
-            + tbw
-            + margin
-        )
-        h = margin + dim_pad + y * scale + dim_pad + z * scale + dim_pad + margin
-        assert w <= pw
-        assert h <= ph
+        assert _fits(x, y, z, scale, pw, ph, tbw)
+
+    # Enlargement scales for small parts (#62)
+
+    def test_small_part_gets_enlargement_scale(self):
+        # 28 × 8.5 × 12.5 mm (issue #62 part) → 5:1 on A3, not 1:1 on A4
+        scale, pw, ph, tbw = choose_scale(28, 8.5, 12.5)
+        assert scale == 5.0
+        assert int(pw) == 420
+
+    def test_very_small_part_gets_10x(self):
+        scale, pw, ph, tbw = choose_scale(8, 4, 4)
+        assert scale == 10.0
+        assert int(pw) == 297
+
+
+class TestChooseScaleOverrides:
+    def test_scale_and_page_used_verbatim(self):
+        assert choose_scale(28, 8.5, 12.5, scale=5, page="A3") == (5.0, 420.0, 297.0, 150.0)
+
+    def test_scale_and_page_honoured_even_when_too_small(self):
+        # Explicit overrides win even if the layout doesn't fit (warning only)
+        scale, pw, ph, tbw = choose_scale(300, 300, 300, scale=1, page="A4")
+        assert (scale, pw) == (1.0, 297.0)
+
+    def test_page_only_picks_largest_fitting_scale(self):
+        scale, pw, ph, tbw = choose_scale(28, 8.5, 12.5, page="A3")
+        assert (pw, ph) == (420.0, 297.0)
+        assert scale == 5.0
+
+    def test_scale_only_picks_smallest_fitting_page(self):
+        scale, pw, ph, tbw = choose_scale(28, 8.5, 12.5, scale=2)
+        assert scale == 2.0
+        assert int(pw) == 297
+
+    def test_page_tuple(self):
+        scale, pw, ph, tbw = choose_scale(10, 10, 10, page=(420, 297))
+        assert (pw, ph, tbw) == (420.0, 297.0, 150.0)
+
+    def test_page_wxh_string(self):
+        scale, pw, ph, tbw = choose_scale(10, 10, 10, page="420x297")
+        assert (pw, ph) == (420.0, 297.0)
+
+    def test_page_name_case_insensitive(self):
+        scale, pw, ph, tbw = choose_scale(10, 10, 10, page="a3")
+        assert (pw, ph) == (420.0, 297.0)
+
+    def test_unknown_page_raises(self):
+        with pytest.raises(ValueError, match="page size"):
+            choose_scale(10, 10, 10, page="B5")
+
+    def test_nonpositive_scale_raises(self):
+        with pytest.raises(ValueError, match="scale"):
+            choose_scale(10, 10, 10, scale=0)
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +452,14 @@ def test_build_drawing_export_writes_files(tmp_path):
     svg, dxf = dwg.export(stem)
     assert Path(svg).exists() and Path(dxf).exists()
     assert dwg.svg_path == svg and dwg.dxf_path == dxf
+
+
+@pytest.mark.timeout(60)
+def test_build_drawing_scale_and_page_override(tmp_path):
+    # Issue #63 — explicit scale/page reach the Drawing instead of choose_scale's pick
+    dwg = build_drawing(Box(28, 8.5, 12.5), out=str(tmp_path / "o"), scale=5, page="A3")
+    assert dwg.scale == 5.0
+    assert (dwg.page_w, dwg.page_h) == (420.0, 297.0)
 
 
 @pytest.mark.timeout(60)
