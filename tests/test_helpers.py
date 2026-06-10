@@ -877,6 +877,20 @@ class TestSurfaceFinish:
         bb90 = SurfaceFinish("Ra 1.6", (0, 0), angle=90.0, draft=draft).bounding_box()
         assert abs(bb0.size.X - bb90.size.X) > 0.5
 
+    def test_label_bbox_is_text_extents(self, draft):
+        # The Ra text sits up-right of the tip — its bbox must exclude the
+        # tip, which is what lets lint test the text rather than the mark (#69)
+        lb = SurfaceFinish("Ra 1.6", (10, 20), draft=draft).label_bbox
+        assert lb is not None
+        assert lb[0] > 10  # text starts right of the tip
+        assert lb[1] > 20  # and above it
+
+    def test_label_bbox_follows_angle(self, draft):
+        # angle is baked into the build frame, so label_bbox must track it
+        lb0 = SurfaceFinish("Ra 1.6", (0, 0), angle=0.0, draft=draft).label_bbox
+        lb90 = SurfaceFinish("Ra 1.6", (0, 0), angle=90.0, draft=draft).label_bbox
+        assert lb90[0] != pytest.approx(lb0[0], abs=0.5)
+
     def test_default_draft_used_when_none(self):
         assert isinstance(SurfaceFinish("Ra 1.6", (0, 0)), Sketch)
 
@@ -1029,6 +1043,25 @@ class TestDatumFeature:
 
     def test_renders_on_single_ink_layer(self, draft):
         _export_ink(DatumFeature("A", draft))
+
+    def test_label_bbox_is_letter_frame(self, draft):
+        # The label bbox is the framed datum letter — above the triangle and
+        # connector, never including the tip at the origin (#69)
+        lb = DatumFeature("A", draft).label_bbox
+        assert lb is not None
+        box = 2.0 * draft.font_size
+        assert lb[1] > 0  # frame sits above the triangle tip
+        assert lb[2] - lb[0] == pytest.approx(box)
+        assert lb[3] - lb[1] == pytest.approx(box)
+
+    def test_label_bbox_tracks_moved(self, draft):
+        from build123d import Location
+
+        df = DatumFeature("A", draft)
+        lb0 = df.label_bbox
+        lb = df.moved(Location((30, 7, 0))).label_bbox
+        assert lb[0] == pytest.approx(lb0[0] + 30)
+        assert lb[1] == pytest.approx(lb0[1] + 7)
 
 
 class TestDatumTarget:
@@ -1636,6 +1669,38 @@ class TestLintViewShapes:
         view = self._make_box_shape(0, 0, 40, 30)
         ld = Leader(tip=(45, 15, 0), elbow=(25, 15, 0), label="ø4", draft=draft)
         codes = {i.code for i in lint_drawing([ld], view_shapes=[view])}
+        assert "view_annotation_overlap" in codes
+
+    def test_datum_triangle_in_view_not_flagged(self, draft):
+        # #69 — the datum triangle attaches to a part edge by design; only the
+        # letter frame matters. Tip on the view's top edge, frame above it.
+        from build123d import Location
+
+        view = self._make_box_shape(0, 0, 40, 30)
+        df = DatumFeature("A", draft).moved(Location((20, 27, 0)))
+        codes = {i.code for i in lint_drawing([df], view_shapes=[view])}
+        assert "view_annotation_overlap" not in codes
+
+    def test_datum_letter_frame_in_view_still_flagged(self, draft):
+        from build123d import Location
+
+        view = self._make_box_shape(0, 0, 40, 30)
+        df = DatumFeature("A", draft).moved(Location((20, 10, 0)))
+        codes = {i.code for i in lint_drawing([df], view_shapes=[view])}
+        assert "view_annotation_overlap" in codes
+
+    def test_surface_finish_mark_in_view_not_flagged(self, draft):
+        # #69 — the check-mark sits on the surface line; the Ra text is
+        # outside the view here, so nothing should fire.
+        view = self._make_box_shape(0, 0, 40, 30)
+        sf = SurfaceFinish("Ra 1.6", (38, 15), draft=draft)
+        codes = {i.code for i in lint_drawing([sf], view_shapes=[view])}
+        assert "view_annotation_overlap" not in codes
+
+    def test_surface_finish_text_in_view_still_flagged(self, draft):
+        view = self._make_box_shape(0, 0, 40, 30)
+        sf = SurfaceFinish("Ra 1.6", (10, 15), draft=draft)
+        codes = {i.code for i in lint_drawing([sf], view_shapes=[view])}
         assert "view_annotation_overlap" in codes
 
     # --- #160: view vs view ---
