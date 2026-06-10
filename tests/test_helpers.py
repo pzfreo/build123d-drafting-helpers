@@ -404,6 +404,11 @@ class TestLeaderOffset:
         assert ld.elbow[0] == pytest.approx(0.0, abs=1e-9)
         assert ld.elbow[1] == pytest.approx(10.0)
 
+    def test_text_side_passed_through(self, draft):
+        # A north leader defaults text right; text_side="left" must reach Leader.
+        ld = leader_offset((0, 0), "N", 10.0, "x", draft, text_side="left")
+        assert ld.label_bbox[2] < 0 + 0.1
+
     def test_unknown_direction_raises(self, draft):
         with pytest.raises(ValueError):
             leader_offset((0, 0), "XX", 10.0, "x", draft)
