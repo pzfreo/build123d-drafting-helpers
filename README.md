@@ -303,9 +303,10 @@ exporter.add_shape(ld, layer="ink")   # arrowhead + shelf + glyphs — one ink l
 **Label side**: by default the label continues in the horizontal direction of tip → elbow —
 right of the elbow when the elbow is right of the tip, left when it is left of it (a purely
 vertical leader places it right). On a dense sheet, pass `text_side="left"` / `"right"` to
-force the side so the label doesn't run off-page or across a neighbouring view (best on
-steep or vertical leaders — forcing the label back toward the tip of a near-horizontal
-leader would run the line through the text).
+force the side so the label doesn't run off-page or across a neighbouring view. The override
+is for steep or vertical leaders, where either side is clear — a forced side that would run
+the line through the label text (e.g. forcing it back toward the tip of a near-horizontal
+leader) raises `ValueError`.
 
 The object is a `Sketch` with metadata `.label`, `.tip`, `.elbow`, `.label_bbox`, `.segments`.
 `all_around=True` / `all_over=True` draw the ISO 1101 all-around / all-over circles at the kink.

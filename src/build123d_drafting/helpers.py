@@ -553,6 +553,35 @@ class Centerline(_Annotation):
 # ---------------------------------------------------------------------------
 
 
+def _seg_intersects_rect(p, q, rect) -> bool:
+    """True if segment p→q intersects the (min_x, min_y, max_x, max_y) rect.
+
+    Liang–Barsky clipping: the segment is parametrised and clipped against each
+    rect edge; an empty parameter interval means no intersection.
+    """
+    x0, y0, x1, y1 = rect
+    dx, dy = q[0] - p[0], q[1] - p[1]
+    t0, t1 = 0.0, 1.0
+    for pi, qi in (
+        (-dx, p[0] - x0),
+        (dx, x1 - p[0]),
+        (-dy, p[1] - y0),
+        (dy, y1 - p[1]),
+    ):
+        if pi == 0.0:
+            if qi < 0.0:
+                return False
+        else:
+            r = qi / pi
+            if pi < 0.0:
+                t0 = max(t0, r)
+            else:
+                t1 = min(t1, r)
+            if t0 > t1:
+                return False
+    return True
+
+
 class Leader(_Annotation):
     """Leader annotation with arrowhead at *tip* and label hanging from *elbow*.
 
@@ -576,10 +605,11 @@ class Leader(_Annotation):
         all_over: draw the all-over double circle at the kink.
         text_side: ``"auto"`` (default, the tip → elbow rule above), or
             ``"left"`` / ``"right"`` to force which side of the elbow the
-            shelf and label extend to. Forcing the label back toward the tip
-            of a near-horizontal leader runs the shaft through the text —
-            reserve the override for steep or vertical leaders, where either
-            side is clear.
+            shelf and label extend to. A forced side that would run the
+            shaft through the label text (e.g. the label forced back toward
+            the tip of a near-horizontal leader) raises ``ValueError`` —
+            the override is for steep or vertical leaders, where either side
+            is clear.
         rotation, align, mode: standard ``BaseSketchObject`` placement options.
             Note ``align`` positions the *whole finished sketch* (line, arrow,
             and label together) relative to the origin — it does not control
@@ -671,6 +701,16 @@ class Leader(_Annotation):
             mode=Mode.PRIVATE,
         ).moved(Location(Vector(text_x, elbow_v.Y, 0.0)))
         _tb = text_shape.bounding_box()
+        if text_side != "auto" and _seg_intersects_rect(
+            (tip_v.X, tip_v.Y),
+            (elbow_v.X, elbow_v.Y),
+            (_tb.min.X, _tb.min.Y, _tb.max.X, _tb.max.Y),
+        ):
+            raise ValueError(
+                f"text_side={text_side!r} runs the leader line through the label text "
+                f"(tip ({tip_v.X:g}, {tip_v.Y:g}), elbow ({elbow_v.X:g}, {elbow_v.Y:g})) "
+                f"— move the elbow further from the tip side or use the opposite side"
+            )
         faces.append(text_shape)
 
         sk = Sketch(children=faces)

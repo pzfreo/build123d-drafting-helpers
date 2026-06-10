@@ -20,8 +20,10 @@
   to force which side of the elbow the label extends to, and the default
   placement rule is now documented: the label follows the horizontal
   direction of tip → elbow (right when the elbow is right of the tip, left
-  when left of it; vertical leaders place it right). The `align` parameter
-  is also documented — it positions the whole sketch, not the label side.
+  when left of it; vertical leaders place it right). A forced side that
+  would run the shaft through the label text raises `ValueError` instead of
+  silently producing a struck-through label. The `align` parameter is also
+  documented — it positions the whole sketch, not the label side.
 
 ## v0.4.1 — 2026-06-07
 
