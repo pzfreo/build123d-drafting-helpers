@@ -291,7 +291,7 @@ Truncates gracefully and retries.
 
 ---
 
-### `Leader(tip, elbow, label, draft, all_around=False, all_over=False)`
+### `Leader(tip, elbow, label, draft, all_around=False, all_over=False, text_side="auto")`
 
 Leader annotation built from scratch. The line stops cleanly before the label text.
 
@@ -300,12 +300,21 @@ ld = Leader((5, 5, 0), (20, 12, 0), "⌀7.93 H7", draft)
 exporter.add_shape(ld, layer="ink")   # arrowhead + shelf + glyphs — one ink layer
 ```
 
+**Label side**: by default the label continues in the horizontal direction of tip → elbow —
+right of the elbow when the elbow is right of the tip, left when it is left of it (a purely
+vertical leader places it right). On a dense sheet, pass `text_side="left"` / `"right"` to
+force the side so the label doesn't run off-page or across a neighbouring view. The override
+is for steep or vertical leaders, where either side is clear — a forced side that would run
+the line through the label text (e.g. forcing it back toward the tip of a near-horizontal
+leader) raises `ValueError`.
+
 The object is a `Sketch` with metadata `.label`, `.tip`, `.elbow`, `.label_bbox`, `.segments`.
 `all_around=True` / `all_over=True` draw the ISO 1101 all-around / all-over circles at the kink.
 
-`leader_offset(tip, direction, length, label, draft)` is a thin wrapper that places the
-elbow by compass direction (`"N"`, `"NE"`, …) or numeric angle (degrees CCW from +X) and
-a distance, instead of absolute coords — handy when the drawing uses a non-1:1 scale.
+`leader_offset(tip, direction, length, label, draft, text_side="auto")` is a thin wrapper
+that places the elbow by compass direction (`"N"`, `"NE"`, …) or numeric angle (degrees CCW
+from +X) and a distance, instead of absolute coords — handy when the drawing uses a non-1:1
+scale.
 
 ```python
 ld = leader_offset((x, y), "NW", 12, "⌀6 boss", draft)   # returns a Leader

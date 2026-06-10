@@ -553,11 +553,48 @@ class Centerline(_Annotation):
 # ---------------------------------------------------------------------------
 
 
+def _seg_intersects_rect(p, q, rect) -> bool:
+    """True if segment p→q intersects the (min_x, min_y, max_x, max_y) rect.
+
+    Liang–Barsky clipping: the segment is parametrised and clipped against each
+    rect edge; an empty parameter interval means no intersection.
+    """
+    x0, y0, x1, y1 = rect
+    dx, dy = q[0] - p[0], q[1] - p[1]
+    t0, t1 = 0.0, 1.0
+    for pi, qi in (
+        (-dx, p[0] - x0),
+        (dx, x1 - p[0]),
+        (-dy, p[1] - y0),
+        (dy, y1 - p[1]),
+    ):
+        if pi == 0.0:
+            if qi < 0.0:
+                return False
+        else:
+            r = qi / pi
+            if pi < 0.0:
+                t0 = max(t0, r)
+            else:
+                t1 = min(t1, r)
+            if t0 > t1:
+                return False
+    return True
+
+
 class Leader(_Annotation):
     """Leader annotation with arrowhead at *tip* and label hanging from *elbow*.
 
     The horizontal shelf runs away from *tip* so the label text sits cleanly
     after the shelf end — the line never passes through the label bbox.
+
+    **Label side**: by default the shelf and label continue in the horizontal
+    direction of tip → elbow — to the **right** of the elbow when the elbow is
+    right of the tip, to the **left** when it is left of the tip. A purely
+    vertical leader (elbow directly above or below the tip) places the label
+    to the right. Pass ``text_side="left"`` or ``"right"`` to force the side
+    when the default would run the label off-page or across a neighbouring
+    view.
 
     Args:
         tip:   arrow point on the part feature (x, y[, z]).
@@ -566,6 +603,18 @@ class Leader(_Annotation):
         draft: Draft config.
         all_around: draw the ISO 1101 all-around circle at the kink.
         all_over: draw the all-over double circle at the kink.
+        text_side: ``"auto"`` (default, the tip → elbow rule above), or
+            ``"left"`` / ``"right"`` to force which side of the elbow the
+            shelf and label extend to. A forced side that would run the
+            shaft through the label text (e.g. the label forced back toward
+            the tip of a near-horizontal leader) raises ``ValueError`` —
+            the override is for steep or vertical leaders, where either side
+            is clear.
+        rotation, align, mode: standard ``BaseSketchObject`` placement options.
+            Note ``align`` positions the *whole finished sketch* (line, arrow,
+            and label together) relative to the origin — it does not control
+            which side of the elbow the label is on; use ``text_side`` for
+            that.
 
     Metadata: ``.label``, ``.label_bbox``, ``.tip``, ``.elbow``, ``.segments``.
     """
@@ -578,11 +627,14 @@ class Leader(_Annotation):
         draft: Draft,
         all_around: bool = False,
         all_over: bool = False,
+        text_side: str = "auto",
         line_width: float = 0.15,
         rotation: float = 0,
         align=None,
         mode: Mode = Mode.ADD,
     ):
+        if text_side not in ("auto", "left", "right"):
+            raise ValueError(f"text_side must be 'auto', 'left', or 'right', got {text_side!r}")
         tip_v = Vector(tip[0], tip[1], 0.0)
         elbow_v = Vector(elbow[0], elbow[1], 0.0)
 
@@ -596,7 +648,10 @@ class Leader(_Annotation):
         text_w = probe.bounding_box().size.X  # noqa: F841 — kept for clarity/parity
         gap = draft.pad_around_text
 
-        shelf_dir = 1.0 if elbow_v.X >= tip_v.X else -1.0
+        if text_side == "auto":
+            shelf_dir = 1.0 if elbow_v.X >= tip_v.X else -1.0
+        else:
+            shelf_dir = 1.0 if text_side == "right" else -1.0
         shelf_len = gap
         shelf_end_v = Vector(elbow_v.X + shelf_dir * shelf_len, elbow_v.Y, 0.0)
 
@@ -646,6 +701,16 @@ class Leader(_Annotation):
             mode=Mode.PRIVATE,
         ).moved(Location(Vector(text_x, elbow_v.Y, 0.0)))
         _tb = text_shape.bounding_box()
+        if text_side != "auto" and _seg_intersects_rect(
+            (tip_v.X, tip_v.Y),
+            (elbow_v.X, elbow_v.Y),
+            (_tb.min.X, _tb.min.Y, _tb.max.X, _tb.max.Y),
+        ):
+            raise ValueError(
+                f"text_side={text_side!r} runs the leader line through the label text "
+                f"(tip ({tip_v.X:g}, {tip_v.Y:g}), elbow ({elbow_v.X:g}, {elbow_v.Y:g})) "
+                f"— move the elbow further from the tip side or use the opposite side"
+            )
         faces.append(text_shape)
 
         sk = Sketch(children=faces)
@@ -690,6 +755,7 @@ def leader_offset(
     length: float,
     label: str,
     draft: Draft,
+    text_side: str = "auto",
 ) -> Leader:
     """Leader with the elbow placed by direction + distance instead of absolute coords.
 
@@ -698,6 +764,10 @@ def leader_offset(
     Args:
         direction: compass string ("N", "NE", … case-insensitive) or an angle in
                    degrees CCW from +X.
+        text_side: which side of the elbow the label extends to — ``"auto"``
+                   follows the leader direction (westward leaders place text
+                   left, others right; see :class:`Leader`); ``"left"`` /
+                   ``"right"`` force it.
     """
     if isinstance(direction, str):
         key = direction.strip().upper()
@@ -712,7 +782,7 @@ def leader_offset(
 
     theta = math.radians(angle_deg)
     elbow = (tip[0] + math.cos(theta) * length, tip[1] + math.sin(theta) * length)
-    return Leader(tip=tip, elbow=elbow, label=label, draft=draft)
+    return Leader(tip=tip, elbow=elbow, label=label, draft=draft, text_side=text_side)
 
 
 # ---------------------------------------------------------------------------

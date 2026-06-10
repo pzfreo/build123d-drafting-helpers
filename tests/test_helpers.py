@@ -326,6 +326,54 @@ class TestLeader:
         line_min_x = min(min(p[0], q[0]) for p, q in ld.segments)
         assert line_min_x >= ld.label_bbox[2] - 0.5
 
+    # text_side override (#64)
+
+    def test_vertical_leader_defaults_text_right(self, draft):
+        # elbow directly above tip: auto places text to the right
+        ld = Leader((10, 0, 0), (10, 20, 0), "label", draft)
+        assert ld.label_bbox[0] > 10 - 0.1
+
+    def test_text_side_left_overrides_auto(self, draft):
+        # rightward leader forced left: label ends left of the elbow
+        ld = Leader((0, 0, 0), (10, 5, 0), "label", draft, text_side="left")
+        assert ld.label_bbox[2] < 10 + 0.1
+
+    def test_text_side_right_overrides_auto(self, draft):
+        # leftward leader forced right: label starts right of the elbow
+        ld = Leader((20, 0, 0), (10, 5, 0), "label", draft, text_side="right")
+        assert ld.label_bbox[0] > 10 - 0.1
+
+    def test_text_side_auto_matches_default(self, draft):
+        a = Leader((0, 0, 0), (10, 5, 0), "label", draft)
+        b = Leader((0, 0, 0), (10, 5, 0), "label", draft, text_side="auto")
+        assert a.label_bbox == pytest.approx(b.label_bbox)
+
+    def test_text_side_forced_line_stops_before_text(self, draft):
+        # Regression #120 invariant must hold for the forced side too:
+        # vertical leader forced left — shelf stops before the text begins.
+        ld = Leader((10, 0, 0), (10, 20, 0), "⌀8.00 H7", draft, text_side="left")
+        line_min_x = min(min(p[0], q[0]) for p, q in ld.segments)
+        assert line_min_x >= ld.label_bbox[2] - 0.5
+
+    def test_text_side_invalid_raises(self, draft):
+        with pytest.raises(ValueError, match="text_side"):
+            Leader((0, 0, 0), (10, 5, 0), "label", draft, text_side="up")
+
+    def test_text_side_through_text_raises(self, draft):
+        # Horizontal leader with the label forced back toward the tip: the
+        # shaft would strike through the text — refuse at construction.
+        with pytest.raises(ValueError, match="through the label text"):
+            Leader((0, 0, 0), (20, 0, 0), "⌀8.00 H7", draft, text_side="left")
+
+    def test_text_side_shallow_leader_through_text_raises(self, draft):
+        with pytest.raises(ValueError, match="through the label text"):
+            Leader((0, 0, 0), (20, 2, 0), "⌀8.00 H7", draft, text_side="left")
+
+    def test_text_side_steep_leader_forced_side_ok(self, draft):
+        # Steep leader: the shaft clears the label on either side — no error.
+        ld = Leader((10, 0, 0), (12, 20, 0), "⌀8.00 H7", draft, text_side="left")
+        assert ld.label_bbox[2] < 12 + 0.1
+
 
 # ---------------------------------------------------------------------------
 # leader_offset
@@ -355,6 +403,11 @@ class TestLeaderOffset:
         ld = leader_offset((0, 0), "N", 10.0, "x", draft)
         assert ld.elbow[0] == pytest.approx(0.0, abs=1e-9)
         assert ld.elbow[1] == pytest.approx(10.0)
+
+    def test_text_side_passed_through(self, draft):
+        # A north leader defaults text right; text_side="left" must reach Leader.
+        ld = leader_offset((0, 0), "N", 10.0, "x", draft, text_side="left")
+        assert ld.label_bbox[2] < 0 + 0.1
 
     def test_unknown_direction_raises(self, draft):
         with pytest.raises(ValueError):
