@@ -1075,6 +1075,10 @@ class TestDatumTarget:
     def test_identifier_stored(self, draft):
         assert DatumTarget("B2", draft=draft).identifier == "B2"
 
+    def test_is_datum_target_marker(self, draft):
+        # Duck-typed marker the view-overlap lint keys on (#71)
+        assert DatumTarget("A1", draft=draft).is_datum_target is True
+
     def test_circle_centred_on_origin(self, draft):
         # The divider runs across the circle through y=0 from -r..r, so its
         # midpoint is the circle centre at the origin.
@@ -1706,6 +1710,25 @@ class TestLintViewShapes:
         sf = SurfaceFinish("Ra 1.6", (10, 15), draft=draft)
         codes = {i.code for i in lint_drawing([sf], view_shapes=[view])}
         assert "view_annotation_overlap" in codes
+
+    def test_datum_target_in_view_not_flagged(self, draft):
+        # #71 — a datum target sits on the part face by definition (ISO 5459);
+        # fully inside the view is its only correct placement.
+        from build123d import Location
+
+        view = self._make_box_shape(0, 0, 40, 30)
+        dt = DatumTarget("A1", draft=draft).moved(Location((20, 15, 0)))
+        codes = {i.code for i in lint_drawing([dt], view_shapes=[view])}
+        assert "view_annotation_overlap" not in codes
+
+    def test_datum_target_exemption_does_not_leak_to_page_bounds(self, draft):
+        # The exemption is view-overlap only — a datum target off the page
+        # must still fire annotation_out_of_bounds.
+        from build123d import Location
+
+        dt = DatumTarget("A1", draft=draft).moved(Location((-50, -50, 0)))
+        issues = lint_drawing([dt], page_bbox=(0, 0, 100, 100))
+        assert any(i.code == "annotation_out_of_bounds" for i in issues)
 
     # --- #160: view vs view ---
 

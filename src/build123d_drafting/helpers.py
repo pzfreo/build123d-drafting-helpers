@@ -1157,12 +1157,12 @@ def lint_drawing(
             for overlap with annotations (``view_annotation_overlap``, warning)
             and for overlap with each other (``view_overlap``, warning).
             Annotations whose line-work must touch the view are not
-            false-flagged: centrelines are exempt, and annotations exposing a
-            ``label_bbox`` (dimensions, leaders, datum features,
-            surface-finish marks) are tested by the label-text extents only —
-            witness lines, leader shafts, datum triangles, and finish marks
-            may enter the view freely.  Shapes whose bounding box cannot be
-            computed are silently skipped.
+            false-flagged: centrelines and datum targets are exempt, and
+            annotations exposing a ``label_bbox`` (dimensions, leaders, datum
+            features, surface-finish marks) are tested by the label-text
+            extents only — witness lines, leader shafts, datum triangles, and
+            finish marks may enter the view freely.  Shapes whose bounding box
+            cannot be computed are silently skipped.
 
     Returns:
         list[LintIssue].
@@ -1312,6 +1312,8 @@ def _lint_view_shapes(view_shapes, ann_items, issues) -> None:
                 continue
             if getattr(ann, "is_centerline", False):
                 continue  # a centreline must cross the feature it marks
+            if getattr(ann, "is_datum_target", False):
+                continue  # a datum target sits on the part face by definition
             try:
                 label_box = getattr(ann, "label_bbox", None)
                 ab = label_box if label_box is not None else _bbox2d(ann)
@@ -2156,7 +2158,8 @@ class DatumTarget(_Annotation):
     Centred at the origin.
 
     Metadata: ``.label`` (identifier), ``.label_bbox`` (None), ``.segments``,
-    ``.identifier``, ``.area_label``.
+    ``.identifier``, ``.area_label``, ``.is_datum_target`` (True — the symbol
+    sits on the part face by definition, so the view-overlap lint exempts it).
     """
 
     def __init__(
@@ -2209,6 +2212,7 @@ class DatumTarget(_Annotation):
         )
         self.identifier = identifier
         self.area_label = area_label or ""
+        self.is_datum_target = True
 
 
 def _feature_symbol_edges(name: str, h: float) -> list[Edge]:

@@ -39,6 +39,13 @@
   and the finish check-mark sit on the part by design and no longer trip
   `view_annotation_overlap` (or inflate `annotation_overlap` /
   centerline-overlap checks, which also prefer `label_bbox`).
+- **`DatumTarget` is exempt from `view_annotation_overlap`** (#71). The
+  circled identifier sits on the part face by definition (ISO 5459), so the
+  check warned on every correct placement — and unlike #69 a `label_bbox`
+  cannot help, since the symbol's full bbox *is* the circle + text. It now
+  carries an `is_datum_target` marker (mirroring `is_centerline`) that the
+  view-overlap check skips; page-bounds and pairwise overlap checks still
+  apply.
 
 ## v0.4.1 — 2026-06-07
 
