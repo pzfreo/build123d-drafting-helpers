@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.4.2 — 2026-06-10
+
 ### Added
 
 - **Enlargement scales for small parts** (#62). `choose_scale()` now tries
