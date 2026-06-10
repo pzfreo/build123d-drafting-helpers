@@ -338,7 +338,7 @@ Duck-typed structural checks on a list of annotation objects (`Dimension`, `Lead
 | `dim_inside_part` | Dim bbox overlaps part outline by >10% — dim is inside the view |
 | `leader_line_through_text` | Leader elbow point inside label bbox — line strikes through text |
 | `annotation_out_of_bounds` | An item's bbox extends past the page (set `page_bbox` or call `set_page()`) |
-| `view_annotation_overlap` | An annotation bbox overlaps a view shape bbox — annotation overlaps or intrudes into the view |
+| `view_annotation_overlap` | An annotation's label text overlaps a view shape bbox (full bbox for annotations without a label; centrelines, witness lines, and leader shafts may touch the view freely) |
 | `view_overlap` | Two view shape bboxes overlap each other — views are too close |
 
 ```python

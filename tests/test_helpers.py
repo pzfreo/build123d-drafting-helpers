@@ -1554,6 +1554,37 @@ class TestLintViewShapes:
         ]
         assert issues and issues[0].severity == "warning"
 
+    # --- #65: line-work that legitimately touches the view must not fire ---
+
+    def test_centerline_crossing_view_not_flagged(self):
+        # A centreline must cross the feature it marks — never a finding.
+        view = self._make_box_shape(0, 0, 40, 30)
+        cl = Centerline((20, -5, 0), (20, 35, 0))
+        codes = {i.code for i in lint_drawing([cl], view_shapes=[view])}
+        assert "view_annotation_overlap" not in codes
+
+    def test_dim_witness_lines_into_view_not_flagged(self, draft):
+        # Witness lines run from the feature (inside the view) out to the dim
+        # line; full bbox overlaps the view but the label sits outside it.
+        view = self._make_box_shape(0, 0, 40, 30)
+        d = Dimension((5, 25, 0), (15, 25, 0), "above", 10, draft, label="10")
+        codes = {i.code for i in lint_drawing([d], view_shapes=[view])}
+        assert "view_annotation_overlap" not in codes
+
+    def test_leader_tip_in_view_label_outside_not_flagged(self, draft):
+        # Leader tips touch the part outline by definition.
+        view = self._make_box_shape(0, 0, 40, 30)
+        ld = Leader(tip=(20, 15, 0), elbow=(50, 15, 0), label="ø4", draft=draft)
+        codes = {i.code for i in lint_drawing([ld], view_shapes=[view])}
+        assert "view_annotation_overlap" not in codes
+
+    def test_leader_label_inside_view_still_flagged(self, draft):
+        # The real failure mode — label text sitting on the part — must still fire.
+        view = self._make_box_shape(0, 0, 40, 30)
+        ld = Leader(tip=(45, 15, 0), elbow=(25, 15, 0), label="ø4", draft=draft)
+        codes = {i.code for i in lint_drawing([ld], view_shapes=[view])}
+        assert "view_annotation_overlap" in codes
+
     # --- #160: view vs view ---
 
     def test_overlapping_views_flagged(self):

@@ -17,6 +17,15 @@
   `(width, height)` tuple. Give one and the other is chosen to fit; give both
   and they are used as-is.
 
+### Fixed
+
+- **`view_annotation_overlap` lint no longer fires on line-work that must
+  touch the view** (#65). Centrelines are exempt from the check, and
+  annotations exposing a `label_bbox` (dimensions and leaders) are
+  tested by their label-text extents only, so witness lines and leader
+  shafts can enter the view without producing warnings. A label actually
+  sitting on the part still fires.
+
 ## v0.4.1 — 2026-06-07
 
 ### Added
