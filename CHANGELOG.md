@@ -33,6 +33,12 @@
   tested by their label-text extents only, so witness lines and leader
   shafts can enter the view without producing warnings. A label actually
   sitting on the part still fires.
+- **`DatumFeature` and `SurfaceFinish` expose a real `label_bbox`** (#69) —
+  the letter frame and the Ra text extents respectively — so the
+  label-text-only lint logic from #65 covers them too: the datum triangle
+  and the finish check-mark sit on the part by design and no longer trip
+  `view_annotation_overlap` (or inflate `annotation_overlap` /
+  centerline-overlap checks, which also prefer `label_bbox`).
 
 ## v0.4.1 — 2026-06-07
 

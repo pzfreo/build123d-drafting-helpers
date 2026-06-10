@@ -1158,9 +1158,10 @@ def lint_drawing(
             and for overlap with each other (``view_overlap``, warning).
             Annotations whose line-work must touch the view are not
             false-flagged: centrelines are exempt, and annotations exposing a
-            ``label_bbox`` (dimensions and leaders) are tested by the
-            label-text extents only — witness lines and leader shafts may
-            enter the view freely.  Shapes whose bounding box cannot be
+            ``label_bbox`` (dimensions, leaders, datum features,
+            surface-finish marks) are tested by the label-text extents only —
+            witness lines, leader shafts, datum triangles, and finish marks
+            may enter the view freely.  Shapes whose bounding box cannot be
             computed are silently skipped.
 
     Returns:
@@ -1732,7 +1733,8 @@ class SurfaceFinish(_Annotation):
         draft:    Draft config; defaults to 2.5 mm font.
         size:     diagonal leg length in mm; defaults to 2 × font_size.
 
-    Metadata: ``.label``, ``.label_bbox`` (None), ``.position``, ``.segments``.
+    Metadata: ``.label``, ``.label_bbox`` (the Ra text extents), ``.position``,
+    ``.segments``.
     """
 
     def __init__(
@@ -1795,10 +1797,11 @@ class SurfaceFinish(_Annotation):
         label_text = label_text.moved(trans_loc)
 
         sk, seg = _strokes_and_text(strokes, [label_text], line_width)
+        _tb = label_text.bounding_box()
         super().__init__(
             sk,
             label=ra_value,
-            label_bbox=None,
+            label_bbox=(_tb.min.X, _tb.min.Y, _tb.max.X, _tb.max.Y),
             segments=seg,
             rotation=rotation,
             align=align,
@@ -2081,7 +2084,8 @@ class DatumFeature(_Annotation):
     """ISO 5459 datum feature symbol: a (filled) triangle on a short leader to a
     framed datum letter. Triangle tip at the origin pointing down (-Y).
 
-    Metadata: ``.label`` (letter), ``.label_bbox`` (None), ``.segments``, ``.letter``.
+    Metadata: ``.label`` (letter), ``.label_bbox`` (the letter frame),
+    ``.segments``, ``.letter``.
     """
 
     def __init__(
@@ -2137,7 +2141,7 @@ class DatumFeature(_Annotation):
         super().__init__(
             sk,
             label=letter,
-            label_bbox=None,
+            label_bbox=(-box / 2, by0, box / 2, by1),
             segments=seg,
             rotation=rotation,
             align=align,
