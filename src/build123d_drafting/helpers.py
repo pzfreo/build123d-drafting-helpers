@@ -1088,7 +1088,7 @@ def lint_drawing(
             and for overlap with each other (``view_overlap``, warning).
             Annotations whose line-work must touch the view are not
             false-flagged: centrelines are exempt, and annotations exposing a
-            ``label_bbox`` (dimensions, leaders, callouts) are tested by the
+            ``label_bbox`` (dimensions and leaders) are tested by the
             label-text extents only — witness lines and leader shafts may
             enter the view freely.  Shapes whose bounding box cannot be
             computed are silently skipped.
