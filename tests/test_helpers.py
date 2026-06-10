@@ -886,10 +886,14 @@ class TestSurfaceFinish:
         assert lb[1] > 20  # and above it
 
     def test_label_bbox_follows_angle(self, draft):
-        # angle is baked into the build frame, so label_bbox must track it
+        # angle is baked into the build frame, so label_bbox must track it.
+        # At angle=0 the text is entirely right of the tip; rotating 90° CCW
+        # about the tip maps it entirely to negative X — pin the direction,
+        # not just that the bbox moved.
         lb0 = SurfaceFinish("Ra 1.6", (0, 0), angle=0.0, draft=draft).label_bbox
         lb90 = SurfaceFinish("Ra 1.6", (0, 0), angle=90.0, draft=draft).label_bbox
-        assert lb90[0] != pytest.approx(lb0[0], abs=0.5)
+        assert lb0[0] > 0  # angle=0: text starts right of the tip
+        assert lb90[2] < 0  # angle=90: text ends left of the tip
 
     def test_default_draft_used_when_none(self):
         assert isinstance(SurfaceFinish("Ra 1.6", (0, 0)), Sketch)
