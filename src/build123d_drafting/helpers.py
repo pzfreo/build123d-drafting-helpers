@@ -562,9 +562,12 @@ class Note(_Annotation):
 
     Args:
         text: the note text.
-        position: ``(x, y)`` page position of the text centre.
+        position: ``(x, y)`` page position of the text anchor.
         draft: Draft config (font and size).
-        rotation, align, mode: standard ``BaseSketchObject`` placement options.
+        align: which point of the text sits at ``position`` — default
+            ``Align.CENTER`` (the text centre). E.g. ``(Align.MIN,
+            Align.CENTER)`` anchors the left edge at ``position``.
+        rotation, mode: standard ``BaseSketchObject`` placement options.
 
     Metadata: ``.label``, ``.label_bbox``.
     """
@@ -582,7 +585,7 @@ class Note(_Annotation):
             txt=text,
             font_size=draft.font_size,
             font=draft.font,
-            align=Align.CENTER,
+            align=Align.CENTER if align is None else align,
             mode=Mode.PRIVATE,
         ).moved(Location(Vector(position[0], position[1], 0.0)))
         tb = shape.bounding_box()
@@ -592,9 +595,74 @@ class Note(_Annotation):
             label=text,
             label_bbox=(tb.min.X, tb.min.Y, tb.max.X, tb.max.Y),
             rotation=rotation,
-            align=align,
+            align=None,
             mode=mode,
         )
+
+
+class TextBlock(_Annotation):
+    """A multi-line, left-aligned text block — general notes and hole tables.
+
+    Each line is rendered as text faces sharing a common left edge, spaced
+    ``line_spacing × font_size`` apart. The whole block registers as a
+    *single* annotation: ``.label`` is the joined text and ``.label_bbox``
+    covers every line, so lint treats it as one keep-clear region.
+
+    Args:
+        lines: text lines, top to bottom. Empty strings leave a blank line.
+        position: ``(x, y)`` page position of the block's anchor point.
+        draft: Draft config (font and size).
+        line_spacing: line pitch as a multiple of ``draft.font_size``.
+        align: which point of the block sits at ``position`` — default
+            ``(Align.MIN, Align.MAX)``, the top-left corner.
+        rotation, mode: standard ``BaseSketchObject`` placement options.
+
+    Metadata: ``.label``, ``.label_bbox``, ``.line_count``.
+    """
+
+    def __init__(
+        self,
+        lines,
+        position: tuple,
+        draft: Draft,
+        line_spacing: float = 1.6,
+        align=(Align.MIN, Align.MAX),
+        rotation: float = 0,
+        mode: Mode = Mode.ADD,
+    ):
+        lines = list(lines)
+        if not any(line.strip() for line in lines):
+            raise ValueError("TextBlock needs at least one non-empty line")
+        pitch = draft.font_size * line_spacing
+        faces = []
+        for i, line in enumerate(lines):
+            if not line.strip():
+                continue
+            faces.extend(
+                Text(
+                    txt=line,
+                    font_size=draft.font_size,
+                    font=draft.font,
+                    align=(Align.MIN, Align.MAX),
+                    mode=Mode.PRIVATE,
+                )
+                .moved(Location(Vector(0.0, -i * pitch, 0.0)))
+                .faces()
+            )
+        block = Sketch(children=faces)
+        al = align if isinstance(align, (tuple, list)) else (align, align)
+        off = block.bounding_box().to_align_offset(al)
+        shape = block.moved(Location(Vector(position[0] + off.X, position[1] + off.Y, 0.0)))
+        tb = shape.bounding_box()
+        super().__init__(
+            Sketch(children=list(shape.faces())),
+            label="\n".join(lines),
+            label_bbox=(tb.min.X, tb.min.Y, tb.max.X, tb.max.Y),
+            rotation=rotation,
+            align=None,
+            mode=mode,
+        )
+        self.line_count = len(lines)
 
 
 # ---------------------------------------------------------------------------
