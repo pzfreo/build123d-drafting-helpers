@@ -10,6 +10,7 @@ from build123d_drafting.make_drawing import (
     _export_shape,
     _fits,
     _fmt,
+    _is_rotational,
     analyse_cylinders,
     analyse_face_levels,
     choose_scale,
@@ -634,6 +635,17 @@ class TestPrismaticClassification:
         assert "centerline_front" in dwg._named
         assert "ldr_z0" in dwg._named
 
+    @pytest.mark.timeout(60)
+    def test_corner_fillets_do_not_make_a_plate_rotational(self):
+        # Big quarter-cylinder corner fillets on a square plate must not be
+        # mistaken for an OD.
+        from build123d import Axis, fillet
+
+        box = Box(60, 60, 20)
+        part = fillet(box.edges().filter_by(Axis.Z), 25)
+        dwg = build_drawing(part)
+        assert "dim_od" not in dwg._named
+
 
 # ---------------------------------------------------------------------------
 # Export fallback (#83) — element-wise retry with view/layer context
@@ -682,6 +694,31 @@ class TestExportShapeFallback:
         exporter = _FlakyExporter()
         _export_shape(exporter, note, "dims", "annotation 'AB'")
         assert len(exporter.added) == len(note.faces())
+
+    def test_mixed_faces_and_loose_edges_all_exported(self):
+        # A compound mixing text faces with bare stroke edges must not lose
+        # the edges in the element-wise path.
+        from build123d import Text
+
+        mixed = Compound([*Text("A", 3).faces(), Edge.make_line((5, 5, 0), (9, 5, 0))])
+        exporter = _FlakyExporter()
+        _export_shape(exporter, mixed, "dims", "annotation 'mixed'")
+        assert len(exporter.added) == len(mixed.faces()) + 1
+
+    def test_svg_exporter_failure_raises_when_nothing_exports(self, monkeypatch):
+        # Atomic (SVG) path: whole-shape add fails and the shape decomposes
+        # to nothing — the original error must surface, not be swallowed.
+        from build123d import ExportSVG
+
+        svg = ExportSVG()
+        svg.add_layer("part")
+
+        def boom(self, shape, layer="", **kwargs):
+            raise AssertionError("Constraint failed")
+
+        monkeypatch.setattr(ExportSVG, "add_shape", boom)
+        with pytest.raises(RuntimeError, match="nothing could be exported"):
+            _export_shape(svg, Compound([]), "part", "view 'iso'")
 
     @pytest.mark.timeout(60)
     def test_export_survives_one_bad_compound(self, tmp_path, monkeypatch):
@@ -759,3 +796,42 @@ class TestLintFeatureCoverage:
     def test_drawing_lint_clean_for_annotated_rotational_part(self):
         dwg = build_drawing(Cylinder(15, 40) - Cylinder(5, 40))
         assert [i for i in dwg.lint() if i.code == "feature_not_dimensioned"] == []
+
+    @pytest.mark.timeout(60)
+    def test_title_block_text_is_not_a_callout(self):
+        # "BRACKET R8" in the title must not mark ø16 as covered.
+        from build123d_drafting import TitleBlock
+
+        from build123d import Draft
+
+        part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(8, 30)
+        tb = TitleBlock("BRACKET R8", "DWG-1", draft=Draft(font_size=3.0))
+        issues = lint_feature_coverage(part, [tb])
+        assert [i.code for i in issues] == ["feature_not_dimensioned"]
+
+    @pytest.mark.timeout(60)
+    def test_hole_callout_covers_via_structured_metadata(self):
+        # HoleCallout draws its ø glyphs geometrically (label is "") — it must
+        # still count as coverage.
+        from build123d_drafting import HoleCallout
+
+        part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(4.25, 30)
+        callout = HoleCallout(8.5, count=4, through=True)
+        assert lint_feature_coverage(part, [callout]) == []
+
+
+class TestIsRotational:
+    def test_plain_cylinder(self):
+        assert _is_rotational(30.0, 30.0, [30.0])
+
+    def test_hollow_cylinder(self):
+        assert _is_rotational(60.0, 60.0, [60.0, 20.0])
+
+    def test_prismatic_housing_with_bores(self):
+        assert not _is_rotational(100.0, 60.0, [24.0, 10.0])
+
+    def test_square_plate_with_moderate_bore(self):
+        assert not _is_rotational(100.0, 100.0, [40.0])
+
+    def test_no_cylinders(self):
+        assert not _is_rotational(30.0, 20.0, [])

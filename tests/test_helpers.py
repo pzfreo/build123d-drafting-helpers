@@ -1899,12 +1899,14 @@ class TestTextBlock:
     def test_single_annotation_metadata(self, draft):
         tb = TextBlock(self.LINES, (20, 100), draft)
         assert tb.label == "\n".join(self.LINES)
-        assert tb.line_count == 3
+
+    def test_string_input_splits_on_newlines(self, draft):
+        tb = TextBlock("NOTES:\n1. DEBURR", (20, 100), draft)
+        assert tb.label == "NOTES:\n1. DEBURR"
 
     def test_blank_line_leaves_gap(self, draft):
         gap = TextBlock(["A", "", "B"], (0, 0), draft)
         no_gap = TextBlock(["A", "B"], (0, 0), draft)
-        assert gap.line_count == 3
         gh = gap.label_bbox[3] - gap.label_bbox[1]
         nh = no_gap.label_bbox[3] - no_gap.label_bbox[1]
         assert gh > nh

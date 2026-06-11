@@ -100,7 +100,8 @@ def fix_svg_page_size(svg_path: str, page_w: float, page_h: float) -> None:
 def analyse_cylinders(part):
     """Return (z_cyls, cross_cyls) from OCP cylindrical face analysis.
 
-    Each entry is a dict with keys: diameter, area, cx, cy, cz, axis.
+    Each entry is a dict with keys: diameter, area, cx, cy, cz, axis,
+    u_extent (the face's angular span in radians — partial spans are fillets).
     z_cyls: cylinders whose axis is approximately Z.
     cross_cyls: cylinders whose axis is approximately X or Y.
     """
@@ -151,29 +152,64 @@ _RADIUS_RE = re.compile(r"\bR\s*(\d+(?:\.\d+)?)")
 # (fillets/rounds), not holes or bosses — exclude them from the inventory.
 _FULL_CYL_MIN_EXTENT = math.pi * 0.9
 
+# Turned-part classification (#81): a rotational part's bounding box is
+# square in XY to within _SQUARENESS_TOL, and its largest full Z cylinder
+# (the OD) fills at least _OD_FILL_MIN of that envelope. Anything else is
+# prismatic — its Z cylinders are holes, not an OD.
+_SQUARENESS_TOL = 0.05
+_OD_FILL_MIN = 0.8
 
-def lint_feature_coverage(part, annotations, tol: float = 0.15) -> list:
+
+def _full_cyls(cyls):
+    """Only the full hole/boss cylinder records — partial spans are fillets."""
+    return [c for c in cyls if c["u_extent"] >= _FULL_CYL_MIN_EXTENT]
+
+
+def _is_rotational(x_size, y_size, z_diams) -> bool:
+    """True for turned parts: a dominant Z cylinder filling a square envelope.
+
+    ``z_diams`` must already exclude partial (fillet) faces.
+    """
+    if not z_diams:
+        return False
+    envelope = max(x_size, y_size)
+    return (
+        abs(x_size - y_size) <= _SQUARENESS_TOL * envelope
+        and z_diams[0] >= _OD_FILL_MIN * envelope
+    )
+
+
+def lint_feature_coverage(part, annotations, tol: float = 0.15, cyls=None) -> list:
     """Coarse completeness check: report part diameters with no callout (#80).
 
     Builds a feature inventory from *part*'s hole/boss diameters (cylindrical
     faces spanning at least ~half a turn, so fillets are ignored) and diffs it
-    against every ø (or R, doubled) value mentioned in the annotations' labels.
-    Each uncovered diameter yields one ``feature_not_dimensioned`` warning.
+    against every ø (or R, doubled) value mentioned in the annotations'
+    labels, plus the structured ``covers_diameters`` metadata on annotations
+    that draw their values geometrically (e.g. ``HoleCallout``). Title blocks
+    are skipped — part numbers like "BRACKET R8" are not callouts. Each
+    uncovered diameter yields one ``feature_not_dimensioned`` warning.
+
+    ``cyls`` accepts a precomputed ``analyse_cylinders(part)`` result so
+    repeated lint runs need not re-scan the solid.
 
     This checks *size* coverage only; location coverage needs feature
     recognition and is out of scope.
     """
-    z_cyls, cross_cyls = analyse_cylinders(part)
-    full = [c for c in z_cyls + cross_cyls if c["u_extent"] >= _FULL_CYL_MIN_EXTENT]
-    inventory = dedup_diams(full, tol=tol)
+    z_cyls, cross_cyls = cyls if cyls is not None else analyse_cylinders(part)
+    inventory = dedup_diams(_full_cyls(z_cyls + cross_cyls), tol=tol)
 
     mentioned: set[float] = set()
     for ann in annotations:
+        if isinstance(ann, TitleBlock):
+            continue
         label = getattr(ann, "label", None) or ""
         for m in _DIAM_RE.finditer(label):
             mentioned.add(float(m.group(1)))
         for m in _RADIUS_RE.finditer(label):
             mentioned.add(2 * float(m.group(1)))
+        for v in getattr(ann, "covers_diameters", ()):
+            mentioned.add(float(v))
 
     return [
         LintIssue(
@@ -182,7 +218,7 @@ def lint_feature_coverage(part, annotations, tol: float = 0.15) -> list:
             message=f"cylindrical feature ø{_fmt(d)} has no diameter callout on the sheet",
         )
         for d in inventory
-        if not any(abs(d - v) <= tol + 1e-9 for v in mentioned)
+        if not any(abs(d - v) <= tol for v in mentioned)
     ]
 
 
@@ -367,22 +403,16 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     _log.info("Loaded %s  bbox: %.2f × %.2f × %.2f mm", src, x_size, y_size, z_size)
 
     z_cyls, cross_cyls = analyse_cylinders(part)
-    z_diams = dedup_diams(z_cyls)
-    cross_diams = dedup_diams(cross_cyls)
+    # Partial (fillet) faces are not features: they would pollute the OD,
+    # the bore leaders, and the rotational classification alike (#81)
+    z_diams = dedup_diams(_full_cyls(z_cyls))
+    cross_diams = dedup_diams(_full_cyls(cross_cyls))
 
     _log.info("Z-axis diameters: %s", z_diams)
     if cross_diams:
         _log.info("Cross-hole diams: %s", cross_diams)
 
-    # Rotational (turned) parts have a dominant Z cylinder filling a square
-    # envelope. Anything else is prismatic: its Z cylinders are holes, not an
-    # OD, so the OD/centreline/bore annotations would be wrong (#81).
-    envelope = max(x_size, y_size)
-    is_rotational = (
-        bool(z_diams)
-        and abs(x_size - y_size) <= 0.05 * envelope
-        and z_diams[0] >= 0.8 * envelope
-    )
+    is_rotational = _is_rotational(x_size, y_size, z_diams)
     if z_diams and not is_rotational:
         _log.info("Part classified prismatic; skipping OD/centreline/bore annotations")
 
@@ -447,6 +477,7 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
         bbox_max=bbox_max,
         z_diams=z_diams,
         cross_diams=cross_diams,
+        cyls=(z_cyls, cross_cyls),
         is_rotational=is_rotational,
         step_zs=step_zs,
         sv_right=sv_right,
@@ -505,6 +536,7 @@ class Drawing:
     def __init__(self, *, scale, page_w, page_h, tb_w, draft, look_at, dist, centroid, out, part=None):
         self.scale = scale
         self.part = part
+        self._cyl_cache = None  # analyse_cylinders(part), computed at most once
         self.page_w = page_w
         self.page_h = page_h
         self.tb_w = tb_w
@@ -618,7 +650,9 @@ class Drawing:
         view_shapes = [vis for vis, _ in self.views.values()]
         issues = lint_drawing(self.annotations, drawing_scale=self.scale, view_shapes=view_shapes)
         if self.part is not None:
-            issues += lint_feature_coverage(self.part, self.annotations)
+            if self._cyl_cache is None:
+                self._cyl_cache = analyse_cylinders(self.part)
+            issues += lint_feature_coverage(self.part, self.annotations, cyls=self._cyl_cache)
         return issues
 
     def export(self, out=None):
@@ -675,35 +709,54 @@ class Drawing:
             _export_shape(exporter, ann, "dims", f"annotation {label!r}")
 
 
+def _elements(shape):
+    """Decompose *shape* for export retry: faces plus any loose edges."""
+    faces = list(shape.faces())
+    if not faces:
+        return list(shape.edges())
+    owned = {e for f in faces for e in f.edges()}
+    return faces + [e for e in shape.edges() if e not in owned]
+
+
 def _export_shape(exporter, shape, layer, ctx):
     """Add *shape* to *exporter*, degrading element-by-element on failure.
 
     build123d's exporters abort the whole export on the first edge whose
     curve cannot be approximated (a bare ``AssertionError`` from OCCT, #83).
-    On failure, retry per face/edge so only the offending elements are
-    dropped, and name the view/layer in the log instead of dying silently.
+    Instead, drop only the offending elements with a warning naming the
+    view/layer, and raise (with that context) only if nothing exported.
+
+    ``ExportSVG.add_shape`` is atomic — it appends converted elements only
+    after the whole shape succeeds — so the shape is tried in one call first.
+    ``ExportDXF`` writes edge-by-edge as it converts, so a mid-shape failure
+    would leave partial output that a blind retry duplicates; for it (and any
+    unknown exporter) every element is added individually from the start.
     """
-    try:
-        exporter.add_shape(shape, layer=layer)
-        return
-    except Exception as exc:
-        first_err = exc
-        _log.warning(
-            "%s (layer %r) failed to export as one shape: %s — retrying element-wise",
-            ctx,
-            layer,
-            exc,
-        )
-    elements = shape.faces() or shape.edges()
+    first_err = None
+    if isinstance(exporter, ExportSVG):
+        try:
+            exporter.add_shape(shape, layer=layer)
+            return
+        except Exception as exc:
+            first_err = exc
+            _log.warning(
+                "%s (layer %r) failed to export as one shape: %s — retrying element-wise",
+                ctx,
+                layer,
+                exc,
+            )
+    elements = _elements(shape)
     skipped = 0
     for element in elements:
         try:
             exporter.add_shape(element, layer=layer)
-        except Exception:
+        except Exception as exc:
+            first_err = first_err or exc
             skipped += 1
-    if elements and skipped == len(elements):
+            _log.debug("%s (layer %r): element failed to convert: %s", ctx, layer, exc)
+    if skipped == len(elements) and first_err is not None:
         raise RuntimeError(
-            f"{ctx} (layer {layer!r}): all {skipped} elements failed to export"
+            f"{ctx} (layer {layer!r}): nothing could be exported"
         ) from first_err
     if skipped:
         _log.warning(
@@ -1010,6 +1063,7 @@ def build_drawing(
         out=out,
         part=a.part,
     )
+    dwg._cyl_cache = a.cyls
 
     part_s = a.part.scale(a.SCALE)
     dwg.add_view("front", part_s, (cxs, cys - dist, czs), (0, 0, 1), (a.FV_X, a.FV_Y), scaled=True)

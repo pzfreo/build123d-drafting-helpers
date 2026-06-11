@@ -609,7 +609,8 @@ class TextBlock(_Annotation):
     covers every line, so lint treats it as one keep-clear region.
 
     Args:
-        lines: text lines, top to bottom. Empty strings leave a blank line.
+        lines: text lines, top to bottom — a sequence of strings, or one
+            string split on newlines. Empty strings leave a blank line.
         position: ``(x, y)`` page position of the block's anchor point.
         draft: Draft config (font and size).
         line_spacing: line pitch as a multiple of ``draft.font_size``.
@@ -617,7 +618,7 @@ class TextBlock(_Annotation):
             ``(Align.MIN, Align.MAX)``, the top-left corner.
         rotation, mode: standard ``BaseSketchObject`` placement options.
 
-    Metadata: ``.label``, ``.label_bbox``, ``.line_count``.
+    Metadata: ``.label``, ``.label_bbox``.
     """
 
     def __init__(
@@ -630,7 +631,7 @@ class TextBlock(_Annotation):
         rotation: float = 0,
         mode: Mode = Mode.ADD,
     ):
-        lines = list(lines)
+        lines = lines.splitlines() if isinstance(lines, str) else list(lines)
         if not any(line.strip() for line in lines):
             raise ValueError("TextBlock needs at least one non-empty line")
         pitch = draft.font_size * line_spacing
@@ -651,18 +652,17 @@ class TextBlock(_Annotation):
             )
         block = Sketch(children=faces)
         al = align if isinstance(align, (tuple, list)) else (align, align)
-        off = block.bounding_box().to_align_offset(al)
-        shape = block.moved(Location(Vector(position[0] + off.X, position[1] + off.Y, 0.0)))
-        tb = shape.bounding_box()
+        tb = block.bounding_box()
+        off = tb.to_align_offset(al)
+        dx, dy = position[0] + off.X, position[1] + off.Y
         super().__init__(
-            Sketch(children=list(shape.faces())),
+            block.moved(Location(Vector(dx, dy, 0.0))),
             label="\n".join(lines),
-            label_bbox=(tb.min.X, tb.min.Y, tb.max.X, tb.max.Y),
+            label_bbox=(tb.min.X + dx, tb.min.Y + dy, tb.max.X + dx, tb.max.Y + dy),
             rotation=rotation,
             align=None,
             mode=mode,
         )
-        self.line_count = len(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -2588,7 +2588,7 @@ class HoleCallout(_Annotation):
     Bottom-left at (0, 0).
 
     Metadata: ``.label`` (""), ``.label_bbox`` (None), ``.segments``,
-    ``.callout_width``, ``.callout_height``.
+    ``.callout_width``, ``.callout_height``, ``.covers_diameters``.
     """
 
     def __init__(
@@ -2662,6 +2662,11 @@ class HoleCallout(_Annotation):
         )
         self.callout_width = width
         self.callout_height = h
+        # The ø values this callout dimensions — drawn as glyphs, so invisible
+        # to label-text scans; lint_feature_coverage reads this instead.
+        self.covers_diameters = tuple(
+            float(v) for v in (diameter, cbore_dia, csink_dia) if v
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -381,6 +381,21 @@ frame, so a too-long title block is caught the same way as a stray dimension.
 
 ---
 
+### `lint_feature_coverage(part, annotations, tol=0.15)`
+
+Coarse **completeness** check (the checks above are hygiene checks): builds a feature
+inventory from the part's hole/boss diameters — full cylindrical faces only, so fillets
+don't count — and diffs it against every `ø` (or `R`, doubled) value mentioned in the
+annotations' labels, plus the structured `covers_diameters` metadata on `HoleCallout`.
+Each uncovered diameter yields a `feature_not_dimensioned` warning. Title blocks are
+skipped (a part name like "BRACKET R8" is not a callout). Size coverage only — location
+coverage needs feature recognition and is future work.
+
+`Drawing.lint()` (and therefore `export()`) runs this automatically when the drawing
+knows its source part, which `build_drawing` / `make_drawing` always provide.
+
+---
+
 ### `find_interferences(items, *, part_bbox=None, page_bbox=None, obstacles=None)`
 
 Geometry-precise interference detection between annotation objects. Each item is
@@ -469,6 +484,18 @@ datum-target circle (upper compartment = target-area size, lower = identifier).
 check-mark symbol (build123d does not ship one); its tip is exposed as `.mark_position`.
 `HoleCallout(diameter, *, count=None, through=False, depth=None, cbore_dia=None, …)` builds a
 single-line hole note, e.g. `4× ⌀8.5 THRU`.
+
+### `Note(...)` and `TextBlock(...)`
+
+`Note(text, position, draft, align=None)` is a one-line free-text note; `position` is
+the text centre by default, and `align` picks a different anchor — e.g.
+`align=(Align.MIN, Align.CENTER)` anchors the left edge at `position`.
+
+`TextBlock(lines, position, draft, line_spacing=1.6, align=(Align.MIN, Align.MAX))`
+renders a multi-line, left-aligned block — general notes lists and hole tables —
+anchored by default at its top-left corner. `lines` is a list of strings (empty
+strings leave blank lines) or one string split on newlines. The whole block is a
+single annotation for lint purposes.
 
 ## Status against upstream
 
