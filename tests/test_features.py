@@ -354,6 +354,32 @@ class TestFindHoles:
         assert hole.bottom == "through"
 
     @pytest.mark.timeout(60)
+    def test_ball_nose_bottom_is_closed(self):
+        # A concave spherical cap closes the bore; and two opposed ball-
+        # bottom holes must not merge across the solid wall between them.
+        part = Box(60, 60, 40) - Pos(0, 0, 8) * Cylinder(5, 24) - Pos(0, 0, -4) * Sphere(5)
+        (hole,) = find_holes(part)
+        assert hole.bottom == "flat"
+        assert hole.axis == pytest.approx((0.0, 0.0, -1.0))
+        opposed = (
+            Box(60, 60, 40)
+            - Pos(0, 0, 11) * Cylinder(5, 18)
+            - Pos(0, 0, 2) * Sphere(5)
+            - Pos(0, 0, -11) * Cylinder(5, 18)
+            - Pos(0, 0, -2) * Sphere(5)
+        )
+        assert len(find_holes(opposed)) == 2
+
+    @pytest.mark.timeout(60)
+    def test_chamfered_flat_floor_is_not_a_drill_point(self):
+        # A deburr chamfer on the floor rim is an apex-outward cone like a
+        # drill point, but it never reaches the axis — the bottom is flat.
+        part = Box(60, 60, 40) - Pos(0, 0, 17.5) * Cylinder(15, 5)
+        edge = [e for e in part.edges().filter_by(GeomType.CIRCLE) if abs(e.center().Z - 15) < 0.01]
+        (hole,) = find_holes(chamfer(edge, 1.0))
+        assert hole.bottom == "flat"
+
+    @pytest.mark.timeout(60)
     def test_bottom_relief_groove_extends_depth(self):
         # A thread-relief groove at the bottom of a blind bore: depth runs to
         # the true bottom, not to the last bore land above the groove.

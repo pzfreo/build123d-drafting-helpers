@@ -286,11 +286,28 @@ def _classify_end(seg, s_end, hi_end, edge_faces):
         surf = BRepAdaptor_Surface(partner.wrapped)
         kind = surf.GetType()
         if kind == GeomAbs_Cone:
-            apex = surf.Cone().Apex()
+            cone = surf.Cone()
+            apex = cone.Apex()
             apex_s = apex.X() * dx + apex.Y() * dy + apex.Z() * dz
             outward = (apex_s - s_end) * e_sign > 0
             if not seg["external"]:
-                return "drill_point" if outward else "open"
+                if outward:
+                    # A deburr chamfer on a flat floor's rim is also an
+                    # apex-outward cone — closed either way, but it has the
+                    # floor plane right next to it where a true drill point
+                    # has nothing beyond its apex.
+                    for e2 in partner.edges():
+                        for n in edge_faces.get(e2, ()):
+                            if n.is_same(partner) or any(n.is_same(f) for f in seg["faces"]):
+                                continue
+                            n_surf = BRepAdaptor_Surface(n.wrapped)
+                            if n_surf.GetType() != GeomAbs_Plane:
+                                continue
+                            nv = n.normal_at(n.center())
+                            if abs(nv.X * dx + nv.Y * dy + nv.Z * dz) > 0.9:
+                                return "flat"
+                    return "drill_point"
+                return "open"
             return "open" if outward else "flat"
         if kind == GeomAbs_Torus:
             curls_in = surf.Torus().MajorRadius() < seg["diameter"] / 2
@@ -304,7 +321,18 @@ def _classify_end(seg, s_end, hi_end, edge_faces):
                 return "flat"
             if dot > 0.5:
                 return "open"
-        elif kind in (GeomAbs_Cylinder, GeomAbs_Sphere):
+        elif kind == GeomAbs_Sphere:
+            # Convex (material inside the sphere): the bore exits through a
+            # spherical surface. Concave (a ball-nose cavity): a closed
+            # bottom — reported as "flat" (no rounded-bottom category).
+            convex = (
+                partner.wrapped.Orientation() == TopAbs_Orientation.TopAbs_FORWARD
+            ) == surf.Sphere().Position().Direct()
+            if not seg["external"]:
+                weak = "open" if convex else "flat"
+            else:
+                weak = "flat" if convex else "open"
+        elif kind == GeomAbs_Cylinder:
             weak = "open" if not seg["external"] else "flat"
     return weak or "unknown"
 
