@@ -4,14 +4,19 @@ import math
 
 import pytest
 from build123d import (
+    Align,
     Axis,
     Box,
+    Circle,
     Cone,
     Cylinder,
     GeomType,
     Plane,
     Pos,
+    Rectangle,
+    Sphere,
     chamfer,
+    extrude,
     fillet,
     mirror,
 )
@@ -286,6 +291,82 @@ class TestFindHoles:
         assert hole.bottom == "through"
 
     @pytest.mark.timeout(60)
+    def test_coaxial_slot_caps_are_not_holes(self):
+        # Two parallel open slots whose rounded ends share an axis, cut from
+        # opposite faces: each cap spans π, and their spans must not be
+        # summed across disjoint axial ranges into a phantom full circle.
+        slot_2d = Rectangle(8, 30, align=(Align.CENTER, Align.MIN)) + Circle(4)
+        slot = extrude(Plane.XY * slot_2d, 10)
+        part = Box(60, 60, 30) - Pos(0, 0, 5) * slot - Pos(0, 0, -15) * slot
+        assert find_holes(part) == []
+
+    @pytest.mark.timeout(60)
+    def test_coaxial_features_behind_a_wall_stay_separate(self):
+        # ø20 blind from the top, ø10 blind from the bottom, 5 mm of solid
+        # between — must be two blind features, never one "through" hole.
+        part = (
+            Box(60, 60, 40) - Pos(0, 0, 12.5) * Cylinder(10, 15) - Pos(0, 0, -10) * Cylinder(5, 20)
+        )
+        holes = sorted(find_holes(part), key=lambda h: h.diameter)
+        assert len(holes) == 2
+        assert all(h.bottom == "flat" for h in holes)
+        assert holes[0].diameter == pytest.approx(10.0)
+        assert holes[1].diameter == pytest.approx(20.0)
+
+    @pytest.mark.timeout(60)
+    def test_groove_inside_counterbore_keeps_the_cbore(self):
+        # An O-ring gland splitting the cbore into lands must not demote the
+        # cbore to a shallow spotface or surface the groove as a step.
+        part = (
+            Box(60, 60, 20)
+            - Cylinder(5, 20)
+            - Pos(0, 0, 7) * Cylinder(9, 6)
+            - Pos(0, 0, 7) * Cylinder(10, 2)
+        )
+        (hole,) = find_holes(part)
+        assert hole.cbore == CounterBore(diameter=18.0, depth=6.0)
+        assert hole.spotface is None
+
+    @pytest.mark.timeout(60)
+    def test_crossing_port_near_flat_bottom_stays_flat(self):
+        # The port's curved wall is a weak signal; the flat bottom plane at
+        # the same end must win regardless of face iteration order.
+        part = (
+            Box(60, 60, 40) - Pos(0, 0, 9) * Cylinder(5, 22) - Cylinder(2, 60, rotation=(0, 90, 0))
+        )
+        (hole,) = (h for h in find_holes(part) if h.diameter == pytest.approx(10.0))
+        assert hole.bottom == "flat"
+        assert hole.axis == pytest.approx((0.0, 0.0, -1.0))
+
+    @pytest.mark.timeout(60)
+    def test_drill_point_clipped_by_crossing_hole_stays_drill_point(self):
+        part = (
+            Box(60, 60, 40)
+            - _drill_tool(4, 15, top_z=20)
+            - Pos(0, 0, 4) * Cylinder(2.5, 60, rotation=(0, 90, 0))
+        )
+        (hole,) = (h for h in find_holes(part) if h.diameter == pytest.approx(8.0))
+        assert hole.bottom == "drill_point"
+
+    @pytest.mark.timeout(60)
+    def test_hole_through_a_sphere_is_through(self):
+        (hole,) = find_holes(Sphere(20) - Cylinder(4, 50))
+        assert hole.bottom == "through"
+
+    @pytest.mark.timeout(60)
+    def test_bottom_relief_groove_extends_depth(self):
+        # A thread-relief groove at the bottom of a blind bore: depth runs to
+        # the true bottom, not to the last bore land above the groove.
+        part = (
+            Box(60, 60, 40) - Pos(0, 0, 12.5) * Cylinder(4.25, 15) - Pos(0, 0, 6) * Cylinder(5.0, 2)
+        )
+        edge = [e for e in part.edges().filter_by(GeomType.CIRCLE) if abs(e.center().Z - 20) < 0.01]
+        (hole,) = find_holes(chamfer(edge, 1.0))
+        assert hole.diameter == pytest.approx(8.5)
+        assert hole.depth == pytest.approx(14.0)
+        assert hole.bottom == "flat"
+
+    @pytest.mark.timeout(60)
     def test_turned_part_bore_is_through(self):
         (hole,) = find_holes(Cylinder(30, 40) - Cylinder(10, 40))
         assert hole.diameter == pytest.approx(20.0)
@@ -323,6 +404,16 @@ class TestFindBosses:
         (boss,) = find_bosses(fillet(edge, 1.0))
         assert boss.axis == pytest.approx((0.0, 0.0, 1.0))
         assert boss.location[2] == pytest.approx(12.0)  # free end, below the fillet
+
+    @pytest.mark.timeout(60)
+    def test_radial_boss_on_a_pipe_points_outward(self):
+        # The base sits on a curved wall (weak 'flat' signal); the boss on
+        # the negative-X side must still point away from the pipe.
+        pipe = Cylinder(20, 60) - Cylinder(15, 60)
+        part = pipe + Pos(-24, 0, 0) * Cylinder(5, 12, rotation=(0, 90, 0))
+        (boss,) = (b for b in find_bosses(part) if b.diameter == pytest.approx(10.0))
+        assert boss.axis[0] == pytest.approx(-1.0)
+        assert boss.location[0] == pytest.approx(-30.0)
 
     @pytest.mark.timeout(60)
     def test_turned_part_od_is_a_boss(self):

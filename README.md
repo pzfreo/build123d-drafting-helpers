@@ -414,8 +414,9 @@ for h in find_holes(part):
 
 - `axis` is the drilling direction (unit vector pointing into the hole), `location`
   the axis point at the opening surface.
-- `diameter`/`depth` describe the bore itself (the deepest segment); `depth` is its
-  full-diameter extent — a drill point's cone is not included.
+- `diameter`/`depth` describe the bore itself (the narrowest segment); `depth` runs
+  from the top of the bore to the hole's deep end — a bottom relief groove counts,
+  a drill point's cone does not.
 - `bottom` is `"through"`, `"flat"`, `"drill_point"` (cone found at the deep end), or
   `"unknown"`, classified by probing the face adjacent to the bottom edge. Entry
   chamfers, lip fillets, and countersink cones at the opening are recognised as

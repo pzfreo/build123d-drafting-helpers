@@ -28,7 +28,13 @@ import math
 from dataclasses import dataclass
 
 from OCP.BRepAdaptor import BRepAdaptor_Surface
-from OCP.GeomAbs import GeomAbs_Cone, GeomAbs_Cylinder, GeomAbs_Plane, GeomAbs_Torus
+from OCP.GeomAbs import (
+    GeomAbs_Cone,
+    GeomAbs_Cylinder,
+    GeomAbs_Plane,
+    GeomAbs_Sphere,
+    GeomAbs_Torus,
+)
 from OCP.TopAbs import TopAbs_Orientation
 
 _log = logging.getLogger(__name__)
@@ -41,8 +47,8 @@ _FULL_CYL_MIN_EXTENT = math.pi * 1.05
 
 # Coaxial segments whose axial ranges meet within this gap belong to the same
 # stack (a counterbore shoulder is an exact-touch); larger gaps are distinct
-# features (e.g. coaxial blind holes drilled from opposite faces) unless the
-# gap is a crossing void (see _merge_interrupted).
+# features unless bridged by a shoulder chamfer/fillet or a crossing void
+# (see _merge_stacks).
 _STACK_GAP_TOL = 0.1
 
 # A counterbore-like step shallower than this fraction of its diameter is a
@@ -122,15 +128,37 @@ def _cyl_group_key(c):
     return (*_line_key(c), round(c["diameter"], 2))
 
 
+def _merge_runs(items, key_fn):
+    """Group *items* by *key_fn*, then split each group into runs of
+    contiguous axial ranges (gap > _STACK_GAP_TOL starts a new run)."""
+    by_key: dict = {}
+    for item in items:
+        by_key.setdefault(key_fn(item), []).append(item)
+    runs = []
+    for group in by_key.values():
+        group.sort(key=lambda c: c["s_lo"])
+        run, hi = [group[0]], group[0]["s_hi"]
+        for c in group[1:]:
+            if c["s_lo"] <= hi + _STACK_GAP_TOL:
+                run.append(c)
+                hi = max(hi, c["s_hi"])
+            else:
+                runs.append(run)
+                run, hi = [c], c["s_hi"]
+        runs.append(run)
+    return runs
+
+
 def _full_cyls(cyls):
     """Only the hole/boss cylinder records — patches around one axis must
-    total more than half a turn, so fillet faces and slot end caps are
-    excluded but a bore split by a slot or keyway still counts."""
-    spans: dict = {}
-    for c in cyls:
-        key = _cyl_group_key(c)
-        spans[key] = spans.get(key, 0.0) + c["u_extent"]
-    return [c for c in cyls if spans[_cyl_group_key(c)] >= _FULL_CYL_MIN_EXTENT]
+    total more than half a turn within one contiguous axial range, so fillet
+    faces and slot end caps are excluded (even coaxial caps at different
+    heights) but a bore split by a slot or keyway still counts."""
+    keep = []
+    for run in _merge_runs(cyls, _cyl_group_key):
+        if sum(c["u_extent"] for c in run) >= _FULL_CYL_MIN_EXTENT:
+            keep.extend(run)
+    return keep
 
 
 # ---------------------------------------------------------------------------
@@ -153,10 +181,10 @@ class HoleFeature:
     ``axis`` is the drilling direction (unit vector pointing from the opening
     into the hole) and ``location`` the axis point at the opening surface.
     ``diameter``/``depth`` describe the bore itself — the narrowest segment of
-    the stack — with ``depth`` its full-diameter axial extent (a drill point's
-    cone is not included).  ``bottom`` is ``"through"``, ``"flat"``,
-    ``"drill_point"``, or ``"unknown"`` when the adjacent geometry matches
-    none of those.
+    the stack — with ``depth`` measured from the top of the bore to the hole's
+    deep end (a bottom relief groove counts, a drill point's cone does not).
+    ``bottom`` is ``"through"``, ``"flat"``, ``"drill_point"``, or
+    ``"unknown"`` when the adjacent geometry matches none of those.
     """
 
     axis: tuple
@@ -187,37 +215,6 @@ def _unit(v):
     return tuple(0.0 if c == 0 else c for c in v)
 
 
-def _step_gap_tol(a, b):
-    """Allowed axial gap between two coaxial stack segments: a chamfer or
-    fillet on the shoulder between steps spans at most half the diameter
-    difference (a 45° chamfer of the full step), so bridge that much."""
-    return _STACK_GAP_TOL + abs(a["diameter"] - b["diameter"]) / 2
-
-
-def _merge_runs(items, key_fn, gap_tol=None):
-    """Group *items* by *key_fn*, then split each group into runs of
-    contiguous axial ranges. The allowed gap is _STACK_GAP_TOL, or
-    *gap_tol(last_item, next_item)* when given."""
-    by_key: dict = {}
-    for item in items:
-        by_key.setdefault(key_fn(item), []).append(item)
-    runs = []
-    for group in by_key.values():
-        group.sort(key=lambda c: c["s_lo"])
-        run, hi, hi_item = [group[0]], group[0]["s_hi"], group[0]
-        for c in group[1:]:
-            tol = _STACK_GAP_TOL if gap_tol is None else gap_tol(hi_item, c)
-            if c["s_lo"] <= hi + tol:
-                run.append(c)
-                if c["s_hi"] > hi:
-                    hi, hi_item = c["s_hi"], c
-            else:
-                runs.append(run)
-                run, hi, hi_item = [c], c["s_hi"], c
-        runs.append(run)
-    return runs
-
-
 def _segments(cyls):
     """Collapse cylinder patches into segments: one per (axis line, diameter,
     contiguous axial range). Keyway-split patches of one bore merge; coaxial
@@ -242,26 +239,13 @@ def _axis_point(seg, s):
     return (ax + t * dx, ay + t * dy, az + t * dz)
 
 
-def _classify_end(seg, s_end, hi_end, edge_faces):
-    """Classify one axial end of a cylinder segment from the face beyond it.
-
-    Returns ``"open"`` (the bore exits, or the boss's free end), ``"flat"``
-    (closed by a plane facing back into the segment, or a boss's base),
-    ``"drill_point"`` (a bore closed by a cone), or ``"unknown"``.
-
-    An adjacent cone is read through the segment's internal/external context:
-    a cone whose apex lies outward of a bore's end closes it (drill point),
-    one whose apex lies inward widens it (an entry chamfer or countersink —
-    the bore is open there).  For a boss the senses flip: apex outward is a
-    chamfered free end, apex inward a base draft.
-    """
+def _end_partners(seg, s_end, edge_faces):
+    """The faces beyond one axial end of *seg*: partners of edges that lie at
+    that end. An opening edge on a slanted or curved surface dips away from
+    the end plane (by the lip sagitta), so edges match within a margin — but
+    stay well clear of the segment's other end."""
     dx, dy, dz = seg["dir_xyz"]
-    e_sign = 1.0 if hi_end else -1.0
-    # An opening edge on a slanted or curved surface dips away from the end
-    # plane (by the lip sagitta), so match edges within a margin — but stay
-    # well clear of the segment's other end.
     margin = max(_STACK_GAP_TOL, min(0.45 * (seg["s_hi"] - seg["s_lo"]), 0.5 * seg["diameter"]))
-
     partners = []
     for face in seg["faces"]:
         for edge in face.edges():
@@ -271,7 +255,34 @@ def _classify_end(seg, s_end, hi_end, edge_faces):
             for partner in edge_faces.get(edge, ()):
                 if not any(partner.is_same(f) for f in seg["faces"]):
                     partners.append(partner)
-    for partner in partners:
+    return partners
+
+
+def _classify_end(seg, s_end, hi_end, edge_faces):
+    """Classify one axial end of a cylinder segment from the face beyond it.
+
+    Returns ``"open"`` (the bore exits, or the boss's free end), ``"flat"``
+    (closed by a plane facing back into the segment, or a boss's base),
+    ``"drill_point"`` (a bore closed by a cone), or ``"unknown"``.
+
+    Planes, cones, and tori are decisive; a curved wall (cylinder/sphere) is
+    a weak signal — an exit for a bore, a base for a boss — that only counts
+    when no decisive partner is present (a crossing port near a flat bottom
+    must not outvote the bottom).
+
+    An adjacent cone is read through the segment's internal/external context
+    and its apex direction: for a bore, apex outward closes it (drill point)
+    while apex inward widens it (an entry chamfer or countersink — open);
+    for a boss the senses flip (apex outward is a chamfered free end, apex
+    inward a base draft).  Tori follow the corner they round: one curling
+    inward (major radius below the segment's) is a closed corner — a blind
+    bore's bottom or a boss's base — and one flaring outward is an opening
+    lip or a free end.
+    """
+    dx, dy, dz = seg["dir_xyz"]
+    e_sign = 1.0 if hi_end else -1.0
+    weak = None
+    for partner in _end_partners(seg, s_end, edge_faces):
         surf = BRepAdaptor_Surface(partner.wrapped)
         kind = surf.GetType()
         if kind == GeomAbs_Cone:
@@ -282,10 +293,6 @@ def _classify_end(seg, s_end, hi_end, edge_faces):
                 return "drill_point" if outward else "open"
             return "open" if outward else "flat"
         if kind == GeomAbs_Torus:
-            # An edge fillet: one curling inward (smaller major radius than
-            # the segment) rounds a closed corner — a blind bore's bottom or
-            # a boss's base; one flaring outward rounds an opening lip or a
-            # boss's free end.
             curls_in = surf.Torus().MajorRadius() < seg["diameter"] / 2
             if not seg["external"]:
                 return "flat" if curls_in else "open"
@@ -297,11 +304,9 @@ def _classify_end(seg, s_end, hi_end, edge_faces):
                 return "flat"
             if dot > 0.5:
                 return "open"
-        elif kind == GeomAbs_Cylinder:
-            # The end breaks into (or out of) another curved wall — a radial
-            # hole exiting an OD, or a bore meeting a crossing hole.
-            return "open"
-    return "unknown"
+        elif kind in (GeomAbs_Cylinder, GeomAbs_Sphere):
+            weak = "open" if not seg["external"] else "flat"
+    return weak or "unknown"
 
 
 def _edge_face_map(part):
@@ -313,10 +318,37 @@ def _edge_face_map(part):
     return edge_faces
 
 
-def _merge_interrupted(stacks, edge_faces):
-    """Recombine coaxial stacks split by a crossing void: same bore diameter
-    on both sides and neither facing end closed (a flat bottom or drill point
-    means genuinely separate holes, e.g. blind holes from opposite faces)."""
+def _shared_transition(a, b, edge_faces):
+    """True when a cone or torus face spans the gap between segment *a*'s
+    high end and segment *b*'s low end — the shoulder chamfer or fillet that
+    makes the two segments steps of one hole. The transition face touches
+    one segment directly and may reach the other through the shoulder ring
+    plane, so one adjacency hop is followed. Solid material between two
+    unrelated coaxial features has no such connecting face."""
+    a_partners = _end_partners(a, a["s_hi"], edge_faces)
+    b_partners = _end_partners(b, b["s_lo"], edge_faces)
+    for own, other in ((a_partners, b_partners), (b_partners, a_partners)):
+        for t in own:
+            if BRepAdaptor_Surface(t.wrapped).GetType() not in (GeomAbs_Cone, GeomAbs_Torus):
+                continue
+            if any(t.is_same(o) for o in other):
+                return True
+            neighbours = [f for e in t.edges() for f in edge_faces.get(e, ())]
+            if any(n.is_same(o) for n in neighbours for o in other):
+                return True
+    return False
+
+
+def _merge_stacks(stacks, edge_faces):
+    """Recombine coaxial stacks that are one hole:
+
+    - same bore diameter on both sides of a crossing void, neither facing
+      end closed (a flat bottom or drill point means genuinely separate
+      holes, e.g. blind holes drilled from opposite faces);
+    - different diameters whose gap is bridged by a shoulder chamfer or
+      fillet face (the steps of a counterbored hole with a deburred
+      shoulder).
+    """
     by_line: dict = {}
     for stack in stacks:
         by_line.setdefault(_line_key(stack[0]), []).append(stack)
@@ -335,6 +367,10 @@ def _merge_interrupted(stacks, edge_faces):
             ):
                 joined = dict(a, s_hi=b["s_hi"], faces=a["faces"] + b["faces"])
                 cur = [s for s in cur if s is not a] + [joined] + [s for s in nxt if s is not b]
+            elif b["s_lo"] - a["s_hi"] <= _STACK_GAP_TOL + abs(
+                a["diameter"] - b["diameter"]
+            ) and _shared_transition(a, b, edge_faces):
+                cur = cur + nxt
             else:
                 merged.append(cur)
                 cur = nxt
@@ -357,9 +393,7 @@ def find_holes(part) -> list:
     if not internal:
         return []
     edge_faces = _edge_face_map(part)
-    stacks = _merge_interrupted(
-        _merge_runs(_segments(internal), _line_key, gap_tol=_step_gap_tol), edge_faces
-    )
+    stacks = _merge_stacks(_merge_runs(_segments(internal), _line_key), edge_faces)
 
     holes = []
     for stack in stacks:
@@ -388,18 +422,43 @@ def find_holes(part) -> list:
         ordered = sorted(stack, key=lambda s: s["s_hi"], reverse=from_hi)
         bore_i = min(range(len(ordered)), key=lambda i: ordered[i]["diameter"])
         bore = ordered[bore_i]
-        cbore = spotface = None
+
+        # Steps narrow monotonically from the opening to the bore; a wider
+        # segment between same-diameter lands is a groove (e.g. an O-ring
+        # gland inside a counterbore), not a step. Lands of one step span
+        # their groove.
+        spans: dict = {}
+        step_order = []
+        min_d = math.inf
         for step in ordered[:bore_i]:
-            spec = CounterBore(step["diameter"], round(step["s_hi"] - step["s_lo"], 2))
+            if step["diameter"] > min_d + 0.01:
+                continue
+            min_d = step["diameter"]
+            key = round(step["diameter"], 2)
+            if key not in spans:
+                spans[key] = [step["s_lo"], step["s_hi"]]
+                step_order.append(key)
+            else:
+                spans[key][0] = min(spans[key][0], step["s_lo"])
+                spans[key][1] = max(spans[key][1], step["s_hi"])
+        cbore = spotface = None
+        for key in step_order:
+            lo, hi = spans[key]
+            spec = CounterBore(key, round(hi - lo, 2))
             if spec.depth < _SPOTFACE_MAX_RATIO * spec.diameter:
                 spotface = spotface or spec
             else:
                 cbore = cbore or spec
-        # The bore's depth spans every segment at the bore diameter — a
-        # coaxial groove (e.g. an O-ring gland) splits the bore into lands
-        # but does not shorten the hole.
+
+        # The bore's depth runs from its top to the hole's deep end: bore
+        # lands span a mid-bore groove, and a blind hole's depth includes a
+        # bottom relief groove — but not a through hole's far-side steps.
         bore_segs = [s for s in stack if abs(s["diameter"] - bore["diameter"]) < 0.01]
-        depth = max(s["s_hi"] for s in bore_segs) - min(s["s_lo"] for s in bore_segs)
+        deep_segs = bore_segs if bottom == "through" else stack
+        if from_hi:
+            depth = max(s["s_hi"] for s in bore_segs) - min(s["s_lo"] for s in deep_segs)
+        else:
+            depth = max(s["s_hi"] for s in deep_segs) - min(s["s_lo"] for s in bore_segs)
         holes.append(
             HoleFeature(
                 axis=_unit(tuple(-c for c in d) if from_hi else d),
