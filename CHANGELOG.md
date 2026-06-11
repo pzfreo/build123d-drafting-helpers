@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+## v0.5.0 — 2026-06-11
+
+All four fixes come from issues found by a one-shot engineering-drawing
+benchmark run (NIST CTC-02); see #80–#83. Merged as #84.
+
+### Added
+
+- **`TextBlock(lines, position, draft, ...)`** (#82): multi-line note
+  primitive with a shared baseline grid, corner anchoring (default top-left),
+  configurable `line_spacing` and `align`, and rotation about its own anchor.
+  Registers as a single annotation for layout/lint purposes.
+- **`lint_feature_coverage(part, annotations, tol=0.15)`** (#80): coarse
+  check that every full cylindrical feature (hole or boss) on the part has a
+  matching ø callout on the sheet — via ø-labels or structured `HoleCallout`
+  diameters (`covers_diameters`). Partial patches (fillets) are excluded, but
+  slot- or keyway-split bores are recombined and still counted. Runs
+  automatically from `Drawing.lint()` / `export()` when the drawing knows its
+  part, so `lint()` can now return `feature_not_dimensioned` warnings.
+
+### Fixed
+
+- **Prismatic parts no longer get turned-part auto-annotations** (#81).
+  `make_drawing()` now classifies the part: OD dimension, centrelines, and
+  bore leaders are only emitted when an external, full, concentric Z cylinder
+  fills a square envelope (a turned part). Plates with bores or corner
+  fillets previously picked up a bogus `dim_od` from the largest internal
+  radius. Trade-off: a shaft with a flat exceeding ~5% of the envelope now
+  classifies prismatic and loses the auto-OD — the coverage lint flags the
+  undimensioned diameter as the safety net.
+- **Export no longer dies with a bare `AssertionError`** (#83). Shapes are
+  exported element-wise with per-element error recovery: a failing face or
+  edge is skipped with a warning naming the view and layer, and the export
+  completes. Only when *nothing* in a shape can be converted does it raise,
+  now with view/layer context.
+- **`Note(align=...)` anchors at `position`** (#82). The align argument was
+  re-anchoring the whole sketch to the page origin, discarding the requested
+  position.
+
 ## v0.4.3 — 2026-06-11
 
 ### Added
