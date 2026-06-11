@@ -766,14 +766,32 @@ class TestLintFeatureCoverage:
         assert lint_feature_coverage(part, [ann]) == []
 
     @pytest.mark.timeout(60)
-    def test_radius_callout_covers_feature(self):
+    def test_radius_note_does_not_cover(self):
+        # An "R4 TYP" fillet note must not mask an undimensioned ø8 bore.
         from build123d import Draft
 
         from build123d_drafting import Note
 
         part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(4, 30)
         ann = Note("R4 TYP", (10, 10), Draft(font_size=3.0))
-        assert lint_feature_coverage(part, [ann]) == []
+        assert [i.code for i in lint_feature_coverage(part, [ann])] == [
+            "feature_not_dimensioned"
+        ]
+
+    @pytest.mark.timeout(60)
+    def test_slot_split_bore_is_still_a_feature(self):
+        # A bore intersected by a slot leaves cylinder patches under half a
+        # turn each — together they are still one undimensioned ø10 hole.
+        part = Box(60, 40, 10) - Cylinder(5, 12) - Box(60, 6, 12)
+        issues = lint_feature_coverage(part, [])
+        assert any("ø10" in i.message for i in issues)
+
+    @pytest.mark.timeout(60)
+    def test_hole_callout_accepts_string_diameter(self):
+        from build123d_drafting import HoleCallout
+
+        callout = HoleCallout("8.5 H7", through=True)
+        assert callout.covers_diameters == (8.5,)
 
     @pytest.mark.timeout(60)
     def test_fillets_are_not_features(self):
@@ -822,16 +840,31 @@ class TestLintFeatureCoverage:
 
 class TestIsRotational:
     def test_plain_cylinder(self):
-        assert _is_rotational(30.0, 30.0, [30.0])
+        assert _is_rotational(30.0, 30.0, 30.0, 0.0)
 
-    def test_hollow_cylinder(self):
-        assert _is_rotational(60.0, 60.0, [60.0, 20.0])
+    def test_prismatic_envelope(self):
+        assert not _is_rotational(100.0, 60.0, 24.0, 0.0)
 
-    def test_prismatic_housing_with_bores(self):
-        assert not _is_rotational(100.0, 60.0, [24.0, 10.0])
+    def test_small_boss_on_square_plate(self):
+        assert not _is_rotational(100.0, 100.0, 40.0, 0.0)
 
-    def test_square_plate_with_moderate_bore(self):
-        assert not _is_rotational(100.0, 100.0, [40.0])
+    def test_off_centre_boss(self):
+        assert not _is_rotational(100.0, 100.0, 84.0, 8.0)
 
-    def test_no_cylinders(self):
-        assert not _is_rotational(30.0, 20.0, [])
+    def test_no_external_cylinder(self):
+        # Bores never qualify as an OD — od_diam is None for hole-only parts
+        assert not _is_rotational(100.0, 100.0, None, 0.0)
+
+    @pytest.mark.timeout(60)
+    def test_square_plate_with_big_bore_is_prismatic(self):
+        # ø85 bore in a 100-square plate: fills the envelope and is
+        # concentric, but it is a hole — not an OD.
+        part = Box(100, 100, 10) - Cylinder(42.5, 12)
+        dwg = build_drawing(part)
+        assert "dim_od" not in dwg._named
+
+    @pytest.mark.timeout(60)
+    def test_off_centre_bore_is_prismatic(self):
+        part = Box(100, 100, 20) - Pos(8, 0, 0) * Cylinder(42, 30)
+        dwg = build_drawing(part)
+        assert "dim_od" not in dwg._named

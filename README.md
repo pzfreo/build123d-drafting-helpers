@@ -384,10 +384,12 @@ frame, so a too-long title block is caught the same way as a stray dimension.
 ### `lint_feature_coverage(part, annotations, tol=0.15)`
 
 Coarse **completeness** check (the checks above are hygiene checks): builds a feature
-inventory from the part's hole/boss diameters — full cylindrical faces only, so fillets
-don't count — and diffs it against every `ø` (or `R`, doubled) value mentioned in the
-annotations' labels, plus the structured `covers_diameters` metadata on `HoleCallout`.
-Each uncovered diameter yields a `feature_not_dimensioned` warning. Title blocks are
+inventory from the part's hole/boss diameters — cylinder patches totalling at least
+half a turn around their axis, so fillets don't count but a keyway-split bore does —
+and diffs it against every `ø` value mentioned in the annotations' labels, plus the
+structured `covers_diameters` metadata on `HoleCallout`. Radius callouts are not
+counted (an "R5 TYP" fillet note must not mask an undimensioned ø10 bore). Each
+uncovered diameter yields a `feature_not_dimensioned` warning. Title blocks are
 skipped (a part name like "BRACKET R8" is not a callout). Size coverage only — location
 coverage needs feature recognition and is future work.
 

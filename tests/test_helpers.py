@@ -1911,6 +1911,25 @@ class TestTextBlock:
         nh = no_gap.label_bbox[3] - no_gap.label_bbox[1]
         assert gh > nh
 
+    def test_leading_blank_line_offsets_text(self, draft):
+        # A leading blank line must push the rendered text one pitch down
+        # from the anchor, not be collapsed away.
+        pitch = draft.font_size * 1.6
+        tb = TextBlock(["", "A"], (20, 100), draft)
+        assert tb.label_bbox[3] == pytest.approx(100, abs=0.1)
+        assert tb.bounding_box().max.Y == pytest.approx(100 - pitch, abs=0.1)
+
+    def test_rotation_is_about_the_anchor(self, draft):
+        # 90° CCW about the top-left anchor: the block extends up-right of it.
+        tb = TextBlock(["NOTES:", "1. DEBURR"], (100, 50), draft, rotation=90)
+        x0, y0, x1, y1 = tb.label_bbox
+        assert x0 == pytest.approx(100, abs=0.1)
+        assert y0 == pytest.approx(50, abs=0.1)
+        assert x1 > 100 and y1 > 50
+        bb = tb.bounding_box()
+        assert bb.min.X == pytest.approx(x0, abs=1.0)
+        assert bb.min.Y == pytest.approx(y0, abs=1.0)
+
     def test_alternate_anchor_corner(self, draft):
         from build123d import Align
 

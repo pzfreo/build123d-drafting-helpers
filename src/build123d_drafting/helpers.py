@@ -616,7 +616,8 @@ class TextBlock(_Annotation):
         line_spacing: line pitch as a multiple of ``draft.font_size``.
         align: which point of the block sits at ``position`` — default
             ``(Align.MIN, Align.MAX)``, the top-left corner.
-        rotation, mode: standard ``BaseSketchObject`` placement options.
+        rotation: degrees CCW about the anchor point.
+        mode: standard ``BaseSketchObject`` option.
 
     Metadata: ``.label``, ``.label_bbox``.
     """
@@ -651,15 +652,39 @@ class TextBlock(_Annotation):
                 .faces()
             )
         block = Sketch(children=faces)
+        gb = block.bounding_box()
+        # The block's logical extent spans line 0's top to the last line's
+        # nominal bottom, so leading/trailing blank lines count even though
+        # they render no geometry (descenders may dip past the nominal bottom)
+        x0, x1 = gb.min.X, gb.max.X
+        y1 = max(gb.max.Y, 0.0)
+        y0 = min(gb.min.Y, -(len(lines) - 1) * pitch - draft.font_size)
+
+        def _anchor(lo, hi, a):
+            if a == Align.MIN:
+                return -lo
+            if a == Align.MAX:
+                return -hi
+            return -(lo + hi) / 2  # CENTER
+
         al = align if isinstance(align, (tuple, list)) else (align, align)
-        tb = block.bounding_box()
-        off = tb.to_align_offset(al)
-        dx, dy = position[0] + off.X, position[1] + off.Y
+        ox, oy = _anchor(x0, x1, al[0]), _anchor(y0, y1, al[1])
+        # Anchor at the origin, then rotate about the anchor and place it
+        shape = block.moved(
+            Location((position[0], position[1], 0.0), (0.0, 0.0, rotation))
+            * Location(Vector(ox, oy, 0.0))
+        )
+        rad = math.radians(rotation)
+        ca, sa = math.cos(rad), math.sin(rad)
+        xs, ys = [], []
+        for px, py in ((x0 + ox, y0 + oy), (x0 + ox, y1 + oy), (x1 + ox, y0 + oy), (x1 + ox, y1 + oy)):
+            xs.append(px * ca - py * sa + position[0])
+            ys.append(px * sa + py * ca + position[1])
         super().__init__(
-            block.moved(Location(Vector(dx, dy, 0.0))),
+            shape,
             label="\n".join(lines),
-            label_bbox=(tb.min.X + dx, tb.min.Y + dy, tb.max.X + dx, tb.max.Y + dy),
-            rotation=rotation,
+            label_bbox=(min(xs), min(ys), max(xs), max(ys)),
+            rotation=0,
             align=None,
             mode=mode,
         )
@@ -2664,9 +2689,16 @@ class HoleCallout(_Annotation):
         self.callout_height = h
         # The ø values this callout dimensions — drawn as glyphs, so invisible
         # to label-text scans; lint_feature_coverage reads this instead.
-        self.covers_diameters = tuple(
-            float(v) for v in (diameter, cbore_dia, csink_dia) if v
-        )
+        # Values may be strings carrying tolerance/fit text ("8.5 H7"): take
+        # the leading number, and skip values with none.
+        covers = []
+        for v in (diameter, cbore_dia, csink_dia):
+            if isinstance(v, str):
+                m = re.match(r"\s*(\d+(?:\.\d+)?)", v)
+                v = float(m.group(1)) if m else None
+            if v:
+                covers.append(float(v))
+        self.covers_diameters = tuple(covers)
 
 
 # ---------------------------------------------------------------------------

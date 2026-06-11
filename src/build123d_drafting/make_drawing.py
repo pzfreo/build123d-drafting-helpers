@@ -35,6 +35,7 @@ from build123d import (
 )
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
+from OCP.TopAbs import TopAbs_Orientation
 
 from build123d_drafting.helpers import (
     Centerline,
@@ -101,7 +102,9 @@ def analyse_cylinders(part):
     """Return (z_cyls, cross_cyls) from OCP cylindrical face analysis.
 
     Each entry is a dict with keys: diameter, area, cx, cy, cz, axis,
-    u_extent (the face's angular span in radians — partial spans are fillets).
+    u_extent (the face's angular span in radians — partial spans are fillets),
+    axis_xyz (a point on the cylinder axis), and external (True when the face
+    is outward-facing — a boss/OD; False for a bore).
     z_cyls: cylinders whose axis is approximately Z.
     cross_cyls: cylinders whose axis is approximately X or Y.
     """
@@ -114,6 +117,7 @@ def analyse_cylinders(part):
         cyl = surf.Cylinder()
         r = cyl.Radius()
         d = cyl.Axis().Direction()
+        ap = cyl.Axis().Location()
         fc = face.center()
         comps = [("x", abs(d.X())), ("y", abs(d.Y())), ("z", abs(d.Z()))]
         ax = max(comps, key=lambda t: t[1])[0]
@@ -125,6 +129,10 @@ def analyse_cylinders(part):
             cz=fc.Z,
             axis=ax,
             u_extent=surf.LastUParameter() - surf.FirstUParameter(),
+            axis_xyz=(ap.X(), ap.Y(), ap.Z()),
+            # A cylinder's natural normal points away from its axis; a face
+            # keeping it (FORWARD) is outward material — a boss/OD, not a bore
+            external=face.wrapped.Orientation() == TopAbs_Orientation.TopAbs_FORWARD,
         )
         (z_cyls if ax == "z" else cross_cyls).append(rec)
     return z_cyls, cross_cyls
@@ -146,49 +154,71 @@ def _fmt(v: float) -> str:
 
 
 _DIAM_RE = re.compile(r"[øØ⌀]\s*(\d+(?:\.\d+)?)")
-_RADIUS_RE = re.compile(r"\bR\s*(\d+(?:\.\d+)?)")
 
-# Cylindrical faces spanning less than ~half a turn are edge blends
-# (fillets/rounds), not holes or bosses — exclude them from the inventory.
+# Cylinder patches around one axis spanning less than ~half a turn in total
+# are edge blends (fillets/rounds), not holes or bosses — exclude them from
+# the feature inventory.
 _FULL_CYL_MIN_EXTENT = math.pi * 0.9
 
 # Turned-part classification (#81): a rotational part's bounding box is
-# square in XY to within _SQUARENESS_TOL, and its largest full Z cylinder
-# (the OD) fills at least _OD_FILL_MIN of that envelope. Anything else is
-# prismatic — its Z cylinders are holes, not an OD.
+# square in XY to within _SQUARENESS_TOL, and its OD — the largest full
+# *external* Z cylinder — fills at least _OD_FILL_MIN of that envelope, with
+# its axis within _OD_AXIS_TOL of the envelope centre. Anything else is
+# prismatic — its Z cylinders are holes or local bosses, not an OD.
 _SQUARENESS_TOL = 0.05
 _OD_FILL_MIN = 0.8
+_OD_AXIS_TOL = 0.05
+
+
+def _cyl_group_key(c):
+    """Cylinder patches of one hole/boss share axis, diameter, and the axis
+    position in the plane perpendicular to it."""
+    x, y, z = c["axis_xyz"]
+    pos = {"z": (x, y), "x": (y, z), "y": (x, z)}[c["axis"]]
+    return (c["axis"], round(c["diameter"], 2), round(pos[0], 1), round(pos[1], 1))
 
 
 def _full_cyls(cyls):
-    """Only the full hole/boss cylinder records — partial spans are fillets."""
-    return [c for c in cyls if c["u_extent"] >= _FULL_CYL_MIN_EXTENT]
+    """Only the hole/boss cylinder records — patches around one axis must
+    span at least ~half a turn in total, so lone fillet faces are excluded
+    but a bore split by a slot or keyway still counts."""
+    spans: dict = {}
+    for c in cyls:
+        key = _cyl_group_key(c)
+        spans[key] = spans.get(key, 0.0) + c["u_extent"]
+    return [c for c in cyls if spans[_cyl_group_key(c)] >= _FULL_CYL_MIN_EXTENT]
 
 
-def _is_rotational(x_size, y_size, z_diams) -> bool:
-    """True for turned parts: a dominant Z cylinder filling a square envelope.
+def _is_rotational(x_size, y_size, od_diam, od_axis_offset) -> bool:
+    """True for turned parts: an outward-facing Z cylinder, concentric with
+    the bounding box, filling a square envelope.
 
-    ``z_diams`` must already exclude partial (fillet) faces.
+    ``od_diam`` is the largest full *external* Z-cylinder diameter (``None``
+    when there is none — bores never qualify as an OD) and
+    ``od_axis_offset`` that cylinder's axis distance from the bbox centre.
     """
-    if not z_diams:
+    if od_diam is None:
         return False
     envelope = max(x_size, y_size)
     return (
         abs(x_size - y_size) <= _SQUARENESS_TOL * envelope
-        and z_diams[0] >= _OD_FILL_MIN * envelope
+        and od_diam >= _OD_FILL_MIN * envelope
+        and od_axis_offset <= _OD_AXIS_TOL * envelope
     )
 
 
 def lint_feature_coverage(part, annotations, tol: float = 0.15, cyls=None) -> list:
     """Coarse completeness check: report part diameters with no callout (#80).
 
-    Builds a feature inventory from *part*'s hole/boss diameters (cylindrical
-    faces spanning at least ~half a turn, so fillets are ignored) and diffs it
-    against every ø (or R, doubled) value mentioned in the annotations'
-    labels, plus the structured ``covers_diameters`` metadata on annotations
-    that draw their values geometrically (e.g. ``HoleCallout``). Title blocks
-    are skipped — part numbers like "BRACKET R8" are not callouts. Each
-    uncovered diameter yields one ``feature_not_dimensioned`` warning.
+    Builds a feature inventory from *part*'s hole/boss diameters (cylinder
+    patches spanning at least ~half a turn around their axis in total, so
+    fillets are ignored) and diffs it against every ø value mentioned in the
+    annotations' labels, plus the structured ``covers_diameters`` metadata on
+    annotations that draw their values geometrically (e.g. ``HoleCallout``).
+    Radius callouts are *not* counted — "R5 TYP" fillet notes would otherwise
+    mask an undimensioned ø10 bore. Title blocks are skipped — part numbers
+    like "BRACKET R8" are not callouts. Each uncovered diameter yields one
+    ``feature_not_dimensioned`` warning.
 
     ``cyls`` accepts a precomputed ``analyse_cylinders(part)`` result so
     repeated lint runs need not re-scan the solid.
@@ -206,8 +236,6 @@ def lint_feature_coverage(part, annotations, tol: float = 0.15, cyls=None) -> li
         label = getattr(ann, "label", None) or ""
         for m in _DIAM_RE.finditer(label):
             mentioned.add(float(m.group(1)))
-        for m in _RADIUS_RE.finditer(label):
-            mentioned.add(2 * float(m.group(1)))
         for v in getattr(ann, "covers_diameters", ()):
             mentioned.add(float(v))
 
@@ -405,14 +433,20 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     z_cyls, cross_cyls = analyse_cylinders(part)
     # Partial (fillet) faces are not features: they would pollute the OD,
     # the bore leaders, and the rotational classification alike (#81)
-    z_diams = dedup_diams(_full_cyls(z_cyls))
+    full_z = _full_cyls(z_cyls)
+    z_diams = dedup_diams(full_z)
     cross_diams = dedup_diams(_full_cyls(cross_cyls))
 
     _log.info("Z-axis diameters: %s", z_diams)
     if cross_diams:
         _log.info("Cross-hole diams: %s", cross_diams)
 
-    is_rotational = _is_rotational(x_size, y_size, z_diams)
+    od_cyl = max((c for c in full_z if c["external"]), key=lambda c: c["diameter"], default=None)
+    od_diam = od_cyl["diameter"] if od_cyl else None
+    od_axis_offset = (
+        math.hypot(od_cyl["axis_xyz"][0] - cx, od_cyl["axis_xyz"][1] - cy) if od_cyl else 0.0
+    )
+    is_rotational = _is_rotational(x_size, y_size, od_diam, od_axis_offset)
     if z_diams and not is_rotational:
         _log.info("Part classified prismatic; skipping OD/centreline/bore annotations")
 
@@ -531,12 +565,16 @@ class Drawing:
         views: ``{name: (visible_compound, hidden_compound_or_None)}``.
         annotations: ordered list of annotation objects (mutable).
         part: the source solid, when known — enables the feature-coverage lint.
+        cyls: optional precomputed ``analyse_cylinders(part)`` result; computed
+            lazily on first :meth:`lint` otherwise.
     """
 
-    def __init__(self, *, scale, page_w, page_h, tb_w, draft, look_at, dist, centroid, out, part=None):
+    def __init__(
+        self, *, scale, page_w, page_h, tb_w, draft, look_at, dist, centroid, out, part=None, cyls=None
+    ):
         self.scale = scale
         self.part = part
-        self._cyl_cache = None  # analyse_cylinders(part), computed at most once
+        self._cyl_cache = cyls
         self.page_w = page_w
         self.page_h = page_h
         self.tb_w = tb_w
@@ -830,24 +868,25 @@ def _auto_annotate(dwg, a):
 
     # Additional Z-axis bore leaders to the left of the front view — these
     # assume bores concentric with the rotation axis, so rotational only (#81)
-    left_edge = FX(a.bb.min.X)
-    left_space = left_edge - a.margin
-    if a.is_rotational and left_space >= a.DIM_PAD and len(a.z_diams) > 1:
-        ldr_length = a.DIM_PAD * 0.6
-        elbow_x = left_edge - ldr_length
-        for i, d in enumerate(a.z_diams[1:4]):
-            tip_z = FZ(a.cz) + (i - 1) * 10
-            dwg.add(
-                Leader(
-                    tip=(FX(a.cx - d / 2), tip_z, 0),
-                    elbow=(elbow_x, tip_z, 0),
-                    label=f"ø{_fmt(d)}",
-                    draft=draft,
-                ),
-                f"ldr_z{i}",
-            )
-    elif a.is_rotational and len(a.z_diams) > 1:
-        _log.info("Additional diameters %s not annotated (insufficient left margin)", a.z_diams[1:])
+    if a.is_rotational and len(a.z_diams) > 1:
+        left_edge = FX(a.bb.min.X)
+        left_space = left_edge - a.margin
+        if left_space >= a.DIM_PAD:
+            ldr_length = a.DIM_PAD * 0.6
+            elbow_x = left_edge - ldr_length
+            for i, d in enumerate(a.z_diams[1:4]):
+                tip_z = FZ(a.cz) + (i - 1) * 10
+                dwg.add(
+                    Leader(
+                        tip=(FX(a.cx - d / 2), tip_z, 0),
+                        elbow=(elbow_x, tip_z, 0),
+                        label=f"ø{_fmt(d)}",
+                        draft=draft,
+                    ),
+                    f"ldr_z{i}",
+                )
+        else:
+            _log.info("Additional diameters %s not annotated (insufficient left margin)", a.z_diams[1:])
 
     if a.cross_diams:
         _log.info(
@@ -1062,8 +1101,8 @@ def build_drawing(
         centroid=(a.cx, a.cy, a.cz),
         out=out,
         part=a.part,
+        cyls=a.cyls,
     )
-    dwg._cyl_cache = a.cyls
 
     part_s = a.part.scale(a.SCALE)
     dwg.add_view("front", part_s, (cxs, cys - dist, czs), (0, 0, 1), (a.FV_X, a.FV_Y), scaled=True)
