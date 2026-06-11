@@ -607,6 +607,7 @@ def test_generate_script_emits_build_drawing(tmp_path):
     assert "dwg.export(" in content
     assert "Customise here" in content
 
+
 # ---------------------------------------------------------------------------
 # Part classification (#81) — prismatic parts skip turned-part annotations
 # ---------------------------------------------------------------------------
@@ -618,9 +619,7 @@ class TestPrismaticClassification:
         # A housing-like plate: Z-axis bores exist, but they are holes — not
         # an OD. dim_od / centrelines / ldr_z* would all be wrong.
         part = (
-            Box(100, 60, 20)
-            - Pos(20, 10, 0) * Cylinder(5, 30)
-            - Pos(-30, -15, 0) * Cylinder(8, 30)
+            Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(5, 30) - Pos(-30, -15, 0) * Cylinder(8, 30)
         )
         dwg = build_drawing(part)
         assert "dim_od" not in dwg._named
@@ -774,9 +773,7 @@ class TestLintFeatureCoverage:
 
         part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(4, 30)
         ann = Note("R4 TYP", (10, 10), Draft(font_size=3.0))
-        assert [i.code for i in lint_feature_coverage(part, [ann])] == [
-            "feature_not_dimensioned"
-        ]
+        assert [i.code for i in lint_feature_coverage(part, [ann])] == ["feature_not_dimensioned"]
 
     @pytest.mark.timeout(60)
     def test_slot_split_bore_is_still_a_feature(self):
@@ -818,9 +815,9 @@ class TestLintFeatureCoverage:
     @pytest.mark.timeout(60)
     def test_title_block_text_is_not_a_callout(self):
         # "BRACKET R8" in the title must not mark ø16 as covered.
-        from build123d_drafting import TitleBlock
-
         from build123d import Draft
+
+        from build123d_drafting import TitleBlock
 
         part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(8, 30)
         tb = TitleBlock("BRACKET R8", "DWG-1", draft=Draft(font_size=3.0))

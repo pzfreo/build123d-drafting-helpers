@@ -576,7 +576,19 @@ class Drawing:
     """
 
     def __init__(
-        self, *, scale, page_w, page_h, tb_w, draft, look_at, dist, centroid, out, part=None, cyls=None
+        self,
+        *,
+        scale,
+        page_w,
+        page_h,
+        tb_w,
+        draft,
+        look_at,
+        dist,
+        centroid,
+        out,
+        part=None,
+        cyls=None,
     ):
         self.scale = scale
         self.part = part
@@ -799,9 +811,7 @@ def _export_shape(exporter, shape, layer, ctx):
             skipped += 1
             _log.debug("%s (layer %r): element failed to convert: %s", ctx, layer, exc)
     if skipped == len(elements) and first_err is not None:
-        raise RuntimeError(
-            f"{ctx} (layer {layer!r}): nothing could be exported"
-        ) from first_err
+        raise RuntimeError(f"{ctx} (layer {layer!r}): nothing could be exported") from first_err
     if skipped:
         _log.warning(
             "%s (layer %r): skipped %d of %d elements that failed to convert",

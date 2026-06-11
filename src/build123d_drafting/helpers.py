@@ -564,10 +564,13 @@ class Note(_Annotation):
         text: the note text.
         position: ``(x, y)`` page position of the text anchor.
         draft: Draft config (font and size).
+        rotation: degrees CCW about the page origin (``BaseSketchObject``
+            semantics — unlike :class:`TextBlock`, which rotates about its
+            anchor).
         align: which point of the text sits at ``position`` — default
             ``Align.CENTER`` (the text centre). E.g. ``(Align.MIN,
             Align.CENTER)`` anchors the left edge at ``position``.
-        rotation, mode: standard ``BaseSketchObject`` placement options.
+        mode: standard ``BaseSketchObject`` option.
 
     Metadata: ``.label``, ``.label_bbox``.
     """
