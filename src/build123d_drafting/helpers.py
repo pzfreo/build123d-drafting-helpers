@@ -44,6 +44,7 @@ from build123d import (
     Draft,
     Edge,
     ExtensionLine,
+    Face,
     GeomType,
     Location,
     Mode,
@@ -642,7 +643,7 @@ class TextBlock(_Annotation):
         if not any(line.strip() for line in lines):
             raise ValueError("TextBlock needs at least one non-empty line")
         pitch = draft.font_size * line_spacing
-        faces = []
+        faces: list[Face] = []
         for i, line in enumerate(lines):
             if not line.strip():
                 continue
