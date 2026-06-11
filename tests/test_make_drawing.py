@@ -495,13 +495,20 @@ def test_clear_annotations_keep_custom_and_unnamed_removed():
     assert len(dwg.annotations) == 2  # unnamed leader removed too
 
 
+@pytest.fixture(scope="module")
+def shrunk_iso_drawing():
+    # #75 fixture — NIST CTC-01-like plate at 1:5 on A3: the iso overflows at
+    # sheet scale and is auto-shrunk. Module-scoped; tests must not mutate it.
+    return build_drawing(Box(800, 450, 150), scale=0.2, page="A3")
+
+
 @pytest.mark.timeout(120)
-def test_iso_overflow_shrinks_with_nts_note():
-    # #75 — NIST CTC-01-like plate: at sheet scale the iso would run past the
-    # A3 page edge; it must be re-projected smaller and captioned NTS.
+def test_iso_overflow_shrinks_with_nts_note(shrunk_iso_drawing):
+    # #75 — at sheet scale the iso would run past the A3 page edge; it must be
+    # re-projected smaller and captioned NTS.
     from build123d_drafting.make_drawing import _iso_bbox
 
-    dwg = build_drawing(Box(800, 450, 150), scale=0.2, page="A3")
+    dwg = shrunk_iso_drawing
     labels = [getattr(a, "label", "") for a in dwg.annotations]
     assert "ISO VIEW (NTS)" in labels
     x0, y0, x1, y1 = _iso_bbox(dwg)
@@ -511,11 +518,11 @@ def test_iso_overflow_shrinks_with_nts_note():
 
 
 @pytest.mark.timeout(120)
-def test_shrunk_iso_keeps_world_to_page_mapping():
+def test_shrunk_iso_keeps_world_to_page_mapping(shrunk_iso_drawing):
     # After the NTS shrink, dwg.at("iso", ...) must still map world points to
     # the page: the centroid lands on the view centre and offsets scale by the
     # shrunk view scale, not the sheet scale.
-    dwg = build_drawing(Box(800, 450, 150), scale=0.2, page="A3")
+    dwg = shrunk_iso_drawing
     cx, cy, cz = dwg.centroid
     centre = dwg.at("iso", cx, cy, cz)
     vis, _hid = dwg.views["iso"]
