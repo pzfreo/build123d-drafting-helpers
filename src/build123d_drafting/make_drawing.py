@@ -34,9 +34,12 @@ from build123d import (
     import_step,
 )
 from OCP.BRepAdaptor import BRepAdaptor_Surface
-from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
-from OCP.TopAbs import TopAbs_Orientation
+from OCP.GeomAbs import GeomAbs_Plane
 
+from build123d_drafting.features import (
+    _full_cyls,
+    analyse_cylinders,
+)
 from build123d_drafting.helpers import (
     Centerline,
     Dimension,
@@ -98,49 +101,6 @@ def fix_svg_page_size(svg_path: str, page_w: float, page_h: float) -> None:
 # ---------------------------------------------------------------------------
 
 
-def analyse_cylinders(part):
-    """Return (z_cyls, cross_cyls) from OCP cylindrical face analysis.
-
-    Each entry is a dict with keys: diameter, area, cx, cy, cz, axis,
-    u_extent (the face's angular span in radians — partial spans are fillets),
-    axis_xyz (a point on the cylinder axis), and external (True when the face
-    is outward-facing — a boss/OD; False for a bore).
-    z_cyls: cylinders whose axis is approximately Z.
-    cross_cyls: cylinders whose axis is approximately X or Y.
-    """
-    z_cyls: list[dict] = []
-    cross_cyls: list[dict] = []
-    for face in part.faces():
-        surf = BRepAdaptor_Surface(face.wrapped)
-        if surf.GetType() != GeomAbs_Cylinder:
-            continue
-        cyl = surf.Cylinder()
-        r = cyl.Radius()
-        d = cyl.Axis().Direction()
-        ap = cyl.Axis().Location()
-        fc = face.center()
-        comps = [("x", abs(d.X())), ("y", abs(d.Y())), ("z", abs(d.Z()))]
-        ax = max(comps, key=lambda t: t[1])[0]
-        rec = dict(
-            diameter=round(r * 2, 2),
-            area=face.area,
-            cx=fc.X,
-            cy=fc.Y,
-            cz=fc.Z,
-            axis=ax,
-            u_extent=surf.LastUParameter() - surf.FirstUParameter(),
-            axis_xyz=(ap.X(), ap.Y(), ap.Z()),
-            # Outward material (boss/OD) vs bore: a right-handed cylinder's
-            # natural normal points away from the axis, so FORWARD means
-            # external — but mirroring makes the frame left-handed and flips
-            # both, so compare against the frame handedness
-            external=(face.wrapped.Orientation() == TopAbs_Orientation.TopAbs_FORWARD)
-            == cyl.Position().Direct(),
-        )
-        (z_cyls if ax == "z" else cross_cyls).append(rec)
-    return z_cyls, cross_cyls
-
-
 def dedup_diams(cyls, tol: float = 0.15) -> list:
     """Return sorted-descending deduplicated diameter list from cylinder records."""
     raw = sorted({c["diameter"] for c in cyls}, reverse=True)
@@ -158,11 +118,6 @@ def _fmt(v: float) -> str:
 
 _DIAM_RE = re.compile(r"[øØ⌀]\s*(\d+(?:\.\d+)?)")
 
-# Cylinder patches around one axis spanning less than ~half a turn in total
-# are edge blends (fillets/rounds), not holes or bosses — exclude them from
-# the feature inventory.
-_FULL_CYL_MIN_EXTENT = math.pi * 0.9
-
 # Turned-part classification (#81): a rotational part's bounding box is
 # square in XY to within _SQUARENESS_TOL, and its OD — the largest full
 # *external* Z cylinder — fills at least _OD_FILL_MIN of that envelope, with
@@ -171,25 +126,6 @@ _FULL_CYL_MIN_EXTENT = math.pi * 0.9
 _SQUARENESS_TOL = 0.05
 _OD_FILL_MIN = 0.8
 _OD_AXIS_TOL = 0.05
-
-
-def _cyl_group_key(c):
-    """Cylinder patches of one hole/boss share axis, diameter, and the axis
-    position in the plane perpendicular to it."""
-    x, y, z = c["axis_xyz"]
-    pos = {"z": (x, y), "x": (y, z), "y": (x, z)}[c["axis"]]
-    return (c["axis"], round(c["diameter"], 2), round(pos[0], 1), round(pos[1], 1))
-
-
-def _full_cyls(cyls):
-    """Only the hole/boss cylinder records — patches around one axis must
-    span at least ~half a turn in total, so lone fillet faces are excluded
-    but a bore split by a slot or keyway still counts."""
-    spans: dict = {}
-    for c in cyls:
-        key = _cyl_group_key(c)
-        spans[key] = spans.get(key, 0.0) + c["u_extent"]
-    return [c for c in cyls if spans[_cyl_group_key(c)] >= _FULL_CYL_MIN_EXTENT]
 
 
 def _is_rotational(x_size, y_size, od_diam, od_axis_offset) -> bool:

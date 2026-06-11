@@ -398,6 +398,41 @@ knows its source part, which `build_drawing` / `make_drawing` always provide.
 
 ---
 
+### `find_holes(part)` and `find_bosses(part)`
+
+Feature recognition on a solid's cylindrical faces. `find_holes` returns one
+`HoleFeature` per drilled hole — coaxial internal cylinders are grouped into stacks,
+so a drill + counterbore + spotface is **one** hole:
+
+```python
+from build123d_drafting import find_holes, find_bosses
+
+for h in find_holes(part):
+    print(h.diameter, h.depth, h.bottom, h.cbore, h.spotface)
+# 10.1 15.0 flat CounterBore(diameter=18.0, depth=6.0) CounterBore(diameter=60.0, depth=5.0)
+```
+
+- `axis` is the drilling direction (unit vector pointing into the hole), `location`
+  the axis point at the opening surface.
+- `diameter`/`depth` describe the bore itself (the deepest segment); `depth` is its
+  full-diameter extent — a drill point's cone is not included.
+- `bottom` is `"through"`, `"flat"`, `"drill_point"` (cone found at the deep end), or
+  `"unknown"`, classified by probing the face adjacent to the bottom edge.
+- A step above the bore shallower than 20 % of its diameter is reported as the
+  `spotface`, deeper as the `cbore` (both `CounterBore(diameter, depth)`).
+- Fillets never count (patches must total at least half a turn around their axis);
+  a bore split by a slot or keyway still counts. Coaxial blind holes drilled from
+  opposite faces stay separate features.
+
+`find_bosses` returns one `BossFeature(axis, location, diameter, height)` per
+external cylinder segment — including a turned part's OD; filter on diameter
+against the part envelope if you only want local bosses.
+
+Out of scope for now: countersinks (cones other than drill points), threads, and
+non-cylindrical features.
+
+---
+
 ### `find_interferences(items, *, part_bbox=None, page_bbox=None, obstacles=None)`
 
 Geometry-precise interference detection between annotation objects. Each item is
