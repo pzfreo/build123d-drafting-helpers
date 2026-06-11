@@ -17,6 +17,7 @@ from build123d_drafting import (
     Note,
     SafeDimension,
     SurfaceFinish,
+    TextBlock,
     TitleBlock,
     annotate,
     clear_page,
@@ -1858,3 +1859,113 @@ class TestNote:
         moved = n.moved(Location((10, 20, 0)))
         x0, y0, x1, y1 = moved.label_bbox
         assert x0 < 10 < x1 and y0 < 20 < y1
+
+    def test_align_anchors_at_position(self, draft):
+        # #82 — align used to re-anchor the sketch to the page origin,
+        # discarding position. It must anchor the text *at* position.
+        from build123d import Align
+
+        n = Note("LEFT", (50, 40), draft, align=(Align.MIN, Align.CENTER))
+        x0, y0, x1, y1 = n.label_bbox
+        assert x0 == pytest.approx(50, abs=0.1)
+        assert (y0 + y1) / 2 == pytest.approx(40, abs=0.1)
+        assert x1 > 50
+
+
+class TestTextBlock:
+    """TextBlock — multi-line left-aligned notes / hole tables (#82)."""
+
+    LINES = ["NOTES:", "1. BREAK ALL EDGES", "2. DEBURR"]
+
+    def test_renders_filled_text(self, draft):
+        _export_ink(TextBlock(self.LINES, (20, 100), draft))
+
+    def test_default_anchor_is_top_left(self, draft):
+        tb = TextBlock(self.LINES, (20, 100), draft)
+        x0, y0, x1, y1 = tb.label_bbox
+        assert x0 == pytest.approx(20, abs=0.1)
+        assert y1 == pytest.approx(100, abs=0.1)
+        assert x1 > x0 and y0 < y1
+
+    def test_lines_share_left_edge_and_pitch(self, draft):
+        tb = TextBlock(["NN TOP", "NN BOTTOM"], (0, 0), draft, line_spacing=2.0)
+        x0, y0, x1, y1 = tb.label_bbox
+        # 2 lines at pitch 2×font_size: block spans 1 pitch + one line height
+        assert (y1 - y0) == pytest.approx(2.0 * draft.font_size + draft.font_size, abs=1.5)
+        # both lines start with the same glyph: their leftmost faces must
+        # coincide at the block's left edge (not merely lie right of it)
+        mid_y = (y0 + y1) / 2
+        rows = {True: [], False: []}
+        for face in tb.faces():
+            bb = face.bounding_box()
+            rows[bb.center().Y > mid_y].append(bb.min.X)
+        assert min(rows[True]) == pytest.approx(x0, abs=0.05)
+        assert min(rows[False]) == pytest.approx(x0, abs=0.05)
+
+    def test_lines_share_baseline_grid(self, draft):
+        # A lowercase-only line must sit on the baseline grid, not float up
+        # to its bbox top (no ascenders ≠ higher baseline).
+        pitch = draft.font_size * 1.6
+        tb = TextBlock(["NOON", "max"], (0, 0), draft)
+        mid_y = (tb.label_bbox[1] + tb.label_bbox[3]) / 2
+        tops, bottoms = [], []
+        for face in tb.faces():
+            bb = face.bounding_box()
+            (tops if bb.center().Y > mid_y else bottoms).append(bb.min.Y)
+        assert min(tops) - min(bottoms) == pytest.approx(pitch, abs=0.05)
+
+    def test_single_annotation_metadata(self, draft):
+        tb = TextBlock(self.LINES, (20, 100), draft)
+        assert tb.label == "\n".join(self.LINES)
+
+    def test_string_input_splits_on_newlines(self, draft):
+        tb = TextBlock("NOTES:\n1. DEBURR", (20, 100), draft)
+        assert tb.label == "NOTES:\n1. DEBURR"
+
+    def test_blank_line_leaves_gap(self, draft):
+        gap = TextBlock(["A", "", "B"], (0, 0), draft)
+        no_gap = TextBlock(["A", "B"], (0, 0), draft)
+        gh = gap.label_bbox[3] - gap.label_bbox[1]
+        nh = no_gap.label_bbox[3] - no_gap.label_bbox[1]
+        assert gh > nh
+
+    def test_leading_blank_line_offsets_text(self, draft):
+        # A leading blank line must push the rendered text one pitch down
+        # from the anchor, not be collapsed away.
+        pitch = draft.font_size * 1.6
+        tb = TextBlock(["", "A"], (20, 100), draft)
+        assert tb.label_bbox[3] == pytest.approx(100, abs=0.1)
+        assert tb.bounding_box().max.Y == pytest.approx(100 - pitch, abs=0.6)
+
+    def test_rotation_is_about_the_anchor(self, draft):
+        # 90° CCW about the top-left anchor: the block extends up-right of it.
+        tb = TextBlock(["NOTES:", "1. DEBURR"], (100, 50), draft, rotation=90)
+        x0, y0, x1, y1 = tb.label_bbox
+        assert x0 == pytest.approx(100, abs=0.1)
+        assert y0 == pytest.approx(50, abs=0.1)
+        assert x1 > 100 and y1 > 50
+        bb = tb.bounding_box()
+        assert bb.min.X == pytest.approx(x0, abs=1.0)
+        assert bb.min.Y == pytest.approx(y0, abs=1.0)
+
+    def test_alternate_anchor_corner(self, draft):
+        from build123d import Align
+
+        tb = TextBlock(self.LINES, (200, 20), draft, align=(Align.MAX, Align.MIN))
+        x0, y0, x1, y1 = tb.label_bbox
+        assert x1 == pytest.approx(200, abs=0.1)
+        assert y0 == pytest.approx(20, abs=0.1)
+
+    def test_rejects_empty(self, draft):
+        with pytest.raises(ValueError):
+            TextBlock([], (0, 0), draft)
+        with pytest.raises(ValueError):
+            TextBlock(["", "  "], (0, 0), draft)
+
+    def test_lint_treats_block_as_one_annotation(self, draft):
+        # Two blocks apart on the page: no overlap issues from intra-block lines.
+        set_page(297, 210)
+        a = TextBlock(self.LINES, (20, 100), draft)
+        b = TextBlock(["HOLE TABLE", "A1 ø5 (10,10)"], (150, 100), draft)
+        issues = lint_drawing([a, b])
+        assert issues == []

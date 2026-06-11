@@ -35,11 +35,13 @@ from build123d import (
 )
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
+from OCP.TopAbs import TopAbs_Orientation
 
 from build123d_drafting.helpers import (
     Centerline,
     Dimension,
     Leader,
+    LintIssue,
     Note,
     TitleBlock,
     ViewCoordinates,
@@ -99,7 +101,10 @@ def fix_svg_page_size(svg_path: str, page_w: float, page_h: float) -> None:
 def analyse_cylinders(part):
     """Return (z_cyls, cross_cyls) from OCP cylindrical face analysis.
 
-    Each entry is a dict with keys: diameter, area, cx, cy, cz, axis.
+    Each entry is a dict with keys: diameter, area, cx, cy, cz, axis,
+    u_extent (the face's angular span in radians — partial spans are fillets),
+    axis_xyz (a point on the cylinder axis), and external (True when the face
+    is outward-facing — a boss/OD; False for a bore).
     z_cyls: cylinders whose axis is approximately Z.
     cross_cyls: cylinders whose axis is approximately X or Y.
     """
@@ -112,6 +117,7 @@ def analyse_cylinders(part):
         cyl = surf.Cylinder()
         r = cyl.Radius()
         d = cyl.Axis().Direction()
+        ap = cyl.Axis().Location()
         fc = face.center()
         comps = [("x", abs(d.X())), ("y", abs(d.Y())), ("z", abs(d.Z()))]
         ax = max(comps, key=lambda t: t[1])[0]
@@ -122,6 +128,14 @@ def analyse_cylinders(part):
             cy=fc.Y,
             cz=fc.Z,
             axis=ax,
+            u_extent=surf.LastUParameter() - surf.FirstUParameter(),
+            axis_xyz=(ap.X(), ap.Y(), ap.Z()),
+            # Outward material (boss/OD) vs bore: a right-handed cylinder's
+            # natural normal points away from the axis, so FORWARD means
+            # external — but mirroring makes the frame left-handed and flips
+            # both, so compare against the frame handedness
+            external=(face.wrapped.Orientation() == TopAbs_Orientation.TopAbs_FORWARD)
+            == cyl.Position().Direct(),
         )
         (z_cyls if ax == "z" else cross_cyls).append(rec)
     return z_cyls, cross_cyls
@@ -140,6 +154,103 @@ def dedup_diams(cyls, tol: float = 0.15) -> list:
 def _fmt(v: float) -> str:
     """Format a float as integer string if whole, otherwise 1 dp."""
     return str(int(v)) if v == int(v) else f"{v:.1f}"
+
+
+_DIAM_RE = re.compile(r"[øØ⌀]\s*(\d+(?:\.\d+)?)")
+
+# Cylinder patches around one axis spanning less than ~half a turn in total
+# are edge blends (fillets/rounds), not holes or bosses — exclude them from
+# the feature inventory.
+_FULL_CYL_MIN_EXTENT = math.pi * 0.9
+
+# Turned-part classification (#81): a rotational part's bounding box is
+# square in XY to within _SQUARENESS_TOL, and its OD — the largest full
+# *external* Z cylinder — fills at least _OD_FILL_MIN of that envelope, with
+# its axis within _OD_AXIS_TOL of the envelope centre. Anything else is
+# prismatic — its Z cylinders are holes or local bosses, not an OD.
+_SQUARENESS_TOL = 0.05
+_OD_FILL_MIN = 0.8
+_OD_AXIS_TOL = 0.05
+
+
+def _cyl_group_key(c):
+    """Cylinder patches of one hole/boss share axis, diameter, and the axis
+    position in the plane perpendicular to it."""
+    x, y, z = c["axis_xyz"]
+    pos = {"z": (x, y), "x": (y, z), "y": (x, z)}[c["axis"]]
+    return (c["axis"], round(c["diameter"], 2), round(pos[0], 1), round(pos[1], 1))
+
+
+def _full_cyls(cyls):
+    """Only the hole/boss cylinder records — patches around one axis must
+    span at least ~half a turn in total, so lone fillet faces are excluded
+    but a bore split by a slot or keyway still counts."""
+    spans: dict = {}
+    for c in cyls:
+        key = _cyl_group_key(c)
+        spans[key] = spans.get(key, 0.0) + c["u_extent"]
+    return [c for c in cyls if spans[_cyl_group_key(c)] >= _FULL_CYL_MIN_EXTENT]
+
+
+def _is_rotational(x_size, y_size, od_diam, od_axis_offset) -> bool:
+    """True for turned parts: an outward-facing Z cylinder, concentric with
+    the bounding box, filling a square envelope.
+
+    ``od_diam`` is the largest full *external* Z-cylinder diameter (``None``
+    when there is none — bores never qualify as an OD) and
+    ``od_axis_offset`` that cylinder's axis distance from the bbox centre.
+    """
+    if od_diam is None:
+        return False
+    envelope = max(x_size, y_size)
+    return (
+        abs(x_size - y_size) <= _SQUARENESS_TOL * envelope
+        and od_diam >= _OD_FILL_MIN * envelope
+        and od_axis_offset <= _OD_AXIS_TOL * envelope
+    )
+
+
+def lint_feature_coverage(part, annotations, tol: float = 0.15, cyls=None) -> list:
+    """Coarse completeness check: report part diameters with no callout (#80).
+
+    Builds a feature inventory from *part*'s hole/boss diameters (cylinder
+    patches spanning at least ~half a turn around their axis in total, so
+    fillets are ignored) and diffs it against every ø value mentioned in the
+    annotations' labels, plus the structured ``covers_diameters`` metadata on
+    annotations that draw their values geometrically (e.g. ``HoleCallout``).
+    Radius callouts are *not* counted — "R5 TYP" fillet notes would otherwise
+    mask an undimensioned ø10 bore. Title blocks are skipped — part numbers
+    like "BRACKET R8" are not callouts. Each uncovered diameter yields one
+    ``feature_not_dimensioned`` warning.
+
+    ``cyls`` accepts a precomputed ``analyse_cylinders(part)`` result so
+    repeated lint runs need not re-scan the solid.
+
+    This checks *size* coverage only; location coverage needs feature
+    recognition and is out of scope.
+    """
+    z_cyls, cross_cyls = cyls if cyls is not None else analyse_cylinders(part)
+    inventory = dedup_diams(_full_cyls(z_cyls + cross_cyls), tol=tol)
+
+    mentioned: set[float] = set()
+    for ann in annotations:
+        if isinstance(ann, TitleBlock):
+            continue
+        label = getattr(ann, "label", None) or ""
+        for m in _DIAM_RE.finditer(label):
+            mentioned.add(float(m.group(1)))
+        for v in getattr(ann, "covers_diameters", ()):
+            mentioned.add(float(v))
+
+    return [
+        LintIssue(
+            severity="warning",
+            code="feature_not_dimensioned",
+            message=f"cylindrical feature ø{_fmt(d)} has no diameter callout on the sheet",
+        )
+        for d in inventory
+        if not any(abs(d - v) <= tol for v in mentioned)
+    ]
 
 
 def analyse_face_levels(part, tol: float = 0.5) -> list:
@@ -323,12 +434,24 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     _log.info("Loaded %s  bbox: %.2f × %.2f × %.2f mm", src, x_size, y_size, z_size)
 
     z_cyls, cross_cyls = analyse_cylinders(part)
-    z_diams = dedup_diams(z_cyls)
-    cross_diams = dedup_diams(cross_cyls)
+    # Partial (fillet) faces are not features: they would pollute the OD,
+    # the bore leaders, and the rotational classification alike (#81)
+    full_z = _full_cyls(z_cyls)
+    z_diams = dedup_diams(full_z)
+    cross_diams = dedup_diams(_full_cyls(cross_cyls))
 
     _log.info("Z-axis diameters: %s", z_diams)
     if cross_diams:
         _log.info("Cross-hole diams: %s", cross_diams)
+
+    od_cyl = max((c for c in full_z if c["external"]), key=lambda c: c["diameter"], default=None)
+    od_diam = od_cyl["diameter"] if od_cyl else None
+    od_axis_offset = (
+        math.hypot(od_cyl["axis_xyz"][0] - cx, od_cyl["axis_xyz"][1] - cy) if od_cyl else 0.0
+    )
+    is_rotational = _is_rotational(x_size, y_size, od_diam, od_axis_offset)
+    if z_diams and not is_rotational:
+        _log.info("Part classified prismatic; skipping OD/centreline/bore annotations")
 
     SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(x_size, y_size, z_size, scale=scale, page=page)
     DIM_PAD = _DIM_PAD
@@ -391,6 +514,9 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
         bbox_max=bbox_max,
         z_diams=z_diams,
         cross_diams=cross_diams,
+        cyls=(z_cyls, cross_cyls),
+        od_diam=od_diam,
+        is_rotational=is_rotational,
         step_zs=step_zs,
         sv_right=sv_right,
         iso_right_limit=iso_right_limit,
@@ -442,10 +568,31 @@ class Drawing:
         centroid: unscaled centroid ``(x, y, z)``.
         views: ``{name: (visible_compound, hidden_compound_or_None)}``.
         annotations: ordered list of annotation objects (mutable).
+        part: the source solid, when known — enables the feature-coverage lint.
+
+    The constructor also accepts ``cyls``, a precomputed
+    ``analyse_cylinders(part)`` result (cached privately; computed lazily on
+    first :meth:`lint` otherwise).
     """
 
-    def __init__(self, *, scale, page_w, page_h, tb_w, draft, look_at, dist, centroid, out):
+    def __init__(
+        self,
+        *,
+        scale,
+        page_w,
+        page_h,
+        tb_w,
+        draft,
+        look_at,
+        dist,
+        centroid,
+        out,
+        part=None,
+        cyls=None,
+    ):
         self.scale = scale
+        self.part = part
+        self._cyl_cache = cyls
         self.page_w = page_w
         self.page_h = page_h
         self.tb_w = tb_w
@@ -551,10 +698,18 @@ class Drawing:
 
     # -- output ---------------------------------------------------------------
     def lint(self):
-        """Lint all annotations against all views; returns the list of issues."""
+        """Lint all annotations against all views; returns the list of issues.
+
+        When :attr:`part` is set, also runs :func:`lint_feature_coverage`.
+        """
         set_page(self.page_w, self.page_h, margin=10)
         view_shapes = [vis for vis, _ in self.views.values()]
-        return lint_drawing(self.annotations, drawing_scale=self.scale, view_shapes=view_shapes)
+        issues = lint_drawing(self.annotations, drawing_scale=self.scale, view_shapes=view_shapes)
+        if self.part is not None:
+            if self._cyl_cache is None:
+                self._cyl_cache = analyse_cylinders(self.part)
+            issues += lint_feature_coverage(self.part, self.annotations, cyls=self._cyl_cache)
+        return issues
 
     def export(self, out=None):
         """Lint, then write SVG and DXF. Returns ``(svg_path, dxf_path)``."""
@@ -580,12 +735,7 @@ class Drawing:
         svg.add_layer("part", line_color=blk, line_weight=0.5)
         svg.add_layer("hidden", line_color=grey, line_weight=0.25, line_type=LineType.HIDDEN)
         svg.add_layer("dims", line_color=blue, fill_color=blue, line_weight=0.05)
-        for vis, hid in self.views.values():
-            svg.add_shape(vis, layer="part")
-            if hid:
-                svg.add_shape(hid, layer="hidden")
-        for ann in self.annotations:
-            svg.add_shape(ann, layer="dims")
+        self._add_shapes(svg)
         svg_path = out + ".svg"
         svg.write(svg_path)
         fix_svg_page_size(svg_path, self.page_w, self.page_h)
@@ -595,12 +745,7 @@ class Drawing:
         dxf.add_layer("part", line_weight=0.5)
         dxf.add_layer("hidden", line_weight=0.25)
         dxf.add_layer("dims", line_weight=0.05)
-        for vis, hid in self.views.values():
-            dxf.add_shape(vis, layer="part")
-            if hid:
-                dxf.add_shape(hid, layer="hidden")
-        for ann in self.annotations:
-            dxf.add_shape(ann, layer="dims")
+        self._add_shapes(dxf)
         dxf_path = out + ".dxf"
         dxf.write(dxf_path)
         _log.info("DXF → %s", dxf_path)
@@ -608,6 +753,73 @@ class Drawing:
         self.svg_path = svg_path
         self.dxf_path = dxf_path
         return svg_path, dxf_path
+
+    def _add_shapes(self, exporter):
+        """Add every view layer and annotation to *exporter* with error context."""
+        for name, (vis, hid) in self.views.items():
+            _export_shape(exporter, vis, "part", f"view {name!r}")
+            if hid:
+                _export_shape(exporter, hid, "hidden", f"view {name!r}")
+        for ann in self.annotations:
+            label = getattr(ann, "label", "") or type(ann).__name__
+            _export_shape(exporter, ann, "dims", f"annotation {label!r}")
+
+
+def _elements(shape):
+    """Decompose *shape* for export retry: faces plus any loose edges."""
+    faces = list(shape.faces())
+    if not faces:
+        return list(shape.edges())
+    owned = {e for f in faces for e in f.edges()}
+    return faces + [e for e in shape.edges() if e not in owned]
+
+
+def _export_shape(exporter, shape, layer, ctx):
+    """Add *shape* to *exporter*, degrading element-by-element on failure.
+
+    build123d's exporters abort the whole export on the first edge whose
+    curve cannot be approximated (a bare ``AssertionError`` from OCCT, #83).
+    Instead, drop only the offending elements with a warning naming the
+    view/layer, and raise (with that context) only if nothing exported.
+
+    ``ExportSVG.add_shape`` is atomic — it appends converted elements only
+    after the whole shape succeeds — so the shape is tried in one call first.
+    ``ExportDXF`` writes edge-by-edge as it converts, so a mid-shape failure
+    would leave partial output that a blind retry duplicates; for it (and any
+    unknown exporter) every element is added individually from the start.
+    """
+    first_err = None
+    if isinstance(exporter, ExportSVG):
+        try:
+            exporter.add_shape(shape, layer=layer)
+            return
+        except Exception as exc:
+            first_err = exc
+            _log.warning(
+                "%s (layer %r) failed to export as one shape: %s — retrying element-wise",
+                ctx,
+                layer,
+                exc,
+            )
+    elements = _elements(shape)
+    skipped = 0
+    for element in elements:
+        try:
+            exporter.add_shape(element, layer=layer)
+        except Exception as exc:
+            first_err = first_err or exc
+            skipped += 1
+            _log.debug("%s (layer %r): element failed to convert: %s", ctx, layer, exc)
+    if skipped == len(elements) and first_err is not None:
+        raise RuntimeError(f"{ctx} (layer {layer!r}): nothing could be exported") from first_err
+    if skipped:
+        _log.warning(
+            "%s (layer %r): skipped %d of %d elements that failed to convert",
+            ctx,
+            layer,
+            skipped,
+            len(elements),
+        )
 
 
 def _auto_annotate(dwg, a):
@@ -639,9 +851,11 @@ def _auto_annotate(dwg, a):
         "dim_height",
     )
 
-    # Outer diameter — only for parts with cylindrical faces
-    if a.z_diams:
-        od = a.z_diams[0]
+    # Outer diameter — only for rotational (turned) parts, and from the
+    # classified external OD cylinder, never a bore that happens to be the
+    # largest diameter (#81)
+    if a.is_rotational:
+        od = a.od_diam
         dwg.add(
             Dimension(
                 (FX(a.cx - od / 2), FZ(a.bb.max.Z) + 2, 0),
@@ -669,25 +883,28 @@ def _auto_annotate(dwg, a):
             "centerline_side",
         )
 
-    # Additional Z-axis bore leaders to the left of the front view
-    left_edge = FX(a.bb.min.X)
-    left_space = left_edge - a.margin
-    if left_space >= a.DIM_PAD and len(a.z_diams) > 1:
-        ldr_length = a.DIM_PAD * 0.6
-        elbow_x = left_edge - ldr_length
-        for i, d in enumerate(a.z_diams[1:4]):
-            tip_z = FZ(a.cz) + (i - 1) * 10
-            dwg.add(
-                Leader(
-                    tip=(FX(a.cx - d / 2), tip_z, 0),
-                    elbow=(elbow_x, tip_z, 0),
-                    label=f"ø{_fmt(d)}",
-                    draft=draft,
-                ),
-                f"ldr_z{i}",
-            )
-    elif len(a.z_diams) > 1:
-        _log.info("Additional diameters %s not annotated (insufficient left margin)", a.z_diams[1:])
+    # Z-axis bore leaders to the left of the front view — these assume bores
+    # concentric with the rotation axis, so rotational only (#81)
+    bores = [d for d in a.z_diams if d != a.od_diam]
+    if a.is_rotational and bores:
+        left_edge = FX(a.bb.min.X)
+        left_space = left_edge - a.margin
+        if left_space >= a.DIM_PAD:
+            ldr_length = a.DIM_PAD * 0.6
+            elbow_x = left_edge - ldr_length
+            for i, d in enumerate(bores[:3]):
+                tip_z = FZ(a.cz) + (i - 1) * 10
+                dwg.add(
+                    Leader(
+                        tip=(FX(a.cx - d / 2), tip_z, 0),
+                        elbow=(elbow_x, tip_z, 0),
+                        label=f"ø{_fmt(d)}",
+                        draft=draft,
+                    ),
+                    f"ldr_z{i}",
+                )
+        else:
+            _log.info("Additional diameters %s not annotated (insufficient left margin)", bores)
 
     if a.cross_diams:
         _log.info(
@@ -901,6 +1118,8 @@ def build_drawing(
         dist=dist,
         centroid=(a.cx, a.cy, a.cz),
         out=out,
+        part=a.part,
+        cyls=a.cyls,
     )
 
     part_s = a.part.scale(a.SCALE)
@@ -1059,7 +1278,7 @@ def _write_script(a) -> str:
         "#   from build123d_drafting import Leader\n"
         "#   dwg.add(Leader(tip=dwg.at('front', 10, 0, 5), elbow=(8, 40, 0),\n"
         "#                  label='ø4 BORE', draft=dwg.draft), 'ldr_bore')\n"
-        "#   dwg.remove('dim_od')\n"
+        "#   dwg.remove('dim_height')\n"
         "\n"
         "# ── Export ────────────────────────────────────────────────────────────────────\n"
         "svg_path, dxf_path = dwg.export(_stem)\n"

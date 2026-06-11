@@ -3,17 +3,20 @@
 from pathlib import Path
 
 import pytest
-from build123d import Box, Cylinder, export_step
+from build123d import Box, Compound, Cylinder, Edge, Pos, export_step
 
 from build123d_drafting import Drawing, Leader, ViewCoordinates, build_drawing, view_axes
 from build123d_drafting.make_drawing import (
+    _export_shape,
     _fits,
     _fmt,
+    _is_rotational,
     analyse_cylinders,
     analyse_face_levels,
     choose_scale,
     dedup_diams,
     generate_script,
+    lint_feature_coverage,
     make_drawing,
 )
 
@@ -603,3 +606,310 @@ def test_generate_script_emits_build_drawing(tmp_path):
     assert "build_drawing(" in content
     assert "dwg.export(" in content
     assert "Customise here" in content
+
+
+# ---------------------------------------------------------------------------
+# Part classification (#81) — prismatic parts skip turned-part annotations
+# ---------------------------------------------------------------------------
+
+
+class TestPrismaticClassification:
+    @pytest.mark.timeout(60)
+    def test_prismatic_part_with_bores_skips_turned_annotations(self):
+        # A housing-like plate: Z-axis bores exist, but they are holes — not
+        # an OD. dim_od / centrelines / ldr_z* would all be wrong.
+        part = (
+            Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(5, 30) - Pos(-30, -15, 0) * Cylinder(8, 30)
+        )
+        dwg = build_drawing(part)
+        assert "dim_od" not in dwg._named
+        assert "centerline_front" not in dwg._named
+        assert "centerline_side" not in dwg._named
+        assert not any(name.startswith("ldr_z") for name in dwg._named)
+
+    @pytest.mark.timeout(60)
+    def test_rotational_part_keeps_turned_annotations(self):
+        dwg = build_drawing(Cylinder(30, 40) - Cylinder(10, 40))
+        assert "dim_od" in dwg._named
+        assert "centerline_front" in dwg._named
+        assert "ldr_z0" in dwg._named
+
+    @pytest.mark.timeout(60)
+    def test_corner_fillets_do_not_make_a_plate_rotational(self):
+        # Big quarter-cylinder corner fillets on a square plate must not be
+        # mistaken for an OD.
+        from build123d import Axis, fillet
+
+        box = Box(60, 60, 20)
+        part = fillet(box.edges().filter_by(Axis.Z), 25)
+        dwg = build_drawing(part)
+        assert "dim_od" not in dwg._named
+
+
+# ---------------------------------------------------------------------------
+# Export fallback (#83) — element-wise retry with view/layer context
+# ---------------------------------------------------------------------------
+
+
+class _FlakyExporter:
+    """Stand-in exporter: rejects multi-element shapes (or everything)."""
+
+    def __init__(self, fail_all=False):
+        self.added = []
+        self.fail_all = fail_all
+
+    def add_shape(self, shape, layer=None):
+        if self.fail_all:
+            raise AssertionError("Constraint failed")
+        elements = shape.faces() or shape.edges()
+        if len(elements) > 1:
+            raise AssertionError("Constraint failed")
+        self.added.append(shape)
+
+
+class TestExportShapeFallback:
+    def test_compound_falls_back_to_edges(self):
+        edges = Compound(
+            [
+                Edge.make_line((0, 0, 0), (1, 0, 0)),
+                Edge.make_line((0, 1, 0), (1, 1, 0)),
+            ]
+        )
+        exporter = _FlakyExporter()
+        _export_shape(exporter, edges, "hidden", "view 'iso'")
+        assert len(exporter.added) == 2
+
+    def test_all_elements_failing_raises_with_context(self):
+        edges = Compound([Edge.make_line((0, 0, 0), (1, 0, 0))])
+        with pytest.raises(RuntimeError, match=r"view 'iso' \(layer 'hidden'\)"):
+            _export_shape(_FlakyExporter(fail_all=True), edges, "hidden", "view 'iso'")
+
+    def test_annotation_falls_back_to_faces(self):
+        from build123d import Draft
+
+        from build123d_drafting import Note
+
+        note = Note("AB", (10, 10), Draft(font_size=3.0))  # two glyphs → ≥2 faces
+        exporter = _FlakyExporter()
+        _export_shape(exporter, note, "dims", "annotation 'AB'")
+        assert len(exporter.added) == len(note.faces())
+
+    def test_mixed_faces_and_loose_edges_all_exported(self):
+        # A compound mixing text faces with bare stroke edges must not lose
+        # the edges in the element-wise path.
+        from build123d import Text
+
+        mixed = Compound([*Text("A", 3).faces(), Edge.make_line((5, 5, 0), (9, 5, 0))])
+        exporter = _FlakyExporter()
+        _export_shape(exporter, mixed, "dims", "annotation 'mixed'")
+        assert len(exporter.added) == len(mixed.faces()) + 1
+
+    def test_svg_exporter_failure_raises_when_nothing_exports(self, monkeypatch):
+        # Atomic (SVG) path: whole-shape add fails and the shape decomposes
+        # to nothing — the original error must surface, not be swallowed.
+        from build123d import ExportSVG
+
+        svg = ExportSVG()
+        svg.add_layer("part")
+
+        def boom(self, shape, layer="", **kwargs):
+            raise AssertionError("Constraint failed")
+
+        monkeypatch.setattr(ExportSVG, "add_shape", boom)
+        with pytest.raises(RuntimeError, match="nothing could be exported"):
+            _export_shape(svg, Compound([]), "part", "view 'iso'")
+
+    @pytest.mark.timeout(60)
+    def test_export_survives_one_bad_compound(self, tmp_path, monkeypatch):
+        # Simulate #83: OCCT raises a bare AssertionError for one view
+        # compound. export() must degrade element-wise and still write files.
+        from build123d import ExportSVG
+
+        dwg = build_drawing(Box(30, 20, 10))
+        real = ExportSVG.add_shape
+        state = {"tripped": False}
+
+        def flaky(self, shape, layer="default", **kwargs):
+            if not state["tripped"] and layer == "part":
+                state["tripped"] = True
+                raise AssertionError("Constraint failed")
+            return real(self, shape, layer=layer, **kwargs)
+
+        monkeypatch.setattr(ExportSVG, "add_shape", flaky)
+        svg, dxf = dwg.export(str(tmp_path / "f"))
+        assert Path(svg).exists() and Path(dxf).exists()
+
+
+# ---------------------------------------------------------------------------
+# Feature-coverage lint (#80) — size coverage of hole/boss diameters
+# ---------------------------------------------------------------------------
+
+
+class TestLintFeatureCoverage:
+    @pytest.mark.timeout(60)
+    def test_uncovered_bore_is_flagged(self):
+        part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(4, 30)
+        issues = lint_feature_coverage(part, [])
+        assert [i.code for i in issues] == ["feature_not_dimensioned"]
+        assert "ø8" in issues[0].message
+        assert issues[0].severity == "warning"
+
+    @pytest.mark.timeout(60)
+    def test_diameter_callout_covers_feature(self):
+        from build123d import Draft
+
+        from build123d_drafting import Note
+
+        part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(4, 30)
+        ann = Note("4× ø8 THRU", (10, 10), Draft(font_size=3.0))
+        assert lint_feature_coverage(part, [ann]) == []
+
+    @pytest.mark.timeout(60)
+    def test_radius_note_does_not_cover(self):
+        # An "R4 TYP" fillet note must not mask an undimensioned ø8 bore.
+        from build123d import Draft
+
+        from build123d_drafting import Note
+
+        part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(4, 30)
+        ann = Note("R4 TYP", (10, 10), Draft(font_size=3.0))
+        assert [i.code for i in lint_feature_coverage(part, [ann])] == ["feature_not_dimensioned"]
+
+    @pytest.mark.timeout(60)
+    def test_slot_split_bore_is_still_a_feature(self):
+        # A bore intersected by a slot leaves cylinder patches under half a
+        # turn each — together they are still one undimensioned ø10 hole.
+        part = Box(60, 40, 10) - Cylinder(5, 12) - Box(60, 6, 12)
+        issues = lint_feature_coverage(part, [])
+        assert any("ø10" in i.message for i in issues)
+
+    @pytest.mark.timeout(60)
+    def test_hole_callout_accepts_string_diameter(self):
+        from build123d_drafting import HoleCallout
+
+        callout = HoleCallout("8.5 H7", through=True)
+        assert callout.covers_diameters == (8.5,)
+
+    @pytest.mark.timeout(60)
+    def test_fillets_are_not_features(self):
+        from build123d import Axis, fillet
+
+        box = Box(60, 40, 20)
+        part = fillet(box.edges().filter_by(Axis.Z), 3)
+        assert lint_feature_coverage(part, []) == []
+
+    @pytest.mark.timeout(60)
+    def test_drawing_lint_reports_unannotated_bore(self):
+        # Prismatic bores are no longer auto-annotated (#81), so coverage
+        # lint must surface them as the missing-dimension signal (#80).
+        part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(5, 30)
+        dwg = build_drawing(part)
+        codes = [i.code for i in dwg.lint()]
+        assert "feature_not_dimensioned" in codes
+
+    @pytest.mark.timeout(60)
+    def test_drawing_lint_clean_for_annotated_rotational_part(self):
+        dwg = build_drawing(Cylinder(15, 40) - Cylinder(5, 40))
+        assert [i for i in dwg.lint() if i.code == "feature_not_dimensioned"] == []
+
+    @pytest.mark.timeout(60)
+    def test_title_block_text_is_not_a_callout(self):
+        # "BRACKET R8" in the title must not mark ø16 as covered.
+        from build123d import Draft
+
+        from build123d_drafting import TitleBlock
+
+        part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(8, 30)
+        tb = TitleBlock("BRACKET R8", "DWG-1", draft=Draft(font_size=3.0))
+        issues = lint_feature_coverage(part, [tb])
+        assert [i.code for i in issues] == ["feature_not_dimensioned"]
+
+    @pytest.mark.timeout(60)
+    def test_hole_callout_covers_via_structured_metadata(self):
+        # HoleCallout draws its ø glyphs geometrically (label is "") — it must
+        # still count as coverage.
+        from build123d_drafting import HoleCallout
+
+        part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(4.25, 30)
+        callout = HoleCallout(8.5, count=4, through=True)
+        assert lint_feature_coverage(part, [callout]) == []
+
+
+class TestIsRotational:
+    def test_plain_cylinder(self):
+        assert _is_rotational(30.0, 30.0, 30.0, 0.0)
+
+    def test_prismatic_envelope(self):
+        assert not _is_rotational(100.0, 60.0, 24.0, 0.0)
+
+    def test_small_boss_on_square_plate(self):
+        assert not _is_rotational(100.0, 100.0, 40.0, 0.0)
+
+    def test_off_centre_boss(self):
+        assert not _is_rotational(100.0, 100.0, 84.0, 8.0)
+
+    def test_no_external_cylinder(self):
+        # Bores never qualify as an OD — od_diam is None for hole-only parts
+        assert not _is_rotational(100.0, 100.0, None, 0.0)
+
+    @pytest.mark.timeout(60)
+    def test_square_plate_with_big_bore_is_prismatic(self):
+        # ø85 bore in a 100-square plate: fills the envelope and is
+        # concentric, but it is a hole — not an OD.
+        part = Box(100, 100, 10) - Cylinder(42.5, 12)
+        dwg = build_drawing(part)
+        assert "dim_od" not in dwg._named
+
+    @pytest.mark.timeout(60)
+    def test_off_centre_bore_is_prismatic(self):
+        part = Box(100, 100, 20) - Pos(8, 0, 0) * Cylinder(42, 30)
+        dwg = build_drawing(part)
+        assert "dim_od" not in dwg._named
+
+    @pytest.mark.timeout(60)
+    def test_mirrored_turned_part_stays_rotational(self):
+        # Mirroring flips face orientations AND the cylinder frame handedness;
+        # the external/bore split must survive it.
+        from build123d import Plane, mirror
+
+        part = mirror(Cylinder(30, 40) - Cylinder(10, 40), about=Plane.XZ)
+        z_cyls, _ = analyse_cylinders(part)
+        flags = {c["diameter"]: c["external"] for c in z_cyls}
+        assert flags[60.0] is True and flags[20.0] is False
+        dwg = build_drawing(part)
+        assert "dim_od" in dwg._named
+
+    @pytest.mark.timeout(60)
+    def test_dim_od_uses_the_external_cylinder(self):
+        # An internal recess wider than the boss must not be labelled as the
+        # OD: dim_od comes from the classified external cylinder.
+        part = (
+            Box(100, 100, 20)
+            + Pos(0, 0, 20) * Cylinder(42.5, 20)
+            - Pos(0, 0, -7.5) * Cylinder(45, 5)
+        )
+        dwg = build_drawing(part)
+        assert dwg._named["dim_od"].label == "ø85"
+
+    @pytest.mark.timeout(60)
+    def test_lint_reuses_build_drawing_cylinder_analysis(self, monkeypatch):
+        # build_drawing seeds the cache, so lint()/export() must not re-scan
+        # the solid with analyse_cylinders.
+        import importlib
+
+        # (the package re-exports the make_drawing *function*, shadowing the
+        # submodule attribute, so plain `import ... as md` grabs the function)
+        md = importlib.import_module("build123d_drafting.make_drawing")
+
+        dwg = build_drawing(Box(30, 20, 10))
+        calls = {"n": 0}
+        real = md.analyse_cylinders
+
+        def counting(part):
+            calls["n"] += 1
+            return real(part)
+
+        monkeypatch.setattr(md, "analyse_cylinders", counting)
+        dwg.lint()
+        dwg.lint()
+        assert calls["n"] == 0

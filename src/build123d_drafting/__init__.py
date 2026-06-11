@@ -24,6 +24,7 @@ from build123d_drafting.helpers import (
     Note,
     SafeDimension,
     SurfaceFinish,
+    TextBlock,
     TitleBlock,
     ViewCoordinates,
     annotate,
@@ -48,6 +49,7 @@ from build123d_drafting.make_drawing import (
     dedup_diams,
     fix_svg_page_size,
     generate_script,
+    lint_feature_coverage,
     make_drawing,
 )
 
@@ -73,6 +75,7 @@ __all__ = [
     "Note",
     "SafeDimension",
     "SurfaceFinish",
+    "TextBlock",
     "TitleBlock",
     "ViewCoordinates",
     "annotate",
@@ -83,6 +86,7 @@ __all__ = [
     "format_drawing_scale",
     "leader_offset",
     "lint_drawing",
+    "lint_feature_coverage",
     "place_dims",
     "place_labels",
     "set_page",

@@ -44,6 +44,7 @@ from build123d import (
     Draft,
     Edge,
     ExtensionLine,
+    Face,
     GeomType,
     Location,
     Mode,
@@ -562,9 +563,15 @@ class Note(_Annotation):
 
     Args:
         text: the note text.
-        position: ``(x, y)`` page position of the text centre.
+        position: ``(x, y)`` page position of the text anchor.
         draft: Draft config (font and size).
-        rotation, align, mode: standard ``BaseSketchObject`` placement options.
+        rotation: degrees CCW about the page origin (``BaseSketchObject``
+            semantics — unlike :class:`TextBlock`, which rotates about its
+            anchor).
+        align: which point of the text sits at ``position`` — default
+            ``Align.CENTER`` (the text centre). E.g. ``(Align.MIN,
+            Align.CENTER)`` anchors the left edge at ``position``.
+        mode: standard ``BaseSketchObject`` option.
 
     Metadata: ``.label``, ``.label_bbox``.
     """
@@ -582,7 +589,7 @@ class Note(_Annotation):
             txt=text,
             font_size=draft.font_size,
             font=draft.font,
-            align=Align.CENTER,
+            align=Align.CENTER if align is None else align,
             mode=Mode.PRIVATE,
         ).moved(Location(Vector(position[0], position[1], 0.0)))
         tb = shape.bounding_box()
@@ -592,7 +599,99 @@ class Note(_Annotation):
             label=text,
             label_bbox=(tb.min.X, tb.min.Y, tb.max.X, tb.max.Y),
             rotation=rotation,
-            align=align,
+            align=None,
+            mode=mode,
+        )
+
+
+class TextBlock(_Annotation):
+    """A multi-line, left-aligned text block — general notes and hole tables.
+
+    Each line is rendered as text faces sharing a common left edge and a
+    common baseline grid, spaced ``line_spacing × font_size`` apart. Interior
+    spaces advance normally (column padding works); leading spaces are not
+    preserved — the left edge is each line's first glyph. The whole block
+    registers as a *single* annotation: ``.label`` is the joined text and
+    ``.label_bbox`` covers every line, so lint treats it as one keep-clear
+    region.
+
+    Args:
+        lines: text lines, top to bottom — a sequence of strings, or one
+            string split on newlines. Empty strings leave a blank line.
+        position: ``(x, y)`` page position of the block's anchor point.
+        draft: Draft config (font and size).
+        line_spacing: line pitch as a multiple of ``draft.font_size``.
+        align: which point of the block sits at ``position`` — default
+            ``(Align.MIN, Align.MAX)``, the top-left corner.
+        rotation: degrees CCW about the anchor point.
+        mode: standard ``BaseSketchObject`` option.
+
+    Metadata: ``.label``, ``.label_bbox``.
+    """
+
+    def __init__(
+        self,
+        lines,
+        position: tuple,
+        draft: Draft,
+        line_spacing: float = 1.6,
+        align=(Align.MIN, Align.MAX),
+        rotation: float = 0,
+        mode: Mode = Mode.ADD,
+    ):
+        lines = lines.splitlines() if isinstance(lines, str) else list(lines)
+        if not any(line.strip() for line in lines):
+            raise ValueError("TextBlock needs at least one non-empty line")
+        pitch = draft.font_size * line_spacing
+        faces: list[Face] = []
+        for i, line in enumerate(lines):
+            if not line.strip():
+                continue
+            faces.extend(
+                Text(
+                    txt=line,
+                    font_size=draft.font_size,
+                    font=draft.font,
+                    # Align.NONE keeps the font's raw vertical frame, so all
+                    # lines sit on a shared baseline grid (bbox-MAX alignment
+                    # would float lowercase-only lines up by the ascender gap)
+                    align=(Align.MIN, Align.NONE),
+                    mode=Mode.PRIVATE,
+                )
+                .moved(Location(Vector(0.0, -i * pitch, 0.0)))
+                .faces()
+            )
+        block = Sketch(children=faces)
+        gb = block.bounding_box()
+        # The block's logical extent spans line 0's nominal em-box top to the
+        # last line's nominal bottom (the em box is ~centred on each line's
+        # placement in the raw frame), so leading/trailing blank lines count
+        # even though they render no geometry, and descenders may dip past
+        x0, x1 = gb.min.X, gb.max.X
+        half_em = draft.font_size / 2
+        y1 = max(gb.max.Y, half_em)
+        y0 = min(gb.min.Y, -(len(lines) - 1) * pitch - half_em)
+
+        def _anchor(lo, hi, a):
+            if a == Align.MIN:
+                return -lo
+            if a == Align.MAX:
+                return -hi
+            return -(lo + hi) / 2  # CENTER
+
+        al = align if isinstance(align, (tuple, list)) else (align, align)
+        ox, oy = _anchor(x0, x1, al[0]), _anchor(y0, y1, al[1])
+        # Anchor at the origin, then rotate about the anchor and place it
+        shape = block.moved(
+            Location((position[0], position[1], 0.0), (0.0, 0.0, rotation))
+            * Location(Vector(ox, oy, 0.0))
+        )
+        super().__init__(
+            shape,
+            label="\n".join(lines),
+            label_bbox=_xf_bbox((x0 + ox, y0 + oy, x1 + ox, y1 + oy), rotation, position),
+            rotation=0,
+            align=None,
             mode=mode,
         )
 
@@ -2520,7 +2619,7 @@ class HoleCallout(_Annotation):
     Bottom-left at (0, 0).
 
     Metadata: ``.label`` (""), ``.label_bbox`` (None), ``.segments``,
-    ``.callout_width``, ``.callout_height``.
+    ``.callout_width``, ``.callout_height``, ``.covers_diameters``.
     """
 
     def __init__(
@@ -2594,6 +2693,18 @@ class HoleCallout(_Annotation):
         )
         self.callout_width = width
         self.callout_height = h
+        # The ø values this callout dimensions — drawn as glyphs, so invisible
+        # to label-text scans; lint_feature_coverage reads this instead.
+        # Values may be strings carrying tolerance/fit text ("8.5 H7"): take
+        # the leading number, and skip values with none.
+        covers = []
+        for v in (diameter, cbore_dia, csink_dia):
+            if isinstance(v, str):
+                m = re.match(r"\s*(\d+(?:\.\d+)?)", v)
+                v = float(m.group(1)) if m else None
+            if v:
+                covers.append(float(v))
+        self.covers_diameters = tuple(covers)
 
 
 # ---------------------------------------------------------------------------
