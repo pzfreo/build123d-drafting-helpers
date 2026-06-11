@@ -417,18 +417,24 @@ for h in find_holes(part):
 - `diameter`/`depth` describe the bore itself (the deepest segment); `depth` is its
   full-diameter extent — a drill point's cone is not included.
 - `bottom` is `"through"`, `"flat"`, `"drill_point"` (cone found at the deep end), or
-  `"unknown"`, classified by probing the face adjacent to the bottom edge.
+  `"unknown"`, classified by probing the face adjacent to the bottom edge. Entry
+  chamfers and countersink cones at the opening are recognised as openings, not
+  drill points.
 - A step above the bore shallower than 20 % of its diameter is reported as the
   `spotface`, deeper as the `cbore` (both `CounterBore(diameter, depth)`).
-- Fillets never count (patches must total at least half a turn around their axis);
-  a bore split by a slot or keyway still counts. Coaxial blind holes drilled from
-  opposite faces stay separate features.
+- Fillets and slot end caps never count (patches must total more than half a turn
+  around their axis); a bore split by a slot or keyway still counts, and a bore
+  interrupted by a crossing hole is recombined into one feature. Coaxial blind
+  holes drilled from opposite faces stay separate features.
 
 `find_bosses` returns one `BossFeature(axis, location, diameter, height)` per
 external cylinder segment — including a turned part's OD; filter on diameter
 against the part envelope if you only want local bosses.
 
-Out of scope for now: countersinks (cones other than drill points), threads, and
+Known approximations: a hole opening onto a slanted or curved surface is located
+at the axial extreme of its lip (depth includes the lip overhang), and steps on
+the far side of a through hole's bore (a second counterbore from the back face)
+are not reported. Out of scope for now: countersink steps, threads, and
 non-cylindrical features.
 
 ---

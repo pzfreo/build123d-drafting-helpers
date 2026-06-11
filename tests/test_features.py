@@ -3,7 +3,18 @@
 import math
 
 import pytest
-from build123d import Axis, Box, Cone, Cylinder, Plane, Pos, fillet, mirror
+from build123d import (
+    Axis,
+    Box,
+    Cone,
+    Cylinder,
+    GeomType,
+    Plane,
+    Pos,
+    chamfer,
+    fillet,
+    mirror,
+)
 
 from build123d_drafting import (
     BossFeature,
@@ -134,6 +145,91 @@ class TestFindHoles:
         assert find_bosses(Box(20, 20, 20)) == []
 
     @pytest.mark.timeout(60)
+    def test_chamfered_opening_stays_through(self):
+        # An entry chamfer is a cone at the opening — it must not read as a
+        # drill point and flip the hole's axis/location to the bottom face.
+        part = Box(60, 60, 20) - Cylinder(5, 20)
+        part = chamfer(part.edges().filter_by(GeomType.CIRCLE).sort_by(Axis.Z)[-1], 1.0)
+        (hole,) = find_holes(part)
+        assert hole.bottom == "through"
+        assert hole.axis == pytest.approx((0.0, 0.0, -1.0))
+        assert hole.location[2] == pytest.approx(9.0)  # bore lip, below the chamfer
+
+    @pytest.mark.timeout(60)
+    def test_countersunk_opening_stays_through(self):
+        part = Box(60, 60, 20) - Cylinder(2.5, 20) - Pos(0, 0, 7.5) * Cone(2.5, 5, 5)
+        (hole,) = find_holes(part)
+        assert hole.bottom == "through"
+        assert hole.axis == pytest.approx((0.0, 0.0, -1.0))
+        assert hole.diameter == pytest.approx(5.0)
+
+    @pytest.mark.timeout(60)
+    def test_double_counterbored_through_hole_keeps_the_bore(self):
+        # Counterbored from both faces: the bore is the narrowest segment,
+        # not the farthest from the opening; the far-side step is not a cbore.
+        part = (
+            Box(60, 60, 20)
+            - Cylinder(5, 20)
+            - Pos(0, 0, 7) * Cylinder(9, 6)
+            - Pos(0, 0, -7) * Cylinder(9, 6)
+        )
+        (hole,) = find_holes(part)
+        assert hole.diameter == pytest.approx(10.0)
+        assert hole.depth == pytest.approx(8.0)
+        assert hole.bottom == "through"
+        assert hole.cbore == CounterBore(diameter=18.0, depth=6.0)
+
+    @pytest.mark.timeout(60)
+    def test_rounded_end_slot_is_not_holes(self):
+        # Slot end caps span exactly half a turn — below the feature threshold
+        slot = Box(20, 10, 20) + Pos(10, 0, 0) * Cylinder(5, 20) + Pos(-10, 0, 0) * Cylinder(5, 20)
+        assert find_holes(Box(60, 60, 20) - slot) == []
+
+    @pytest.mark.timeout(60)
+    def test_bore_interrupted_by_crossing_hole_is_one_hole(self):
+        # A ø6 cross-drilling severed by the larger ø10 vertical bore must
+        # recombine into one through hole, not two short 'unknown' stubs.
+        part = Box(60, 60, 40) - Cylinder(5, 40) - Cylinder(3, 60, rotation=(0, 90, 0))
+        holes = sorted(find_holes(part), key=lambda h: h.diameter)
+        assert len(holes) == 2
+        assert holes[0].diameter == pytest.approx(6.0)
+        assert holes[0].depth == pytest.approx(60.0)
+        assert holes[0].bottom == "through"
+        assert holes[1].diameter == pytest.approx(10.0)
+        assert holes[1].depth == pytest.approx(40.0)
+
+    @pytest.mark.timeout(60)
+    def test_radial_hole_through_solid_shaft(self):
+        # The hole exits through curved OD faces — still classified through
+        part = Cylinder(15, 60, rotation=(0, 90, 0)) - Cylinder(3, 40)
+        (hole,) = find_holes(part)
+        assert hole.bottom == "through"
+        assert hole.depth == pytest.approx(30.0, abs=0.1)
+
+    @pytest.mark.timeout(60)
+    def test_closely_spaced_parallel_holes_stay_separate(self):
+        # 0.08 mm apart (PCB scale) — position bucketing must not merge them
+        part = (
+            Box(20, 20, 5)
+            - Pos(2.46, 0, 0) * Cylinder(0.15, 5)
+            - Pos(2.54, 0, 0) * Cylinder(0.15, 5)
+        )
+        assert len(find_holes(part)) == 2
+
+    @pytest.mark.timeout(60)
+    def test_slanted_counterbored_hole_groups_as_one(self):
+        # The stack key projects axis points perpendicular to the axis, so a
+        # 45° hole's faces share a line key (depth/location at slanted lips
+        # are documented approximations — only grouping is asserted here).
+        s = math.sin(math.radians(45))
+        pl = Plane(origin=(0, 0, 0), z_dir=(s, 0, math.cos(math.radians(45))))
+        part = Box(60, 60, 20) - (pl * Cylinder(5, 80)) - (pl.offset(8) * Cylinder(9, 30))
+        (hole,) = find_holes(part)
+        assert hole.diameter == pytest.approx(10.0)
+        assert hole.cbore is not None
+        assert hole.cbore.diameter == pytest.approx(18.0)
+
+    @pytest.mark.timeout(60)
     def test_turned_part_bore_is_through(self):
         (hole,) = find_holes(Cylinder(30, 40) - Cylinder(10, 40))
         assert hole.diameter == pytest.approx(20.0)
@@ -153,6 +249,16 @@ class TestFindBosses:
                 height=8.0,
             )
         ]
+
+    @pytest.mark.timeout(60)
+    def test_chamfered_free_end_keeps_orientation(self):
+        # A chamfer on the boss's free end is a cone — it must not flip the
+        # documented base→free-end axis/location contract.
+        part = Box(60, 60, 10) + Pos(0, 0, -9) * Cylinder(12, 8)
+        part = chamfer(part.edges().filter_by(GeomType.CIRCLE).sort_by(Axis.Z)[0], 1.0)
+        (boss,) = find_bosses(part)
+        assert boss.axis == pytest.approx((0.0, 0.0, -1.0))
+        assert boss.location[2] == pytest.approx(-12.0)  # free end, above the chamfer
 
     @pytest.mark.timeout(60)
     def test_turned_part_od_is_a_boss(self):

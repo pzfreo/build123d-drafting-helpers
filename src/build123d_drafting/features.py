@@ -9,9 +9,15 @@ Recognises drilled-hole and boss features from a solid's cylindrical faces:
 A *hole* is a contiguous coaxial stack of internal full cylinders — the
 drilled bore plus optional counterbore and spotface steps — with its bottom
 classified by probing the adjacent face (``through`` / ``flat`` /
-``drill_point``).  A *boss* is an external full cylinder.  Cylinder patches
-spanning less than ~half a turn (fillets/rounds) are never features, but a
-bore split by a slot or keyway still counts.
+``drill_point`` / ``unknown``).  A *boss* is an external full cylinder.
+Cylinder patches spanning half a turn or less (fillets, rounds, slot end
+caps) are never features, but a bore split by a slot or keyway still counts,
+and a bore interrupted by a crossing hole is recombined into one feature.
+
+Known approximations: a hole opening onto a slanted or curved surface is
+located at the axial extreme of its lip, and its depth includes the lip
+overhang; counterbores on the far side of a through hole's bore are not
+reported.
 
 This module also hosts the low-level cylinder analysis that
 ``make_drawing`` builds on (``analyse_cylinders``, ``_full_cyls``).
@@ -27,14 +33,16 @@ from OCP.TopAbs import TopAbs_Orientation
 
 _log = logging.getLogger(__name__)
 
-# Cylinder patches around one axis spanning less than ~half a turn in total
-# are edge blends (fillets/rounds), not holes or bosses — exclude them from
-# the feature inventory.
-_FULL_CYL_MIN_EXTENT = math.pi * 0.9
+# Cylinder patches around one axis spanning half a turn or less in total are
+# not holes or bosses: quarter-turn patches are edge blends (fillets/rounds)
+# and exactly-half-turn patches are the end caps of milled slots. Real bores
+# keep more than half a turn even when a slot or keyway splits them.
+_FULL_CYL_MIN_EXTENT = math.pi * 1.05
 
 # Coaxial segments whose axial ranges meet within this gap belong to the same
 # stack (a counterbore shoulder is an exact-touch); larger gaps are distinct
-# features (e.g. coaxial blind holes drilled from opposite faces).
+# features (e.g. coaxial blind holes drilled from opposite faces) unless the
+# gap is a crossing void (see _merge_interrupted).
 _STACK_GAP_TOL = 0.1
 
 # A counterbore-like step shallower than this fraction of its diameter is a
@@ -45,7 +53,7 @@ _SPOTFACE_MAX_RATIO = 0.2
 def analyse_cylinders(part):
     """Return (z_cyls, cross_cyls) from OCP cylindrical face analysis.
 
-    Each entry is a dict with keys: diameter, area, cx, cy, cz, axis,
+    Each entry is a dict with keys: diameter, axis (dominant axis letter),
     u_extent (the face's angular span in radians — partial spans are fillets),
     axis_xyz (a point on the cylinder axis), external (True when the face
     is outward-facing — a boss/OD; False for a bore), dir_xyz (unit axis
@@ -64,7 +72,6 @@ def analyse_cylinders(part):
         r = cyl.Radius()
         d = cyl.Axis().Direction()
         ap = cyl.Axis().Location()
-        fc = face.center()
         comps = [("x", abs(d.X())), ("y", abs(d.Y())), ("z", abs(d.Z()))]
         ax = max(comps, key=lambda t: t[1])[0]
         # Canonical direction (dominant component positive) so coaxial faces
@@ -77,10 +84,6 @@ def analyse_cylinders(part):
         s0, s1 = s_ap + sign * v0, s_ap + sign * v1
         rec = dict(
             diameter=round(r * 2, 2),
-            area=face.area,
-            cx=fc.X,
-            cy=fc.Y,
-            cz=fc.Z,
             axis=ax,
             u_extent=surf.LastUParameter() - surf.FirstUParameter(),
             axis_xyz=(ap.X(), ap.Y(), ap.Z()),
@@ -99,18 +102,30 @@ def analyse_cylinders(part):
     return z_cyls, cross_cyls
 
 
+def _line_key(c):
+    """Coaxial-stack key: axis letter plus the axis point projected onto the
+    plane perpendicular to the axis direction (so it is position-independent
+    along the axis, and exact for slanted axes too)."""
+    px, py, pz = c["axis_xyz"]
+    dx, dy, dz = c["dir_xyz"]
+    t = px * dx + py * dy + pz * dz
+    return (
+        c["axis"],
+        round(px - t * dx, 3),
+        round(py - t * dy, 3),
+        round(pz - t * dz, 3),
+    )
+
+
 def _cyl_group_key(c):
-    """Cylinder patches of one hole/boss share axis, diameter, and the axis
-    position in the plane perpendicular to it."""
-    x, y, z = c["axis_xyz"]
-    pos = {"z": (x, y), "x": (y, z), "y": (x, z)}[c["axis"]]
-    return (c["axis"], round(c["diameter"], 2), round(pos[0], 1), round(pos[1], 1))
+    """Cylinder patches of one hole/boss share an axis line and a diameter."""
+    return (*_line_key(c), round(c["diameter"], 2))
 
 
 def _full_cyls(cyls):
     """Only the hole/boss cylinder records — patches around one axis must
-    span at least ~half a turn in total, so lone fillet faces are excluded
-    but a bore split by a slot or keyway still counts."""
+    total more than half a turn, so fillet faces and slot end caps are
+    excluded but a bore split by a slot or keyway still counts."""
     spans: dict = {}
     for c in cyls:
         key = _cyl_group_key(c)
@@ -137,7 +152,7 @@ class HoleFeature:
 
     ``axis`` is the drilling direction (unit vector pointing from the opening
     into the hole) and ``location`` the axis point at the opening surface.
-    ``diameter``/``depth`` describe the bore itself — the deepest segment of
+    ``diameter``/``depth`` describe the bore itself — the narrowest segment of
     the stack — with ``depth`` its full-diameter axial extent (a drill point's
     cone is not included).  ``bottom`` is ``"through"``, ``"flat"``,
     ``"drill_point"``, or ``"unknown"`` when the adjacent geometry matches
@@ -172,31 +187,31 @@ def _unit(v):
     return tuple(0.0 if c == 0 else c for c in v)
 
 
-def _line_key(c):
-    """Coaxial-stack key: axis letter and axis position, diameter-agnostic."""
-    x, y, z = c["axis_xyz"]
-    pos = {"z": (x, y), "x": (y, z), "y": (x, z)}[c["axis"]]
-    return (c["axis"], round(pos[0], 1), round(pos[1], 1))
+def _merge_runs(items, key_fn):
+    """Group *items* by *key_fn*, then split each group into runs of
+    contiguous axial ranges (gap > _STACK_GAP_TOL starts a new run)."""
+    by_key: dict = {}
+    for item in items:
+        by_key.setdefault(key_fn(item), []).append(item)
+    runs = []
+    for group in by_key.values():
+        group.sort(key=lambda c: c["s_lo"])
+        run, hi = [group[0]], group[0]["s_hi"]
+        for c in group[1:]:
+            if c["s_lo"] <= hi + _STACK_GAP_TOL:
+                run.append(c)
+                hi = max(hi, c["s_hi"])
+            else:
+                runs.append(run)
+                run, hi = [c], c["s_hi"]
+        runs.append(run)
+    return runs
 
 
 def _segments(cyls):
     """Collapse cylinder patches into segments: one per (axis line, diameter,
     contiguous axial range). Keyway-split patches of one bore merge; coaxial
     same-diameter holes from opposite faces stay separate."""
-    by_key: dict = {}
-    for c in cyls:
-        by_key.setdefault(_cyl_group_key(c), []).append(c)
-    segments = []
-    for patches in by_key.values():
-        patches.sort(key=lambda c: c["s_lo"])
-        run = [patches[0]]
-        for c in patches[1:]:
-            if c["s_lo"] <= max(p["s_hi"] for p in run) + _STACK_GAP_TOL:
-                run.append(c)
-            else:
-                segments.append(run)
-                run = [c]
-        segments.append(run)
     return [
         dict(
             run[0],
@@ -204,7 +219,7 @@ def _segments(cyls):
             s_hi=max(p["s_hi"] for p in run),
             faces=[p["face"] for p in run],
         )
-        for run in segments
+        for run in _merge_runs(cyls, _cyl_group_key)
     ]
 
 
@@ -217,37 +232,56 @@ def _axis_point(seg, s):
     return (ax + t * dx, ay + t * dy, az + t * dz)
 
 
-def _classify_end(seg, s_end, end_dir, edge_faces):
+def _classify_end(seg, s_end, hi_end, edge_faces):
     """Classify one axial end of a cylinder segment from the face beyond it.
 
     Returns ``"open"`` (the bore exits, or the boss's free end), ``"flat"``
-    (closed by a plane facing back into the segment), ``"drill_point"``
-    (closed by a cone), or ``"unknown"``.
+    (closed by a plane facing back into the segment, or a boss's base),
+    ``"drill_point"`` (a bore closed by a cone), or ``"unknown"``.
+
+    An adjacent cone is read through the segment's internal/external context:
+    a cone whose apex lies outward of a bore's end closes it (drill point),
+    one whose apex lies inward widens it (an entry chamfer or countersink —
+    the bore is open there).  For a boss the senses flip: apex outward is a
+    chamfered free end, apex inward a base draft.
     """
+    dx, dy, dz = seg["dir_xyz"]
+    e_sign = 1.0 if hi_end else -1.0
+    # An opening edge on a slanted or curved surface dips away from the end
+    # plane (by the lip sagitta), so match edges within a margin — but stay
+    # well clear of the segment's other end.
+    margin = max(_STACK_GAP_TOL, min(0.45 * (seg["s_hi"] - seg["s_lo"]), 0.5 * seg["diameter"]))
+
     partners = []
     for face in seg["faces"]:
         for edge in face.edges():
-            ec = edge.center()
-            s_edge = ec.X * seg["dir_xyz"][0] + ec.Y * seg["dir_xyz"][1] + ec.Z * seg["dir_xyz"][2]
-            if abs(s_edge - s_end) > _STACK_GAP_TOL:
+            pts = [edge.center()] + [v.center() for v in edge.vertices()]
+            if not all(abs(p.X * dx + p.Y * dy + p.Z * dz - s_end) <= margin for p in pts):
                 continue
             for partner in edge_faces.get(edge, ()):
                 if not any(partner.is_same(f) for f in seg["faces"]):
                     partners.append(partner)
-    if not partners:
-        return "unknown"
     for partner in partners:
         surf = BRepAdaptor_Surface(partner.wrapped)
         kind = surf.GetType()
         if kind == GeomAbs_Cone:
-            return "drill_point"
+            apex = surf.Cone().Apex()
+            apex_s = apex.X() * dx + apex.Y() * dy + apex.Z() * dz
+            outward = (apex_s - s_end) * e_sign > 0
+            if not seg["external"]:
+                return "drill_point" if outward else "open"
+            return "open" if outward else "flat"
         if kind == GeomAbs_Plane:
             n = partner.normal_at(partner.center())
-            dot = n.X * end_dir[0] + n.Y * end_dir[1] + n.Z * end_dir[2]
+            dot = (n.X * dx + n.Y * dy + n.Z * dz) * e_sign
             if dot < -0.5:
                 return "flat"
             if dot > 0.5:
                 return "open"
+        elif kind == GeomAbs_Cylinder:
+            # The end breaks into (or out of) another curved wall — a radial
+            # hole exiting an OD, or a bore meeting a crossing hole.
+            return "open"
     return "unknown"
 
 
@@ -260,47 +294,59 @@ def _edge_face_map(part):
     return edge_faces
 
 
-def _stacks(segments):
-    """Group segments into contiguous coaxial stacks (one stack per hole)."""
+def _merge_interrupted(stacks, edge_faces):
+    """Recombine coaxial stacks split by a crossing void: same bore diameter
+    on both sides and neither facing end closed (a flat bottom or drill point
+    means genuinely separate holes, e.g. blind holes from opposite faces)."""
     by_line: dict = {}
-    for seg in segments:
-        by_line.setdefault(_line_key(seg), []).append(seg)
-    stacks = []
-    for segs in by_line.values():
-        segs.sort(key=lambda s: s["s_lo"])
-        run = [segs[0]]
-        for seg in segs[1:]:
-            if seg["s_lo"] <= max(s["s_hi"] for s in run) + _STACK_GAP_TOL:
-                run.append(seg)
+    for stack in stacks:
+        by_line.setdefault(_line_key(stack[0]), []).append(stack)
+    merged = []
+    for line_stacks in by_line.values():
+        line_stacks.sort(key=lambda st: min(s["s_lo"] for s in st))
+        cur = line_stacks[0]
+        for nxt in line_stacks[1:]:
+            a = max(cur, key=lambda s: s["s_hi"])
+            b = min(nxt, key=lambda s: s["s_lo"])
+            closed = ("flat", "drill_point")
+            if (
+                abs(a["diameter"] - b["diameter"]) < 0.01
+                and _classify_end(a, a["s_hi"], True, edge_faces) not in closed
+                and _classify_end(b, b["s_lo"], False, edge_faces) not in closed
+            ):
+                joined = dict(a, s_hi=b["s_hi"], faces=a["faces"] + b["faces"])
+                cur = [s for s in cur if s is not a] + [joined] + [s for s in nxt if s is not b]
             else:
-                stacks.append(run)
-                run = [seg]
-        stacks.append(run)
-    return stacks
+                merged.append(cur)
+                cur = nxt
+        merged.append(cur)
+    return merged
 
 
 def find_holes(part) -> list:
     """Recognise drilled holes on *part* (see :class:`HoleFeature`).
 
     Coaxial internal cylinders are grouped into stacks — drill + optional
-    counterbore + optional spotface become one hole.  The bottom is
-    classified by probing the face adjacent to the deep end.  Stacks with
-    more than two steps above the bore are reported best-effort (first
-    spotface-shaped and first counterbore-shaped step win).
+    counterbore + optional spotface become one hole, and a bore interrupted
+    by a crossing hole is recombined.  The bottom is classified by probing
+    the face adjacent to the deep end.  Countersinks are not recognised as
+    steps (the cone is treated as an opening); steps on the far side of the
+    bore (e.g. a second counterbore from the back face) are not reported.
     """
     z_cyls, cross_cyls = analyse_cylinders(part)
     internal = [c for c in _full_cyls(z_cyls) + _full_cyls(cross_cyls) if not c["external"]]
     if not internal:
         return []
     edge_faces = _edge_face_map(part)
+    stacks = _merge_interrupted(_merge_runs(_segments(internal), _line_key), edge_faces)
 
     holes = []
-    for stack in _stacks(_segments(internal)):
+    for stack in stacks:
         d = stack[0]["dir_xyz"]
         lo_seg = min(stack, key=lambda s: s["s_lo"])
         hi_seg = max(stack, key=lambda s: s["s_hi"])
-        lo_state = _classify_end(lo_seg, lo_seg["s_lo"], tuple(-c for c in d), edge_faces)
-        hi_state = _classify_end(hi_seg, hi_seg["s_hi"], d, edge_faces)
+        lo_state = _classify_end(lo_seg, lo_seg["s_lo"], False, edge_faces)
+        hi_state = _classify_end(hi_seg, hi_seg["s_hi"], True, edge_faces)
 
         # The opening is the open end; with both ends open (a through hole)
         # prefer the wider segment's end (counterbores sit at the opening),
@@ -315,11 +361,14 @@ def find_holes(part) -> list:
         bottom_state = lo_state if from_hi else hi_state
         bottom = {"open": "through"}.get(bottom_state, bottom_state)
 
-        # Order segments from the opening inward; the last one is the bore
+        # Order segments from the opening inward; the bore is the narrowest
+        # (not the farthest — a through hole counterbored from both sides has
+        # a step beyond the bore) and only steps on the opening side count.
         ordered = sorted(stack, key=lambda s: s["s_hi"], reverse=from_hi)
-        bore = ordered[-1]
+        bore_i = min(range(len(ordered)), key=lambda i: ordered[i]["diameter"])
+        bore = ordered[bore_i]
         cbore = spotface = None
-        for step in ordered[:-1]:
+        for step in ordered[:bore_i]:
             spec = CounterBore(step["diameter"], round(step["s_hi"] - step["s_lo"], 2))
             if spec.depth < _SPOTFACE_MAX_RATIO * spec.diameter:
                 spotface = spotface or spec
@@ -353,8 +402,8 @@ def find_bosses(part) -> list:
     bosses = []
     for seg in _segments(external):
         d = seg["dir_xyz"]
-        lo_state = _classify_end(seg, seg["s_lo"], tuple(-c for c in d), edge_faces)
-        hi_state = _classify_end(seg, seg["s_hi"], d, edge_faces)
+        lo_state = _classify_end(seg, seg["s_lo"], False, edge_faces)
+        hi_state = _classify_end(seg, seg["s_hi"], True, edge_faces)
         # The free end is the open one (its cap faces away from the segment);
         # default to the high end when both or neither are open.
         from_hi = not (lo_state == "open" and hi_state != "open")
