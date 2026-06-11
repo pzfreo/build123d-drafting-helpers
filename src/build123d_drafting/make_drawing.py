@@ -775,47 +775,64 @@ def _bbox_within(bb, region, tol: float = 0.5) -> bool:
     )
 
 
+def _project_iso(dwg, a, scale):
+    """(Re-)project the iso view at *scale* (an absolute factor, not a fraction)."""
+    la = (a.cx * scale, a.cy * scale, a.cz * scale)
+    off = (a.bbox_max * scale + 100) / math.sqrt(3)
+    dwg.add_view(
+        "iso",
+        a.part.scale(scale),
+        (la[0] + off, la[1] + off, la[2] + off),
+        (0, 0, 1),
+        (a.ISO_X, a.ISO_Y),
+        look_at=la,
+        scaled=True,
+    )
+
+
 def _fit_iso_view(dwg, a):
     """Shrink the iso view to fit its page region, captioning it NTS (#75).
 
     The layout reserves ~0.7 × bbox_max for the iso column, but the true
     projected extent can be wider (long prismatic parts), pushing the iso past
     the page edge or into the side view's dimension space. When the projected
-    iso bbox overflows the region, re-project at successive clean fractions of
-    sheet scale until it fits and add an "ISO VIEW (NTS)" caption below it.
+    iso bbox overflows the region, re-project at a clean fraction of sheet
+    scale and add an "ISO VIEW (NTS)" caption below it.
     """
     region = (a.sv_right, a.margin, a.iso_right_limit, a.PAGE_H - a.margin)
-    iso_factor = 1.0
-    for f in _ISO_SHRINK_FACTORS:
-        if _bbox_within(_iso_bbox(dwg), region):
-            break
-        iso_factor = f
-        s2 = a.SCALE * f
-        la2 = (a.cx * s2, a.cy * s2, a.cz * s2)
-        off2 = (a.bbox_max * s2 + 100) / math.sqrt(3)
-        dwg.add_view(
-            "iso",
-            a.part.scale(s2),
-            (la2[0] + off2, la2[1] + off2, la2[2] + off2),
-            (0, 0, 1),
-            (a.ISO_X, a.ISO_Y),
-            look_at=la2,
-            scaled=True,
-        )
-    if iso_factor == 1.0:
+    bb = _iso_bbox(dwg)
+    if _bbox_within(bb, region):
         return
-    if not _bbox_within(_iso_bbox(dwg), region):
-        _log.warning("Iso view still overflows its page region at %g× sheet scale", iso_factor)
-    iso_bottom = _iso_bbox(dwg)[1]
+    # Orthographic projection is linear and the view centre maps to
+    # (ISO_X, ISO_Y), so each bbox side's offset from the centre scales
+    # exactly with the shape scale — the factor needed to fit can be computed
+    # from the measured extents, costing a single re-projection.
+    ratios = [
+        avail / extent
+        for extent, avail in (
+            (a.ISO_X - bb[0], a.ISO_X - region[0]),
+            (bb[2] - a.ISO_X, region[2] - a.ISO_X),
+            (a.ISO_Y - bb[1], a.ISO_Y - region[1]),
+            (bb[3] - a.ISO_Y, region[3] - a.ISO_Y),
+        )
+        if extent > 0
+    ]
+    needed = min(ratios, default=1.0)
+    factor = next((f for f in _ISO_SHRINK_FACTORS if f <= needed), _ISO_SHRINK_FACTORS[-1])
+    _project_iso(dwg, a, a.SCALE * factor)
+    bb = _iso_bbox(dwg)
+    if not _bbox_within(bb, region):
+        _log.warning("Iso view still overflows its page region at %g× sheet scale", factor)
+    font = dwg.draft.font_size
     dwg.add(
         Note(
             "ISO VIEW (NTS)",
-            (a.ISO_X, max(iso_bottom - 6.0, a.margin + 2.0)),
+            (a.ISO_X, max(bb[1] - 2 * font, a.margin + font)),
             dwg.draft,
         ),
         "note_iso_nts",
     )
-    _log.info("Iso view shrunk to %g× sheet scale (NTS)", iso_factor)
+    _log.info("Iso view shrunk to %g× sheet scale (NTS)", factor)
 
 
 def build_drawing(
@@ -861,7 +878,6 @@ def build_drawing(
     cxs, cys, czs = a.cx * a.SCALE, a.cy * a.SCALE, a.cz * a.SCALE
     look_at = (cxs, cys, czs)
     dist = a.bbox_max * a.SCALE + 100
-    iso_off = dist / math.sqrt(3)
 
     dwg = Drawing(
         scale=a.SCALE,
@@ -879,14 +895,7 @@ def build_drawing(
     dwg.add_view("front", part_s, (cxs, cys - dist, czs), (0, 0, 1), (a.FV_X, a.FV_Y), scaled=True)
     dwg.add_view("plan", part_s, (cxs, cys, czs + dist), (0, 1, 0), (a.PV_X, a.PV_Y), scaled=True)
     dwg.add_view("side", part_s, (cxs + dist, cys, czs), (0, 0, 1), (a.SV_X, a.SV_Y), scaled=True)
-    dwg.add_view(
-        "iso",
-        part_s,
-        (cxs + iso_off, cys + iso_off, czs + iso_off),
-        (0, 0, 1),
-        (a.ISO_X, a.ISO_Y),
-        scaled=True,
-    )
+    _project_iso(dwg, a, a.SCALE)
     _fit_iso_view(dwg, a)
 
     if auto_dims:

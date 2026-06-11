@@ -1291,20 +1291,10 @@ def lint_drawing(
 
     # Page-bounds check — annotations must stay within the drawable area.
     if page_bbox is not None:
-        px0, py0, px1, py1 = page_bbox
         for item in items:
             try:
                 bb = item.bounding_box()
-                overshoots = []
-                if bb.min.X < px0:
-                    overshoots.append(f"left by {px0 - bb.min.X:.1f} mm")
-                if bb.max.X > px1:
-                    overshoots.append(f"right by {bb.max.X - px1:.1f} mm")
-                if bb.min.Y < py0:
-                    overshoots.append(f"below by {py0 - bb.min.Y:.1f} mm")
-                if bb.max.Y > py1:
-                    overshoots.append(f"above by {bb.max.Y - py1:.1f} mm")
-                for detail in overshoots:
+                for detail in _overshoots((bb.min.X, bb.min.Y, bb.max.X, bb.max.Y), page_bbox):
                     lbl = getattr(item, "label", None) or "?"
                     issues.append(
                         LintIssue(
@@ -1341,16 +1331,31 @@ def _bboxes_overlap_2d(a, b) -> bool:
     return ax0 < bx1 and ax1 > bx0 and ay0 < by1 and ay1 > by0
 
 
-def _edges_intersect_rect(edges, rect) -> bool:
-    """True if any of *edges* passes through the (min_x, min_y, max_x, max_y) rect.
+def _overshoots(bb, bounds) -> list[str]:
+    """Sides where (min_x, min_y, max_x, max_y) *bb* spills past *bounds*, as text."""
+    bx0, by0, bx1, by1 = bounds
+    out = []
+    if bb[0] < bx0:
+        out.append(f"left by {bx0 - bb[0]:.1f} mm")
+    if bb[2] > bx1:
+        out.append(f"right by {bb[2] - bx1:.1f} mm")
+    if bb[1] < by0:
+        out.append(f"below by {by0 - bb[1]:.1f} mm")
+    if bb[3] > by1:
+        out.append(f"above by {bb[3] - by1:.1f} mm")
+    return out
+
+
+def _edges_intersect_rect(edge_entries, rect) -> bool:
+    """True if any ``(edge, bbox2d)`` of *edge_entries* passes through the
+    (min_x, min_y, max_x, max_y) rect.
 
     Straight edges use exact Liang–Barsky clipping; curved edges are sampled
     at roughly 1 mm spacing. An edge whose geometry cannot be analysed counts
     as a hit, so a real overlap is never silently missed.
     """
-    for e in edges:
+    for e, eb in edge_entries:
         try:
-            eb = _bbox2d(e)
             if eb is None or not _bboxes_overlap_2d(eb, rect):
                 continue
             if e.geom_type == GeomType.LINE:
@@ -1412,7 +1417,7 @@ def _lint_view_shapes(view_shapes, ann_items, issues, page_bbox=None) -> None:
                 what = "label of annotation" if label_box is not None else "annotation"
                 if id(vs) not in edge_cache:
                     try:
-                        edge_cache[id(vs)] = list(vs.edges())
+                        edge_cache[id(vs)] = [(e, _bbox2d(e)) for e in vs.edges()]
                     except Exception:
                         edge_cache[id(vs)] = None  # unanalysable — fall back to bbox
                 edges = edge_cache[id(vs)]
@@ -1464,18 +1469,8 @@ def _lint_view_shapes(view_shapes, ann_items, issues, page_bbox=None) -> None:
 
     # #75 — views must stay within the drawable area.
     if page_bbox is not None:
-        px0, py0, px1, py1 = page_bbox
         for vname, vbb, _ in named_views:
-            overshoots = []
-            if vbb[0] < px0:
-                overshoots.append(f"left by {px0 - vbb[0]:.1f} mm")
-            if vbb[2] > px1:
-                overshoots.append(f"right by {vbb[2] - px1:.1f} mm")
-            if vbb[1] < py0:
-                overshoots.append(f"below by {py0 - vbb[1]:.1f} mm")
-            if vbb[3] > py1:
-                overshoots.append(f"above by {vbb[3] - py1:.1f} mm")
-            for detail in overshoots:
+            for detail in _overshoots(vbb, page_bbox):
                 issues.append(
                     LintIssue(
                         severity="error",
