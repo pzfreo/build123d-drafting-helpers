@@ -418,8 +418,9 @@ for h in find_holes(part):
   full-diameter extent — a drill point's cone is not included.
 - `bottom` is `"through"`, `"flat"`, `"drill_point"` (cone found at the deep end), or
   `"unknown"`, classified by probing the face adjacent to the bottom edge. Entry
-  chamfers and countersink cones at the opening are recognised as openings, not
-  drill points.
+  chamfers, lip fillets, and countersink cones at the opening are recognised as
+  openings (a filleted blind bottom reads as `"flat"`); chamfered or filleted
+  counterbore shoulders don't split the stack.
 - A step above the bore shallower than 20 % of its diameter is reported as the
   `spotface`, deeper as the `cbore` (both `CounterBore(diameter, depth)`).
 - Fillets and slot end caps never count (patches must total more than half a turn

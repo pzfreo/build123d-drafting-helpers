@@ -28,7 +28,7 @@ import math
 from dataclasses import dataclass
 
 from OCP.BRepAdaptor import BRepAdaptor_Surface
-from OCP.GeomAbs import GeomAbs_Cone, GeomAbs_Cylinder, GeomAbs_Plane
+from OCP.GeomAbs import GeomAbs_Cone, GeomAbs_Cylinder, GeomAbs_Plane, GeomAbs_Torus
 from OCP.TopAbs import TopAbs_Orientation
 
 _log = logging.getLogger(__name__)
@@ -187,23 +187,33 @@ def _unit(v):
     return tuple(0.0 if c == 0 else c for c in v)
 
 
-def _merge_runs(items, key_fn):
+def _step_gap_tol(a, b):
+    """Allowed axial gap between two coaxial stack segments: a chamfer or
+    fillet on the shoulder between steps spans at most half the diameter
+    difference (a 45° chamfer of the full step), so bridge that much."""
+    return _STACK_GAP_TOL + abs(a["diameter"] - b["diameter"]) / 2
+
+
+def _merge_runs(items, key_fn, gap_tol=None):
     """Group *items* by *key_fn*, then split each group into runs of
-    contiguous axial ranges (gap > _STACK_GAP_TOL starts a new run)."""
+    contiguous axial ranges. The allowed gap is _STACK_GAP_TOL, or
+    *gap_tol(last_item, next_item)* when given."""
     by_key: dict = {}
     for item in items:
         by_key.setdefault(key_fn(item), []).append(item)
     runs = []
     for group in by_key.values():
         group.sort(key=lambda c: c["s_lo"])
-        run, hi = [group[0]], group[0]["s_hi"]
+        run, hi, hi_item = [group[0]], group[0]["s_hi"], group[0]
         for c in group[1:]:
-            if c["s_lo"] <= hi + _STACK_GAP_TOL:
+            tol = _STACK_GAP_TOL if gap_tol is None else gap_tol(hi_item, c)
+            if c["s_lo"] <= hi + tol:
                 run.append(c)
-                hi = max(hi, c["s_hi"])
+                if c["s_hi"] > hi:
+                    hi, hi_item = c["s_hi"], c
             else:
                 runs.append(run)
-                run, hi = [c], c["s_hi"]
+                run, hi, hi_item = [c], c["s_hi"], c
         runs.append(run)
     return runs
 
@@ -271,6 +281,15 @@ def _classify_end(seg, s_end, hi_end, edge_faces):
             if not seg["external"]:
                 return "drill_point" if outward else "open"
             return "open" if outward else "flat"
+        if kind == GeomAbs_Torus:
+            # An edge fillet: one curling inward (smaller major radius than
+            # the segment) rounds a closed corner — a blind bore's bottom or
+            # a boss's base; one flaring outward rounds an opening lip or a
+            # boss's free end.
+            curls_in = surf.Torus().MajorRadius() < seg["diameter"] / 2
+            if not seg["external"]:
+                return "flat" if curls_in else "open"
+            return "open" if curls_in else "flat"
         if kind == GeomAbs_Plane:
             n = partner.normal_at(partner.center())
             dot = (n.X * dx + n.Y * dy + n.Z * dz) * e_sign
@@ -338,7 +357,9 @@ def find_holes(part) -> list:
     if not internal:
         return []
     edge_faces = _edge_face_map(part)
-    stacks = _merge_interrupted(_merge_runs(_segments(internal), _line_key), edge_faces)
+    stacks = _merge_interrupted(
+        _merge_runs(_segments(internal), _line_key, gap_tol=_step_gap_tol), edge_faces
+    )
 
     holes = []
     for stack in stacks:
@@ -374,12 +395,17 @@ def find_holes(part) -> list:
                 spotface = spotface or spec
             else:
                 cbore = cbore or spec
+        # The bore's depth spans every segment at the bore diameter — a
+        # coaxial groove (e.g. an O-ring gland) splits the bore into lands
+        # but does not shorten the hole.
+        bore_segs = [s for s in stack if abs(s["diameter"] - bore["diameter"]) < 0.01]
+        depth = max(s["s_hi"] for s in bore_segs) - min(s["s_lo"] for s in bore_segs)
         holes.append(
             HoleFeature(
                 axis=_unit(tuple(-c for c in d) if from_hi else d),
                 location=_axis_point(opening_seg, opening_s),
                 diameter=bore["diameter"],
-                depth=round(bore["s_hi"] - bore["s_lo"], 2),
+                depth=round(depth, 2),
                 bottom=bottom,
                 cbore=cbore,
                 spotface=spotface,

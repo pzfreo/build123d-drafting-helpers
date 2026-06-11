@@ -230,6 +230,62 @@ class TestFindHoles:
         assert hole.cbore.diameter == pytest.approx(18.0)
 
     @pytest.mark.timeout(60)
+    def test_chamfered_counterbore_shoulder_stays_one_hole(self):
+        # A deburr chamfer on the cbore shoulder creates an axial gap between
+        # the cbore and bore segments — the stack must bridge it, not split
+        # into a phantom ø18 blind hole plus a cbore-less bore.
+        part = Box(60, 60, 20) - Cylinder(5, 20) - Pos(0, 0, 7) * Cylinder(9, 6)
+        edge = [
+            e
+            for e in part.edges().filter_by(GeomType.CIRCLE)
+            if abs(e.center().Z - 4) < 0.01 and abs(e.radius - 5) < 0.01
+        ]
+        (hole,) = find_holes(chamfer(edge, 1.0))
+        assert hole.diameter == pytest.approx(10.0)
+        assert hole.bottom == "through"
+        assert hole.cbore == CounterBore(diameter=18.0, depth=6.0)
+        assert hole.location[2] == pytest.approx(10.0)
+
+    @pytest.mark.timeout(60)
+    def test_filleted_counterbore_shoulder_stays_one_hole(self):
+        part = Box(60, 60, 20) - Cylinder(5, 20) - Pos(0, 0, 7) * Cylinder(9, 6)
+        edge = [
+            e
+            for e in part.edges().filter_by(GeomType.CIRCLE)
+            if abs(e.center().Z - 4) < 0.01 and abs(e.radius - 5) < 0.01
+        ]
+        (hole,) = find_holes(fillet(edge, 1.0))
+        assert hole.axis == pytest.approx((0.0, 0.0, -1.0))
+        assert hole.bottom == "through"
+        assert hole.cbore == CounterBore(diameter=18.0, depth=6.0)
+
+    @pytest.mark.timeout(60)
+    def test_filleted_blind_bottom_is_flat(self):
+        # The bottom-corner fillet ring is a torus curling inward — closed
+        part = Box(60, 60, 20) - Pos(0, 0, 4) * Cylinder(5, 12)
+        edge = [e for e in part.edges().filter_by(GeomType.CIRCLE) if abs(e.center().Z + 2) < 0.01]
+        (hole,) = find_holes(fillet(edge, 1.5))
+        assert hole.bottom == "flat"
+        assert hole.axis == pytest.approx((0.0, 0.0, -1.0))
+
+    @pytest.mark.timeout(60)
+    def test_filleted_opening_lip_stays_through(self):
+        # The lip fillet is a torus flaring outward — an opening
+        part = Box(60, 60, 20) - Cylinder(5, 20)
+        edge = [e for e in part.edges().filter_by(GeomType.CIRCLE) if abs(e.center().Z - 10) < 0.01]
+        (hole,) = find_holes(fillet(edge, 1.0))
+        assert hole.bottom == "through"
+        assert hole.axis == pytest.approx((0.0, 0.0, -1.0))
+
+    @pytest.mark.timeout(60)
+    def test_oring_groove_does_not_shorten_a_through_bore(self):
+        part = Box(60, 60, 20) - Cylinder(5, 20) - Cylinder(6, 3)
+        (hole,) = find_holes(part)
+        assert hole.diameter == pytest.approx(10.0)
+        assert hole.depth == pytest.approx(20.0)
+        assert hole.bottom == "through"
+
+    @pytest.mark.timeout(60)
     def test_turned_part_bore_is_through(self):
         (hole,) = find_holes(Cylinder(30, 40) - Cylinder(10, 40))
         assert hole.diameter == pytest.approx(20.0)
@@ -259,6 +315,14 @@ class TestFindBosses:
         (boss,) = find_bosses(part)
         assert boss.axis == pytest.approx((0.0, 0.0, -1.0))
         assert boss.location[2] == pytest.approx(-12.0)  # free end, above the chamfer
+
+    @pytest.mark.timeout(60)
+    def test_filleted_free_end_keeps_orientation(self):
+        part = Box(60, 60, 10) + Pos(0, 0, 9) * Cylinder(12, 8)
+        edge = [e for e in part.edges().filter_by(GeomType.CIRCLE) if abs(e.center().Z - 13) < 0.01]
+        (boss,) = find_bosses(fillet(edge, 1.0))
+        assert boss.axis == pytest.approx((0.0, 0.0, 1.0))
+        assert boss.location[2] == pytest.approx(12.0)  # free end, below the fillet
 
     @pytest.mark.timeout(60)
     def test_turned_part_od_is_a_boss(self):
