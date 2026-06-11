@@ -603,10 +603,13 @@ class Note(_Annotation):
 class TextBlock(_Annotation):
     """A multi-line, left-aligned text block — general notes and hole tables.
 
-    Each line is rendered as text faces sharing a common left edge, spaced
-    ``line_spacing × font_size`` apart. The whole block registers as a
-    *single* annotation: ``.label`` is the joined text and ``.label_bbox``
-    covers every line, so lint treats it as one keep-clear region.
+    Each line is rendered as text faces sharing a common left edge and a
+    common baseline grid, spaced ``line_spacing × font_size`` apart. Interior
+    spaces advance normally (column padding works); leading spaces are not
+    preserved — the left edge is each line's first glyph. The whole block
+    registers as a *single* annotation: ``.label`` is the joined text and
+    ``.label_bbox`` covers every line, so lint treats it as one keep-clear
+    region.
 
     Args:
         lines: text lines, top to bottom — a sequence of strings, or one
@@ -645,7 +648,10 @@ class TextBlock(_Annotation):
                     txt=line,
                     font_size=draft.font_size,
                     font=draft.font,
-                    align=(Align.MIN, Align.MAX),
+                    # Align.NONE keeps the font's raw vertical frame, so all
+                    # lines sit on a shared baseline grid (bbox-MAX alignment
+                    # would float lowercase-only lines up by the ascender gap)
+                    align=(Align.MIN, Align.NONE),
                     mode=Mode.PRIVATE,
                 )
                 .moved(Location(Vector(0.0, -i * pitch, 0.0)))
@@ -653,12 +659,14 @@ class TextBlock(_Annotation):
             )
         block = Sketch(children=faces)
         gb = block.bounding_box()
-        # The block's logical extent spans line 0's top to the last line's
-        # nominal bottom, so leading/trailing blank lines count even though
-        # they render no geometry (descenders may dip past the nominal bottom)
+        # The block's logical extent spans line 0's nominal em-box top to the
+        # last line's nominal bottom (the em box is ~centred on each line's
+        # placement in the raw frame), so leading/trailing blank lines count
+        # even though they render no geometry, and descenders may dip past
         x0, x1 = gb.min.X, gb.max.X
-        y1 = max(gb.max.Y, 0.0)
-        y0 = min(gb.min.Y, -(len(lines) - 1) * pitch - draft.font_size)
+        half_em = draft.font_size / 2
+        y1 = max(gb.max.Y, half_em)
+        y0 = min(gb.min.Y, -(len(lines) - 1) * pitch - half_em)
 
         def _anchor(lo, hi, a):
             if a == Align.MIN:
@@ -674,16 +682,10 @@ class TextBlock(_Annotation):
             Location((position[0], position[1], 0.0), (0.0, 0.0, rotation))
             * Location(Vector(ox, oy, 0.0))
         )
-        rad = math.radians(rotation)
-        ca, sa = math.cos(rad), math.sin(rad)
-        xs, ys = [], []
-        for px, py in ((x0 + ox, y0 + oy), (x0 + ox, y1 + oy), (x1 + ox, y0 + oy), (x1 + ox, y1 + oy)):
-            xs.append(px * ca - py * sa + position[0])
-            ys.append(px * sa + py * ca + position[1])
         super().__init__(
             shape,
             label="\n".join(lines),
-            label_bbox=(min(xs), min(ys), max(xs), max(ys)),
+            label_bbox=_xf_bbox((x0 + ox, y0 + oy, x1 + ox, y1 + oy), rotation, position),
             rotation=0,
             align=None,
             mode=mode,

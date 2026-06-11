@@ -130,9 +130,12 @@ def analyse_cylinders(part):
             axis=ax,
             u_extent=surf.LastUParameter() - surf.FirstUParameter(),
             axis_xyz=(ap.X(), ap.Y(), ap.Z()),
-            # A cylinder's natural normal points away from its axis; a face
-            # keeping it (FORWARD) is outward material — a boss/OD, not a bore
-            external=face.wrapped.Orientation() == TopAbs_Orientation.TopAbs_FORWARD,
+            # Outward material (boss/OD) vs bore: a right-handed cylinder's
+            # natural normal points away from the axis, so FORWARD means
+            # external — but mirroring makes the frame left-handed and flips
+            # both, so compare against the frame handedness
+            external=(face.wrapped.Orientation() == TopAbs_Orientation.TopAbs_FORWARD)
+            == cyl.Position().Direct(),
         )
         (z_cyls if ax == "z" else cross_cyls).append(rec)
     return z_cyls, cross_cyls
@@ -512,6 +515,7 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
         z_diams=z_diams,
         cross_diams=cross_diams,
         cyls=(z_cyls, cross_cyls),
+        od_diam=od_diam,
         is_rotational=is_rotational,
         step_zs=step_zs,
         sv_right=sv_right,
@@ -565,8 +569,10 @@ class Drawing:
         views: ``{name: (visible_compound, hidden_compound_or_None)}``.
         annotations: ordered list of annotation objects (mutable).
         part: the source solid, when known — enables the feature-coverage lint.
-        cyls: optional precomputed ``analyse_cylinders(part)`` result; computed
-            lazily on first :meth:`lint` otherwise.
+
+    The constructor also accepts ``cyls``, a precomputed
+    ``analyse_cylinders(part)`` result (cached privately; computed lazily on
+    first :meth:`lint` otherwise).
     """
 
     def __init__(
@@ -835,10 +841,11 @@ def _auto_annotate(dwg, a):
         "dim_height",
     )
 
-    # Outer diameter — only for rotational (turned) parts, where the largest
-    # Z cylinder really is the OD (#81)
+    # Outer diameter — only for rotational (turned) parts, and from the
+    # classified external OD cylinder, never a bore that happens to be the
+    # largest diameter (#81)
     if a.is_rotational:
-        od = a.z_diams[0]
+        od = a.od_diam
         dwg.add(
             Dimension(
                 (FX(a.cx - od / 2), FZ(a.bb.max.Z) + 2, 0),
@@ -866,15 +873,16 @@ def _auto_annotate(dwg, a):
             "centerline_side",
         )
 
-    # Additional Z-axis bore leaders to the left of the front view — these
-    # assume bores concentric with the rotation axis, so rotational only (#81)
-    if a.is_rotational and len(a.z_diams) > 1:
+    # Z-axis bore leaders to the left of the front view — these assume bores
+    # concentric with the rotation axis, so rotational only (#81)
+    bores = [d for d in a.z_diams if d != a.od_diam]
+    if a.is_rotational and bores:
         left_edge = FX(a.bb.min.X)
         left_space = left_edge - a.margin
         if left_space >= a.DIM_PAD:
             ldr_length = a.DIM_PAD * 0.6
             elbow_x = left_edge - ldr_length
-            for i, d in enumerate(a.z_diams[1:4]):
+            for i, d in enumerate(bores[:3]):
                 tip_z = FZ(a.cz) + (i - 1) * 10
                 dwg.add(
                     Leader(
@@ -886,7 +894,7 @@ def _auto_annotate(dwg, a):
                     f"ldr_z{i}",
                 )
         else:
-            _log.info("Additional diameters %s not annotated (insufficient left margin)", a.z_diams[1:])
+            _log.info("Additional diameters %s not annotated (insufficient left margin)", bores)
 
     if a.cross_diams:
         _log.info(
@@ -1260,7 +1268,7 @@ def _write_script(a) -> str:
         "#   from build123d_drafting import Leader\n"
         "#   dwg.add(Leader(tip=dwg.at('front', 10, 0, 5), elbow=(8, 40, 0),\n"
         "#                  label='ø4 BORE', draft=dwg.draft), 'ldr_bore')\n"
-        "#   dwg.remove('dim_od')\n"
+        "#   dwg.remove('dim_height')\n"
         "\n"
         "# ── Export ────────────────────────────────────────────────────────────────────\n"
         "svg_path, dxf_path = dwg.export(_stem)\n"

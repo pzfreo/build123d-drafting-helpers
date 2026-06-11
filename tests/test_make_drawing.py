@@ -868,3 +868,51 @@ class TestIsRotational:
         part = Box(100, 100, 20) - Pos(8, 0, 0) * Cylinder(42, 30)
         dwg = build_drawing(part)
         assert "dim_od" not in dwg._named
+
+    @pytest.mark.timeout(60)
+    def test_mirrored_turned_part_stays_rotational(self):
+        # Mirroring flips face orientations AND the cylinder frame handedness;
+        # the external/bore split must survive it.
+        from build123d import Plane, mirror
+
+        part = mirror(Cylinder(30, 40) - Cylinder(10, 40), about=Plane.XZ)
+        z_cyls, _ = analyse_cylinders(part)
+        flags = {c["diameter"]: c["external"] for c in z_cyls}
+        assert flags[60.0] is True and flags[20.0] is False
+        dwg = build_drawing(part)
+        assert "dim_od" in dwg._named
+
+    @pytest.mark.timeout(60)
+    def test_dim_od_uses_the_external_cylinder(self):
+        # An internal recess wider than the boss must not be labelled as the
+        # OD: dim_od comes from the classified external cylinder.
+        part = (
+            Box(100, 100, 20)
+            + Pos(0, 0, 20) * Cylinder(42.5, 20)
+            - Pos(0, 0, -7.5) * Cylinder(45, 5)
+        )
+        dwg = build_drawing(part)
+        assert dwg._named["dim_od"].label == "ø85"
+
+    @pytest.mark.timeout(60)
+    def test_lint_reuses_build_drawing_cylinder_analysis(self, monkeypatch):
+        # build_drawing seeds the cache, so lint()/export() must not re-scan
+        # the solid with analyse_cylinders.
+        import importlib
+
+        # (the package re-exports the make_drawing *function*, shadowing the
+        # submodule attribute, so plain `import ... as md` grabs the function)
+        md = importlib.import_module("build123d_drafting.make_drawing")
+
+        dwg = build_drawing(Box(30, 20, 10))
+        calls = {"n": 0}
+        real = md.analyse_cylinders
+
+        def counting(part):
+            calls["n"] += 1
+            return real(part)
+
+        monkeypatch.setattr(md, "analyse_cylinders", counting)
+        dwg.lint()
+        dwg.lint()
+        assert calls["n"] == 0

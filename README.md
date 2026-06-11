@@ -489,8 +489,8 @@ single-line hole note, e.g. `4× ⌀8.5 THRU`.
 
 ### `Note(...)` and `TextBlock(...)`
 
-`Note(text, position, draft, align=None)` is a one-line free-text note; `position` is
-the text centre by default, and `align` picks a different anchor — e.g.
+`Note(text, position, draft, rotation=0, align=None)` is a one-line free-text note;
+`position` is the text centre by default, and `align` picks a different anchor — e.g.
 `align=(Align.MIN, Align.CENTER)` anchors the left edge at `position`.
 
 `TextBlock(lines, position, draft, line_spacing=1.6, align=(Align.MIN, Align.MAX))`
