@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.4.3 — 2026-06-11
+
 ### Added
 
 - **`auto_dims=False`** (#74) on `make_drawing()` / `build_drawing()` skips the
