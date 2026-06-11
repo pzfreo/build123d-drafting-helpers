@@ -62,7 +62,7 @@ from build123d.operations_generic import sweep
 
 @dataclass
 class LintIssue:
-    severity: Literal["error", "warning"]
+    severity: Literal["error", "warning", "info"]
     message: str
     location: tuple[float, float] | None = None
     code: str = ""  # stable machine-readable check id, e.g. "label_vs_measured"
@@ -546,6 +546,55 @@ class Centerline(_Annotation):
             sk, label="", label_bbox=None, segments=seg, rotation=rotation, align=align, mode=mode
         )
         self.is_centerline = True
+
+
+# ---------------------------------------------------------------------------
+# Note — free-text annotation
+# ---------------------------------------------------------------------------
+
+
+class Note(_Annotation):
+    """A free-text note at a page position — e.g. a view caption like "(NTS)".
+
+    The text is rendered as faces (real geometry, like every other helper), so
+    it round-trips to DXF/SVG. Use it for short sheet notes that belong to the
+    drawing content; title-block fields belong in :class:`TitleBlock`.
+
+    Args:
+        text: the note text.
+        position: ``(x, y)`` page position of the text centre.
+        draft: Draft config (font and size).
+        rotation, align, mode: standard ``BaseSketchObject`` placement options.
+
+    Metadata: ``.label``, ``.label_bbox``.
+    """
+
+    def __init__(
+        self,
+        text: str,
+        position: tuple,
+        draft: Draft,
+        rotation: float = 0,
+        align=None,
+        mode: Mode = Mode.ADD,
+    ):
+        shape = Text(
+            txt=text,
+            font_size=draft.font_size,
+            font=draft.font,
+            align=Align.CENTER,
+            mode=Mode.PRIVATE,
+        ).moved(Location(Vector(position[0], position[1], 0.0)))
+        tb = shape.bounding_box()
+        sk = Sketch(children=list(shape.faces()))
+        super().__init__(
+            sk,
+            label=text,
+            label_bbox=(tb.min.X, tb.min.Y, tb.max.X, tb.max.Y),
+            rotation=rotation,
+            align=align,
+            mode=mode,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1153,9 +1202,14 @@ def lint_drawing(
             (no scaling). See :func:`format_drawing_scale` to render the
             matching "5:1" indicator in the title block.
         view_shapes: optional list of build123d shapes representing projected
-            view outlines.  When provided, their bounding boxes are checked
-            for overlap with annotations (``view_annotation_overlap``, warning)
-            and for overlap with each other (``view_overlap``, warning).
+            view outlines.  When provided, annotations are checked against the
+            view's actual projected edges (``view_annotation_overlap``,
+            warning); an annotation inside the view's bounding box but over a
+            blank region — a legitimate convention for callouts on large
+            faces — is only an info-level ``view_annotation_inside_extents``
+            notice.  View bounding boxes are also checked for overlap with
+            each other (``view_overlap``, warning) and, when page bounds are
+            known, against the drawable area (``view_out_of_bounds``, error).
             Annotations whose line-work must touch the view are not
             false-flagged: centrelines and datum targets are exempt, and
             annotations exposing a ``label_bbox`` (dimensions, leaders, datum
@@ -1237,20 +1291,10 @@ def lint_drawing(
 
     # Page-bounds check — annotations must stay within the drawable area.
     if page_bbox is not None:
-        px0, py0, px1, py1 = page_bbox
         for item in items:
             try:
                 bb = item.bounding_box()
-                overshoots = []
-                if bb.min.X < px0:
-                    overshoots.append(f"left by {px0 - bb.min.X:.1f} mm")
-                if bb.max.X > px1:
-                    overshoots.append(f"right by {bb.max.X - px1:.1f} mm")
-                if bb.min.Y < py0:
-                    overshoots.append(f"below by {py0 - bb.min.Y:.1f} mm")
-                if bb.max.Y > py1:
-                    overshoots.append(f"above by {bb.max.Y - py1:.1f} mm")
-                for detail in overshoots:
+                for detail in _overshoots((bb.min.X, bb.min.Y, bb.max.X, bb.max.Y), page_bbox):
                     lbl = getattr(item, "label", None) or "?"
                     issues.append(
                         LintIssue(
@@ -1266,7 +1310,7 @@ def lint_drawing(
                 pass
 
     if view_shapes is not None:
-        _lint_view_shapes(view_shapes, items, issues)
+        _lint_view_shapes(view_shapes, items, issues, page_bbox=page_bbox)
 
     return issues
 
@@ -1287,25 +1331,73 @@ def _bboxes_overlap_2d(a, b) -> bool:
     return ax0 < bx1 and ax1 > bx0 and ay0 < by1 and ay1 > by0
 
 
-def _lint_view_shapes(view_shapes, ann_items, issues) -> None:
-    """Check view shapes for overlap with annotations (#159) and each other (#160)."""
+def _overshoots(bb, bounds) -> list[str]:
+    """Sides where (min_x, min_y, max_x, max_y) *bb* spills past *bounds*, as text."""
+    bx0, by0, bx1, by1 = bounds
+    out = []
+    if bb[0] < bx0:
+        out.append(f"left by {bx0 - bb[0]:.1f} mm")
+    if bb[2] > bx1:
+        out.append(f"right by {bb[2] - bx1:.1f} mm")
+    if bb[1] < by0:
+        out.append(f"below by {by0 - bb[1]:.1f} mm")
+    if bb[3] > by1:
+        out.append(f"above by {bb[3] - by1:.1f} mm")
+    return out
+
+
+def _edges_intersect_rect(edge_entries, rect) -> bool:
+    """True if any ``(edge, bbox2d)`` of *edge_entries* passes through the
+    (min_x, min_y, max_x, max_y) rect.
+
+    Straight edges use exact Liang–Barsky clipping; curved edges are sampled
+    at roughly 1 mm spacing. An edge whose geometry cannot be analysed counts
+    as a hit, so a real overlap is never silently missed.
+    """
+    for e, eb in edge_entries:
+        try:
+            if eb is None:
+                return True  # unanalysable edge — count as a hit
+            if not _bboxes_overlap_2d(eb, rect):
+                continue
+            if e.geom_type == GeomType.LINE:
+                s, t = e.start_point(), e.end_point()
+                if _seg_intersects_rect((s.X, s.Y), (t.X, t.Y), rect):
+                    return True
+                continue
+            n = min(200, max(8, int(e.length) + 1))
+            for i in range(n + 1):
+                p = e.position_at(i / n)
+                if rect[0] <= p.X <= rect[2] and rect[1] <= p.Y <= rect[3]:
+                    return True
+        except Exception:
+            return True
+    return False
+
+
+def _lint_view_shapes(view_shapes, ann_items, issues, page_bbox=None) -> None:
+    """Check views against annotations (#159/#76), each other (#160), and the page (#75)."""
     # Build named bbox list; use the shape's id as fallback name.
-    named_bboxes = []
+    named_views = []
     view_shape_ids = set()
     for vs in view_shapes:
         bb = _bbox2d(vs)
         if bb is None:
             continue
         name = getattr(vs, "label", None) or getattr(vs, "name", None) or f"view@{id(vs)}"
-        named_bboxes.append((name, bb))
+        named_views.append((name, bb, vs))
         view_shape_ids.add(id(vs))
 
     # #159 — view shape vs annotation overlaps. Line-work (witness lines,
     # leader shafts, centrelines) legitimately enters the view, so test the
     # label-text bbox where the annotation exposes one and skip centrelines
     # entirely; only annotations without a label bbox fall back to their full
-    # bounding box.
-    for vname, vbb in named_bboxes:
+    # bounding box. Within the view bbox, only a label that crosses the view's
+    # actual projected edges is a warning (#76) — on a large part the bbox is
+    # mostly blank face, where placing callouts is a legitimate convention —
+    # so a label over a blank region is reported as an info-level notice.
+    edge_cache: dict[int, list | None] = {}
+    for vname, vbb, vs in named_views:
         vx0, vy0, vx1, vy1 = vbb
         for ann in ann_items:
             if id(ann) in view_shape_ids:
@@ -1319,32 +1411,48 @@ def _lint_view_shapes(view_shapes, ann_items, issues) -> None:
                 ab = label_box if label_box is not None else _bbox2d(ann)
                 if ab is None:
                     continue
-                if _bboxes_overlap_2d(vbb, ab):
-                    albl = (
-                        getattr(ann, "label", None)
-                        or getattr(ann, "name", None)
-                        or type(ann).__name__
-                    )
-                    what = "label of annotation" if label_box is not None else "annotation"
+                if not _bboxes_overlap_2d(vbb, ab):
+                    continue
+                albl = (
+                    getattr(ann, "label", None) or getattr(ann, "name", None) or type(ann).__name__
+                )
+                what = "label of annotation" if label_box is not None else "annotation"
+                if id(vs) not in edge_cache:
+                    try:
+                        edge_cache[id(vs)] = [(e, _bbox2d(e)) for e in vs.edges()]
+                    except Exception:
+                        edge_cache[id(vs)] = None  # unanalysable — fall back to bbox
+                edges = edge_cache[id(vs)]
+                if edges is None or _edges_intersect_rect(edges, ab):
                     issues.append(
                         LintIssue(
                             severity="warning",
                             message=(
-                                f"view '{vname}' bbox "
-                                f"[x={vx0:.1f}–{vx1:.1f}, y={vy0:.1f}–{vy1:.1f}] "
-                                f"overlaps {what} '{albl}' — increase view spacing "
-                                f"or move the annotation"
+                                f"view '{vname}' line-work overlaps {what} '{albl}' "
+                                f"— increase view spacing or move the annotation"
                             ),
                             code="view_annotation_overlap",
+                        )
+                    )
+                else:
+                    issues.append(
+                        LintIssue(
+                            severity="info",
+                            message=(
+                                f"{what} '{albl}' lies inside view '{vname}' extents "
+                                f"[x={vx0:.1f}–{vx1:.1f}, y={vy0:.1f}–{vy1:.1f}] over a "
+                                f"blank region — legitimate for callouts on large faces"
+                            ),
+                            code="view_annotation_inside_extents",
                         )
                     )
             except Exception:
                 pass
 
     # #160 — view shape vs view shape bounding box overlaps
-    for i, (aname, abb) in enumerate(named_bboxes):
+    for i, (aname, abb, _) in enumerate(named_views):
         ax0, ay0, ax1, ay1 = abb
-        for bname, bbb in named_bboxes[i + 1 :]:
+        for bname, bbb, _ in named_views[i + 1 :]:
             bx0, by0, bx1, by1 = bbb
             if _bboxes_overlap_2d(abb, bbb):
                 issues.append(
@@ -1358,6 +1466,21 @@ def _lint_view_shapes(view_shapes, ann_items, issues) -> None:
                             f"— increase spacing between views"
                         ),
                         code="view_overlap",
+                    )
+                )
+
+    # #75 — views must stay within the drawable area.
+    if page_bbox is not None:
+        for vname, vbb, _ in named_views:
+            for detail in _overshoots(vbb, page_bbox):
+                issues.append(
+                    LintIssue(
+                        severity="error",
+                        message=(
+                            f"view '{vname}' extends past drawable area ({detail}) "
+                            f"— reduce the view scale or move the view"
+                        ),
+                        code="view_out_of_bounds",
                     )
                 )
 

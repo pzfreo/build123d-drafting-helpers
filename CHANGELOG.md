@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added
+
+- **`auto_dims=False`** (#74) on `make_drawing()` / `build_drawing()` skips the
+  automatic dimensions, centrelines, and leaders — which assume a turned part
+  and are wrong for prismatic geometry — while keeping views, scale, page, and
+  title block. `Drawing.clear_annotations(keep=("title_block",))` removes the
+  automatic set wholesale without knowing the auto-name scheme.
+- **Iso view fit-check with auto-shrink** (#75). When the projected iso view
+  overflows its page region (the layout reserves ~0.7 × bbox_max, but long
+  prismatic parts project wider), it is re-projected at a clean fraction of
+  sheet scale (1/2, 1/5, 1/10) and captioned with an "ISO VIEW (NTS)" note.
+- **`Note`** — a free-text annotation (text rendered as faces, like every other
+  helper) for view captions and sheet notes, with `.label` / `.label_bbox`
+  metadata.
+- **`view_out_of_bounds` lint** (#75) — when page bounds are known
+  (`page_bbox` or `set_page()`), any view extending past the drawable area is
+  flagged as an error.
+
+### Changed
+
+- **`view_annotation_overlap` lint now tests against the view's projected
+  edges, not its bounding box** (#76). On a large part the view bbox is mostly
+  blank face, where placing callouts is a legitimate convention — those no
+  longer warn, so the check can be used as a pass/fail gate. A label inside
+  the view extents but over a blank region is reported as a new info-level
+  `view_annotation_inside_extents` notice instead. Straight edges are tested
+  exactly; curved edges are sampled at ~1 mm spacing. `LintIssue.severity`
+  gains `"info"`.
+
 ## v0.4.2 — 2026-06-10
 
 ### Added
