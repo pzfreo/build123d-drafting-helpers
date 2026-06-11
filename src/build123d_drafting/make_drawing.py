@@ -775,19 +775,29 @@ def _bbox_within(bb, region, tol: float = 0.5) -> bool:
     )
 
 
-def _project_iso(dwg, a, scale):
-    """(Re-)project the iso view at *scale* (an absolute factor, not a fraction)."""
+def _project_iso(dwg, a, scale, shape_s=None):
+    """(Re-)project the iso view at *scale* (an absolute factor, not a fraction).
+
+    Pass *shape_s* when the part is already scaled by *scale* to skip the copy.
+    """
     la = (a.cx * scale, a.cy * scale, a.cz * scale)
     off = (a.bbox_max * scale + 100) / math.sqrt(3)
+    camera = (la[0] + off, la[1] + off, la[2] + off)
     dwg.add_view(
         "iso",
-        a.part.scale(scale),
-        (la[0] + off, la[1] + off, la[2] + off),
+        shape_s if shape_s is not None else a.part.scale(scale),
+        camera,
         (0, 0, 1),
         (a.ISO_X, a.ISO_Y),
         look_at=la,
         scaled=True,
     )
+    if scale != dwg.scale:
+        # add_view derives ViewCoordinates from the drawing scale; an iso
+        # projected at a different scale needs them rebuilt so
+        # dwg.at("iso", ...) keeps mapping world points correctly.
+        axes = view_axes(camera, (0, 0, 1), la)
+        dwg._coords["iso"] = ViewCoordinates(axes, a.ISO_X, a.ISO_Y, a.cx, a.cy, a.cz, scale)
 
 
 def _fit_iso_view(dwg, a):
@@ -801,7 +811,9 @@ def _fit_iso_view(dwg, a):
     """
     region = (a.sv_right, a.margin, a.iso_right_limit, a.PAGE_H - a.margin)
     bb = _iso_bbox(dwg)
-    if _bbox_within(bb, region):
+    # Exact check (no tolerance): the lint's view_out_of_bounds is exact, so
+    # accepting a sub-tolerance overflow here would pass the fit yet fail lint.
+    if _bbox_within(bb, region, tol=0.0):
         return
     # Orthographic projection is linear and the view centre maps to
     # (ISO_X, ISO_Y), so each bbox side's offset from the centre scales
@@ -895,7 +907,7 @@ def build_drawing(
     dwg.add_view("front", part_s, (cxs, cys - dist, czs), (0, 0, 1), (a.FV_X, a.FV_Y), scaled=True)
     dwg.add_view("plan", part_s, (cxs, cys, czs + dist), (0, 1, 0), (a.PV_X, a.PV_Y), scaled=True)
     dwg.add_view("side", part_s, (cxs + dist, cys, czs), (0, 0, 1), (a.SV_X, a.SV_Y), scaled=True)
-    _project_iso(dwg, a, a.SCALE)
+    _project_iso(dwg, a, a.SCALE, shape_s=part_s)
     _fit_iso_view(dwg, a)
 
     if auto_dims:

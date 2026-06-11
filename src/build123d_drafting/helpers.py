@@ -1356,7 +1356,9 @@ def _edges_intersect_rect(edge_entries, rect) -> bool:
     """
     for e, eb in edge_entries:
         try:
-            if eb is None or not _bboxes_overlap_2d(eb, rect):
+            if eb is None:
+                return True  # unanalysable edge — count as a hit
+            if not _bboxes_overlap_2d(eb, rect):
                 continue
             if e.geom_type == GeomType.LINE:
                 s, t = e.start_point(), e.end_point()

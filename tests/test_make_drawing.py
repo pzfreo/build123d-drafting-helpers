@@ -510,6 +510,23 @@ def test_iso_overflow_shrinks_with_nts_note():
     )
 
 
+@pytest.mark.timeout(120)
+def test_shrunk_iso_keeps_world_to_page_mapping():
+    # After the NTS shrink, dwg.at("iso", ...) must still map world points to
+    # the page: the centroid lands on the view centre and offsets scale by the
+    # shrunk view scale, not the sheet scale.
+    dwg = build_drawing(Box(800, 450, 150), scale=0.2, page="A3")
+    cx, cy, cz = dwg.centroid
+    centre = dwg.at("iso", cx, cy, cz)
+    vis, _hid = dwg.views["iso"]
+    bb = vis.bounding_box()
+    assert bb.min.X < centre[0] < bb.max.X and bb.min.Y < centre[1] < bb.max.Y
+    # This fixture shrinks the iso to 1/2 sheet scale (see the NTS test above).
+    # World +Z maps to page +Y; the offset must use the shrunk view scale.
+    raised = dwg.at("iso", cx, cy, cz + 100)
+    assert raised[1] - centre[1] == pytest.approx(100 * dwg.scale * 0.5)
+
+
 @pytest.mark.timeout(60)
 def test_iso_that_fits_is_not_shrunk():
     dwg = build_drawing(Box(30, 20, 10))
