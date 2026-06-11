@@ -40,6 +40,7 @@ from build123d_drafting.helpers import (
     Centerline,
     Dimension,
     Leader,
+    Note,
     TitleBlock,
     ViewCoordinates,
     annotate,
@@ -272,9 +273,7 @@ def choose_scale(x_size: float, y_size: float, z_size: float, scale=None, page=N
     if scale is not None and page is not None:
         pw, ph, tb = _parse_page(page)
         if not _fits(x_size, y_size, z_size, float(scale), pw, ph, tb):
-            _log.warning(
-                "Requested scale %s on %s page may not fit the 4-view layout", scale, page
-            )
+            _log.warning("Requested scale %s on %s page may not fit the 4-view layout", scale, page)
         return float(scale), pw, ph, tb
     if page is not None:
         pw, ph, tb = _parse_page(page)
@@ -393,6 +392,8 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
         z_diams=z_diams,
         cross_diams=cross_diams,
         step_zs=step_zs,
+        sv_right=sv_right,
+        iso_right_limit=iso_right_limit,
         SCALE=SCALE,
         PAGE_W=PAGE_W,
         PAGE_H=PAGE_H,
@@ -529,6 +530,24 @@ class Drawing:
             raise KeyError(f"no annotation named {name!r}")
         self.annotations.remove(obj)
         return obj
+
+    def clear_annotations(self, keep=("title_block",)):
+        """Remove all annotations except those named in *keep* (#74).
+
+        Wholesale removal that does not depend on the automatic naming
+        scheme — ``dwg.clear_annotations()`` strips every automatic dimension,
+        leader, and centreline but keeps the title block.
+
+        Returns:
+            The list of removed annotation objects.
+        """
+        keep_set = set(keep)
+        kept_named = {n: o for n, o in self._named.items() if n in keep_set}
+        kept_ids = {id(o) for o in kept_named.values()}
+        removed = [o for o in self.annotations if id(o) not in kept_ids]
+        self.annotations = [o for o in self.annotations if id(o) in kept_ids]
+        self._named = kept_named
+        return removed
 
     # -- output ---------------------------------------------------------------
     def lint(self):
@@ -712,7 +731,11 @@ def _auto_annotate(dwg, a):
             "dim_width",
         )
 
-    # Title block
+    _add_title_block(dwg, a)
+
+
+def _add_title_block(dwg, a):
+    """Add the title block annotation."""
     tb = TitleBlock(
         a.title,
         a.number,
@@ -722,9 +745,77 @@ def _auto_annotate(dwg, a):
         revision="A",
         legal_owner="",
         width=a.TB_W,
-        draft=draft,
+        draft=dwg.draft,
     ).locate(Location((a.PAGE_W - a.TB_W - 11, 11, 0)))
     dwg.add(tb, "title_block")
+
+
+_ISO_SHRINK_FACTORS = (0.5, 0.2, 0.1)
+
+
+def _iso_bbox(dwg):
+    """(min_x, min_y, max_x, max_y) of the placed iso view, hidden lines included."""
+    vis, hid = dwg.views["iso"]
+    bb = vis.bounding_box()
+    x0, y0, x1, y1 = bb.min.X, bb.min.Y, bb.max.X, bb.max.Y
+    if hid:
+        hb = hid.bounding_box()
+        x0, y0 = min(x0, hb.min.X), min(y0, hb.min.Y)
+        x1, y1 = max(x1, hb.max.X), max(y1, hb.max.Y)
+    return x0, y0, x1, y1
+
+
+def _bbox_within(bb, region, tol: float = 0.5) -> bool:
+    """True if (min_x, min_y, max_x, max_y) *bb* fits inside *region* within *tol*."""
+    return (
+        bb[0] >= region[0] - tol
+        and bb[1] >= region[1] - tol
+        and bb[2] <= region[2] + tol
+        and bb[3] <= region[3] + tol
+    )
+
+
+def _fit_iso_view(dwg, a):
+    """Shrink the iso view to fit its page region, captioning it NTS (#75).
+
+    The layout reserves ~0.7 × bbox_max for the iso column, but the true
+    projected extent can be wider (long prismatic parts), pushing the iso past
+    the page edge or into the side view's dimension space. When the projected
+    iso bbox overflows the region, re-project at successive clean fractions of
+    sheet scale until it fits and add an "ISO VIEW (NTS)" caption below it.
+    """
+    region = (a.sv_right, a.margin, a.iso_right_limit, a.PAGE_H - a.margin)
+    iso_factor = 1.0
+    for f in _ISO_SHRINK_FACTORS:
+        if _bbox_within(_iso_bbox(dwg), region):
+            break
+        iso_factor = f
+        s2 = a.SCALE * f
+        la2 = (a.cx * s2, a.cy * s2, a.cz * s2)
+        off2 = (a.bbox_max * s2 + 100) / math.sqrt(3)
+        dwg.add_view(
+            "iso",
+            a.part.scale(s2),
+            (la2[0] + off2, la2[1] + off2, la2[2] + off2),
+            (0, 0, 1),
+            (a.ISO_X, a.ISO_Y),
+            look_at=la2,
+            scaled=True,
+        )
+    if iso_factor == 1.0:
+        return
+    if not _bbox_within(_iso_bbox(dwg), region):
+        _log.warning("Iso view still overflows its page region at %g× sheet scale", iso_factor)
+    iso_bottom = _iso_bbox(dwg)[1]
+    dwg.add(
+        Note(
+            "ISO VIEW (NTS)",
+            (a.ISO_X, max(iso_bottom - 6.0, a.margin + 2.0)),
+            dwg.draft,
+        ),
+        "note_iso_nts",
+    )
+    _log.info("Iso view shrunk to %g× sheet scale (NTS)", iso_factor)
 
 
 def build_drawing(
@@ -736,6 +827,7 @@ def build_drawing(
     drawn_by: str = "",
     scale: float | None = None,
     page: str | tuple | None = None,
+    auto_dims: bool = True,
 ) -> Drawing:
     """Build a customisable 4-view :class:`Drawing` without exporting it.
 
@@ -743,6 +835,14 @@ def build_drawing(
     so you can add or remove annotations and add section/auxiliary views before
     calling :meth:`Drawing.export`. ``make_drawing(...)`` is exactly
     ``build_drawing(...).export()``.
+
+    Args:
+        auto_dims: pass ``False`` to skip the automatic dimensions,
+            centrelines, and leaders (#74) — the automatic set assumes a
+            turned part and is wrong for prismatic geometry. Views, scale,
+            page, and title block are still produced; add your own
+            annotations before export. (Annotations added by the default can
+            also be removed wholesale with :meth:`Drawing.clear_annotations`.)
 
     Returns:
         A :class:`Drawing` with the standard front/plan/side/iso views projected
@@ -787,8 +887,12 @@ def build_drawing(
         (a.ISO_X, a.ISO_Y),
         scaled=True,
     )
+    _fit_iso_view(dwg, a)
 
-    _auto_annotate(dwg, a)
+    if auto_dims:
+        _auto_annotate(dwg, a)
+    else:
+        _add_title_block(dwg, a)
     return dwg
 
 
@@ -806,6 +910,7 @@ def make_drawing(
     drawn_by: str = "",
     scale: float | None = None,
     page: str | tuple | None = None,
+    auto_dims: bool = True,
 ) -> tuple[str, str]:
     """Generate a 4-view technical drawing from a STEP file or build123d object.
 
@@ -823,6 +928,9 @@ def make_drawing(
         page: Page-size override — an ISO name (``"A3"``), ``"WIDTHxHEIGHT"``
             in mm, or a ``(width, height)`` tuple. Default: chosen
             automatically by :func:`choose_scale`.
+        auto_dims: pass ``False`` to skip the automatic dimensions,
+            centrelines, and leaders (#74) — views, scale, page, and title
+            block only.
 
     Returns:
         Tuple of ``(svg_path, dxf_path)`` for the generated files.
@@ -840,6 +948,7 @@ def make_drawing(
         drawn_by=drawn_by,
         scale=scale,
         page=page,
+        auto_dims=auto_dims,
     ).export()
 
 

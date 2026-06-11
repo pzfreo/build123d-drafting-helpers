@@ -14,6 +14,7 @@ from build123d_drafting import (
     FeatureControlFrame,
     HoleCallout,
     Leader,
+    Note,
     SafeDimension,
     SurfaceFinish,
     TitleBlock,
@@ -1627,9 +1628,9 @@ class TestLintViewShapes:
     # --- #159: view vs annotation ---
 
     def test_view_overlapping_annotation_flagged(self, draft):
-        # View at x=0–40, y=0–30; dim label sits inside that region
+        # View at x=0–40, y=0–30; dim label straddles the view's right outline
         view = self._make_box_shape(0, 0, 40, 30)
-        d = Dimension((5, 10, 0), (15, 10, 0), "above", 4, draft, label="10")
+        d = Dimension((35, 10, 0), (45, 10, 0), "above", 4, draft, label="10")
         codes = {i.code for i in lint_drawing([d], view_shapes=[view])}
         assert "view_annotation_overlap" in codes
 
@@ -1642,11 +1643,44 @@ class TestLintViewShapes:
 
     def test_view_annotation_overlap_severity_warning(self, draft):
         view = self._make_box_shape(0, 0, 40, 30)
-        d = Dimension((5, 10, 0), (15, 10, 0), "above", 4, draft, label="10")
+        d = Dimension((35, 10, 0), (45, 10, 0), "above", 4, draft, label="10")
         issues = [
             i for i in lint_drawing([d], view_shapes=[view]) if i.code == "view_annotation_overlap"
         ]
         assert issues and issues[0].severity == "warning"
+
+    # --- #76: label over a blank region inside the view bbox is only a notice ---
+
+    def test_label_over_blank_interior_is_info_not_warning(self, draft):
+        # The view bbox is mostly blank face here; a label deliberately placed
+        # over an empty region (hole-callout convention on big parts) must not
+        # warn — it gets an info-level notice instead.
+        view = self._make_box_shape(0, 0, 40, 30)
+        d = Dimension((5, 10, 0), (15, 10, 0), "above", 4, draft, label="10")
+        issues = lint_drawing([d], view_shapes=[view])
+        codes = {i.code for i in issues}
+        assert "view_annotation_overlap" not in codes
+        notices = [i for i in issues if i.code == "view_annotation_inside_extents"]
+        assert notices and notices[0].severity == "info"
+
+    def test_label_crossing_curved_edge_flagged(self, draft):
+        # Curved edges are sampled, not bbox-tested — a label on the rim of a
+        # circular outline fires, one at the blank centre does not.
+        from build123d import Circle, Pos
+
+        view = Pos(20, 15, 0) * Circle(10)
+        on_rim = Note("X", (10.5, 15), draft)
+        codes = {i.code for i in lint_drawing([on_rim], view_shapes=[view])}
+        assert "view_annotation_overlap" in codes
+
+    def test_label_inside_curved_outline_is_info(self, draft):
+        from build123d import Circle, Pos
+
+        view = Pos(20, 15, 0) * Circle(10)
+        centre = Note("X", (20, 15), draft)
+        issues = lint_drawing([centre], view_shapes=[view])
+        assert not any(i.code == "view_annotation_overlap" for i in issues)
+        assert any(i.code == "view_annotation_inside_extents" for i in issues)
 
     # --- #65: line-work that legitimately touches the view must not fire ---
 
@@ -1672,10 +1706,11 @@ class TestLintViewShapes:
         codes = {i.code for i in lint_drawing([ld], view_shapes=[view])}
         assert "view_annotation_overlap" not in codes
 
-    def test_leader_label_inside_view_still_flagged(self, draft):
-        # The real failure mode — label text sitting on the part — must still fire.
+    def test_leader_label_on_view_outline_still_flagged(self, draft):
+        # The real failure mode — label text sitting on the part's line-work —
+        # must still fire (#76: only edge crossings warn, not blank regions).
         view = self._make_box_shape(0, 0, 40, 30)
-        ld = Leader(tip=(45, 15, 0), elbow=(25, 15, 0), label="ø4", draft=draft)
+        ld = Leader(tip=(20, 15, 0), elbow=(36, 15, 0), label="ø4", draft=draft)
         codes = {i.code for i in lint_drawing([ld], view_shapes=[view])}
         assert "view_annotation_overlap" in codes
 
@@ -1689,11 +1724,11 @@ class TestLintViewShapes:
         codes = {i.code for i in lint_drawing([df], view_shapes=[view])}
         assert "view_annotation_overlap" not in codes
 
-    def test_datum_letter_frame_in_view_still_flagged(self, draft):
+    def test_datum_letter_frame_on_view_outline_still_flagged(self, draft):
         from build123d import Location
 
         view = self._make_box_shape(0, 0, 40, 30)
-        df = DatumFeature("A", draft).moved(Location((20, 10, 0)))
+        df = DatumFeature("A", draft).moved(Location((40, 15, 0)))  # frame straddles x=40
         codes = {i.code for i in lint_drawing([df], view_shapes=[view])}
         assert "view_annotation_overlap" in codes
 
@@ -1705,9 +1740,9 @@ class TestLintViewShapes:
         codes = {i.code for i in lint_drawing([sf], view_shapes=[view])}
         assert "view_annotation_overlap" not in codes
 
-    def test_surface_finish_text_in_view_still_flagged(self, draft):
+    def test_surface_finish_text_on_view_outline_still_flagged(self, draft):
         view = self._make_box_shape(0, 0, 40, 30)
-        sf = SurfaceFinish("Ra 1.6", (10, 15), draft=draft)
+        sf = SurfaceFinish("Ra 1.6", (35, 15), draft=draft)  # Ra text straddles x=40
         codes = {i.code for i in lint_drawing([sf], view_shapes=[view])}
         assert "view_annotation_overlap" in codes
 
@@ -1777,3 +1812,49 @@ class TestLintViewShapes:
         view = self._make_box_shape(0, 0, 40, 30)
         issues = lint_drawing([view], view_shapes=[view])
         assert not any(i.code == "view_annotation_overlap" for i in issues)
+
+    # --- #75: view vs drawable area ---
+
+    def test_view_past_page_edge_is_error(self):
+        view = self._make_box_shape(80, 10, 40, 30)  # spans x=80–120 on a 100-wide page
+        issues = [
+            i
+            for i in lint_drawing([], page_bbox=(0, 0, 100, 100), view_shapes=[view])
+            if i.code == "view_out_of_bounds"
+        ]
+        assert issues and issues[0].severity == "error"
+        assert "right by 20.0 mm" in issues[0].message
+
+    def test_view_inside_page_not_flagged(self):
+        view = self._make_box_shape(10, 10, 40, 30)
+        codes = {i.code for i in lint_drawing([], page_bbox=(0, 0, 100, 100), view_shapes=[view])}
+        assert "view_out_of_bounds" not in codes
+
+    def test_view_bounds_not_checked_without_page(self):
+        clear_page()  # no page context → views cannot be bounds-checked
+        view = self._make_box_shape(80, 10, 40, 30)
+        codes = {i.code for i in lint_drawing([], view_shapes=[view])}
+        assert "view_out_of_bounds" not in codes
+
+
+class TestNote:
+    """Note — free-text annotation (#75 NTS captions, sheet notes)."""
+
+    def test_renders_filled_text(self, draft):
+        _export_ink(Note("ISO VIEW (NTS)", (100, 50), draft))
+
+    def test_label_metadata(self, draft):
+        n = Note("NTS", (100, 50), draft)
+        assert n.label == "NTS"
+        x0, y0, x1, y1 = n.label_bbox
+        # Centred on the position, sized by the draft font
+        assert x0 < 100 < x1 and y0 < 50 < y1
+        assert (y1 - y0) == pytest.approx(draft.font_size, abs=1.5)
+
+    def test_moved_tracks_label_bbox(self, draft):
+        from build123d import Location
+
+        n = Note("NTS", (0, 0), draft)
+        moved = n.moved(Location((10, 20, 0)))
+        x0, y0, x1, y1 = moved.label_bbox
+        assert x0 < 10 < x1 and y0 < 20 < y1

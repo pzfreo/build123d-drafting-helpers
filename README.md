@@ -347,8 +347,10 @@ Duck-typed structural checks on a list of annotation objects (`Dimension`, `Lead
 | `dim_inside_part` | Dim bbox overlaps part outline by >10% — dim is inside the view |
 | `leader_line_through_text` | Leader elbow point inside label bbox — line strikes through text |
 | `annotation_out_of_bounds` | An item's bbox extends past the page (set `page_bbox` or call `set_page()`) |
-| `view_annotation_overlap` | An annotation's label text overlaps a view shape bbox (full bbox for annotations without a label; centrelines and datum targets are exempt; witness lines, leader shafts, datum triangles, and finish marks may touch the view freely) |
+| `view_annotation_overlap` | An annotation's label text overlaps a view's projected edges (full bbox for annotations without a label; centrelines and datum targets are exempt; witness lines, leader shafts, datum triangles, and finish marks may touch the view freely) |
+| `view_annotation_inside_extents` | Info: a label sits inside a view's bbox but over a blank region — a legitimate convention for callouts on large faces |
 | `view_overlap` | Two view shape bboxes overlap each other — views are too close |
+| `view_out_of_bounds` | A view extends past the drawable area (set `page_bbox` or call `set_page()`) |
 
 ```python
 bore_cl = Centerline((0, -30, 0), (0, 30, 0))

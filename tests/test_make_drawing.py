@@ -463,6 +463,61 @@ def test_build_drawing_scale_and_page_override(tmp_path):
 
 
 @pytest.mark.timeout(60)
+def test_build_drawing_auto_dims_false():
+    # #74 — views, scale, page, and title block only; no turned-part dims.
+    dwg = build_drawing(Cylinder(15, 40), auto_dims=False)
+    assert set(dwg.views) == {"front", "plan", "side", "iso"}
+    assert [a for a in dwg.annotations] == [dwg._named["title_block"]]
+
+
+@pytest.mark.timeout(60)
+def test_clear_annotations_keeps_title_block():
+    # #74 — wholesale removal without knowing the auto-name scheme.
+    dwg = build_drawing(Cylinder(15, 40))  # cylinder → od dim, centerlines, …
+    assert len(dwg.annotations) > 1
+    removed = dwg.clear_annotations()
+    assert removed
+    assert all(a not in dwg.annotations for a in removed)
+    assert len(dwg.annotations) == 1
+    assert "title_block" in dwg._named and len(dwg._named) == 1
+
+
+@pytest.mark.timeout(60)
+def test_clear_annotations_keep_custom_and_unnamed_removed():
+    dwg = build_drawing(Box(30, 20, 10))
+    keep_me = dwg.add(
+        Leader(tip=dwg.at("front", 0, 0, 0), elbow=(5, 5, 0), label="K", draft=dwg.draft), "ldr_k"
+    )
+    dwg.add(Leader(tip=dwg.at("front", 0, 0, 0), elbow=(6, 6, 0), label="U", draft=dwg.draft))
+    dwg.clear_annotations(keep=("title_block", "ldr_k"))
+    assert set(dwg._named) == {"title_block", "ldr_k"}
+    assert keep_me in dwg.annotations
+    assert len(dwg.annotations) == 2  # unnamed leader removed too
+
+
+@pytest.mark.timeout(120)
+def test_iso_overflow_shrinks_with_nts_note():
+    # #75 — NIST CTC-01-like plate: at sheet scale the iso would run past the
+    # A3 page edge; it must be re-projected smaller and captioned NTS.
+    from build123d_drafting.make_drawing import _iso_bbox
+
+    dwg = build_drawing(Box(800, 450, 150), scale=0.2, page="A3")
+    labels = [getattr(a, "label", "") for a in dwg.annotations]
+    assert "ISO VIEW (NTS)" in labels
+    x0, y0, x1, y1 = _iso_bbox(dwg)
+    assert (
+        x1 <= dwg.page_w - 10 + 0.5 and x0 >= 0 and y0 >= 10 - 0.5 and y1 <= dwg.page_h - 10 + 0.5
+    )
+
+
+@pytest.mark.timeout(60)
+def test_iso_that_fits_is_not_shrunk():
+    dwg = build_drawing(Box(30, 20, 10))
+    labels = [getattr(a, "label", "") for a in dwg.annotations]
+    assert "ISO VIEW (NTS)" not in labels
+
+
+@pytest.mark.timeout(60)
 def test_drawing_add_and_remove():
     dwg = build_drawing(Box(30, 20, 10))
     n0 = len(dwg.annotations)
