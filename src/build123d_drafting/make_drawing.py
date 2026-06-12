@@ -260,6 +260,8 @@ _LADDER = [
     (2.0, 594.0, 420.0, 150.0),  # A2 2:1
     (1.0, 594.0, 420.0, 150.0),  # A2 1:1
     (0.5, 594.0, 420.0, 150.0),  # A2 1:2
+    (0.2, 420.0, 297.0, 150.0),  # A3 1:5
+    (0.2, 594.0, 420.0, 150.0),  # A2 1:5
     (1.0, 841.0, 594.0, 150.0),  # A1 1:1
     (0.5, 841.0, 594.0, 150.0),  # A1 1:2
     (0.2, 841.0, 594.0, 150.0),  # A1 1:5
@@ -417,7 +419,14 @@ def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w) -> bool:
     if w <= page_w:
         return True
     views_bottom = max(0.0, (page_h - h) / 2) + _MARGIN + _DIM_PAD
-    return w - _DIM_PAD - tb_w <= page_w and views_bottom >= _MARGIN + _TB_H
+    if views_bottom >= _MARGIN + _TB_H:
+        # iso view sits above the title block; only the front+side columns
+        # need to fit the page width (no iso estimate, no title-block deduction)
+        side_w = (
+            _MARGIN + _DIM_PAD + x_size * scale + _DIM_PAD + y_size * scale + _DIM_PAD + _MARGIN
+        )
+        return side_w <= page_w
+    return w - _DIM_PAD - tb_w <= page_w
 
 
 def choose_scale(x_size: float, y_size: float, z_size: float, scale=None, page=None) -> tuple:
@@ -599,13 +608,14 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
         # one width dimension (slot=8, gap=8 fits exactly)
         below=Strip(pv_bottom_edge, fv_top_edge + 2, direction=-1),
     )
+    sv_bottom_edge = SV_Y - fv_hh  # same as fv_bottom_edge; side and front share Z height
     sv_zones = ViewZones(
         # sv_right already includes DIM_PAD; anchor here so the strip never
         # places annotations inside that gap
         right=Strip(sv_right, iso_right_limit, direction=1),
         left=None,  # immediately abuts the front view's right edge
         above=Strip(sv_top_edge, PAGE_H - margin, direction=1),
-        below=None,
+        below=Strip(sv_bottom_edge, margin, direction=-1),
     )
 
     page_label = {297: "A4", 420: "A3", 594: "A2", 841: "A1", 1189: "A0"}.get(
@@ -1141,6 +1151,25 @@ def _auto_annotate(dwg, a):
             )
         else:
             _log.warning("dim_width skipped: pv_zones.below strip full")
+
+    # Depth (Y envelope) — same guard as dim_width; routed through sv_zones.below
+    if abs(a.x_size - a.y_size) > max(a.x_size, a.y_size) * 0.05:
+        _below_witness_d = SZ(a.bb.min.Z) - 2
+        _pd = a.sv_zones.below.allocate(8.0)
+        if _pd is not None:
+            dwg.add(
+                Dimension(
+                    (SX(a.bb.min.Y), _below_witness_d, 0),
+                    (SX(a.bb.max.Y), _below_witness_d, 0),
+                    "below",
+                    _below_witness_d - _pd,
+                    draft,
+                    label=_fmt(a.y_size),
+                ),
+                "dim_depth",
+            )
+        else:
+            _log.warning("dim_depth skipped: sv_zones.below strip full")
 
     # The section view goes last: its room check clears every annotation
     # already placed right of the side view (callout labels, height/step
