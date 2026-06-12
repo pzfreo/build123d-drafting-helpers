@@ -4,6 +4,19 @@
 
 ### Added
 
+- **Baseline hole-location dimensions** (#93): X dims above the plan view
+  and Y dims above the side view (which maps world Y horizontally — the
+  plan's left margin fits barely one tier), measured from a default datum
+  corner (minimum-X/Y), one reference per pattern (bolt-circle centre,
+  array first hole) plus each unpatterned hole, deduped, capped at 4
+  (largest first) and skipped when a tier would leave the page.
+- **Automatic section views** (#94, conservative core): when a Z-axis hole
+  has a counterbore/spotface or a non-through bottom, a full SECTION A–A is
+  cut through the densest row of qualifying hole axes and placed right of
+  the side view (skipped with a log when there is no room), with a caption
+  and a cutting-plane centreline + 'A' letters on the plan view. Hatching
+  and proper section arrows are staged for a follow-up.
+
 - **Hole-pattern recognition** (#92): `find_hole_patterns(holes)` returns
   `BoltCircle` / `LinearArray` records for ≥3 identical-spec holes equally
   spaced on a circle or collinear at constant pitch. `make_drawing` uses

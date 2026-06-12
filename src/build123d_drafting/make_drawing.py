@@ -24,12 +24,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from build123d import (
+    Box,
     Color,
     Compound,
     ExportDXF,
     ExportSVG,
     LineType,
     Location,
+    Pos,
     Shape,
     import_step,
 )
@@ -911,9 +913,13 @@ def _auto_annotate(dwg, a):
         size = max(2.5, h.diameter * a.SCALE + 2.0)
         dwg.add(CenterMark(to_page(h), size, draft), f"cm_{view}{i}")
 
-    # Hole callouts — prismatic parts only; turned parts keep dim_od/ldr_z
+    # Hole callouts, locations, and sections — prismatic parts only; turned
+    # parts keep dim_od/ldr_z
     if not a.is_rotational and a.holes:
-        _annotate_holes(dwg, a, view_of_axis, _axis_letter)
+        patterns = find_hole_patterns(a.holes)
+        _annotate_holes(dwg, a, view_of_axis, _axis_letter, patterns)
+        _add_location_dims(dwg, a, _axis_letter, patterns)
+        _add_section_view(dwg, a, _axis_letter)
 
     if a.cross_diams and a.is_rotational:
         _log.info(
@@ -954,6 +960,201 @@ def _auto_annotate(dwg, a):
 
 
 _MAX_CALLOUTS_PER_VIEW = 4
+
+
+_MAX_LOCATION_REFS = 4
+
+
+def _add_location_dims(dwg, a, axis_letter, patterns):
+    """Baseline X/Y location dimensions in the plan view (#93).
+
+    The datum corner is a *default* — the part's minimum-X/minimum-Y corner
+    (lower-left in the plan view), per inspection practice; a human/LLM pass
+    can re-anchor it. One reference per pattern (bolt-circle centre, array
+    first hole) plus each unpatterned hole, capped at
+    ``_MAX_LOCATION_REFS`` (largest holes first, the rest logged). X dims
+    tier above the plan view (below sit dim_width and the front view),
+    Y dims tier to its left; a tier that would leave the page is skipped,
+    never force-placed. Cross-axis holes are not located yet (logged).
+    """
+    draft = dwg.draft
+    z_holes = [h for h in a.holes if axis_letter(h) == "z"]
+    if len(z_holes) < len(a.holes):
+        _log.info("Cross-axis holes present; their locations are not auto-dimensioned")
+    patterned = {h for p in patterns for h in p.holes}
+    refs = []  # (world_x, world_y, sort_diameter)
+    for p in patterns:
+        if axis_letter(p.holes[0]) != "z":
+            continue
+        if isinstance(p, BoltCircle):
+            refs.append((p.center[0], p.center[1], p.holes[0].diameter))
+        else:
+            first = p.holes[0]
+            refs.append((first.location[0], first.location[1], first.diameter))
+    refs += [(h.location[0], h.location[1], h.diameter) for h in z_holes if h not in patterned]
+    # dedupe coincident references (e.g. a hole at a bolt-circle's centre)
+    unique: list = []
+    for r in refs:
+        if not any(abs(r[0] - u[0]) < 0.5 and abs(r[1] - u[1]) < 0.5 for u in unique):
+            unique.append(r)
+    refs = unique
+    if not refs:
+        return
+    if len(refs) > _MAX_LOCATION_REFS:
+        refs.sort(key=lambda r: r[2], reverse=True)
+        _log.info(
+            "%d location references; dimensioning the %d largest",
+            len(refs),
+            _MAX_LOCATION_REFS,
+        )
+        refs = refs[:_MAX_LOCATION_REFS]
+
+    def PX(x):
+        return a.PV_X + (x - a.cx) * a.SCALE
+
+    def PY(y):
+        return a.PV_Y + (y - a.cy) * a.SCALE
+
+    plan_top = PY(a.bb.max.Y)
+    datum_x, datum_y = a.bb.min.X, a.bb.min.Y
+    tier = draft.font_size * 3.0
+
+    # X locations: dims above the plan view, shortest span innermost, on
+    # tiers beyond any pitch dims already stacked there
+    base = 8.0 + 10.0 * sum(1 for n in dwg._named if n.startswith("dim_pitch_plan"))
+    x_refs: list = []
+    for r in refs:
+        if not any(abs(r[0] - u[0]) < 0.5 for u in x_refs):
+            x_refs.append(r)
+    for i, (rx, ry, _) in enumerate(sorted(x_refs, key=lambda r: abs(r[0] - datum_x))):
+        if abs(rx - datum_x) * a.SCALE < 1.0:
+            continue  # on the datum edge — nothing to dimension
+        level = plan_top + base + tier * i
+        if level > a.PAGE_H - a.margin - draft.font_size:
+            _log.info("X location dim for x=%s skipped (no room above)", _fmt(rx))
+            continue
+        dwg.add(
+            Dimension(
+                (PX(datum_x), PY(ry), 0),
+                (PX(rx), PY(ry), 0),
+                "above",
+                level - PY(ry),
+                draft,
+                label=_fmt(rx - datum_x),
+            ),
+            f"dim_locx{i}",
+        )
+
+    # Y locations: the side view maps world Y horizontally, and the strip
+    # above it is open (the plan view's left margin fits barely one tier) —
+    # dims go above the side view, with witness lines to the holes' hidden
+    # lines
+    def SX(y):
+        return a.SV_X + (y - a.cy) * a.SCALE
+
+    def SZ(z):
+        return a.SV_Y + (z - a.cz) * a.SCALE
+
+    side_top = SZ(a.bb.max.Z)
+    iso_x0, iso_y0, _, _ = _iso_bbox(dwg)
+    y_refs: list = []
+    for rx, ry, dia in refs:
+        if not any(abs(ry - u[1]) < 0.5 for u in y_refs):
+            y_refs.append((rx, ry, dia))
+    for i, (_rx, ry, _) in enumerate(sorted(y_refs, key=lambda r: abs(r[1] - datum_y))):
+        if abs(ry - datum_y) * a.SCALE < 1.0:
+            continue
+        level = side_top + 8.0 + tier * i
+        limit = a.PAGE_H - a.margin - draft.font_size
+        if SX(max(ry, datum_y)) + 10 > iso_x0 - 4:
+            limit = min(limit, iso_y0 - 4)
+        if level > limit:
+            _log.info("Y location dim for y=%s skipped (no room above the side view)", _fmt(ry))
+            continue
+        dwg.add(
+            Dimension(
+                (SX(datum_y), SZ(a.bb.max.Z), 0),
+                (SX(ry), SZ(a.bb.max.Z), 0),
+                "above",
+                level - side_top,
+                draft,
+                label=_fmt(ry - datum_y),
+            ),
+            f"dim_locy{i}",
+        )
+
+
+def _add_section_view(dwg, a, axis_letter):
+    """Full section A–A when blind or stepped holes hide their structure
+    (#94, conservative core).
+
+    Trigger: any Z-axis hole with a counterbore/spotface or a non-through
+    bottom — its internal profile is hidden-line-only in every standard
+    view. The cut plane passes through the densest row of qualifying hole
+    axes, parallel to the front view; material on the viewer's side is
+    removed so the cut face shows the hole profiles as visible line-work.
+    The section is placed right of the side view when there is room
+    (skipped with a log otherwise), captioned, and marked with a cutting-
+    plane centreline and 'A' letters on the plan view. Hatching and proper
+    section arrows are staged for a follow-up.
+    """
+    cands = [
+        h
+        for h in a.holes
+        if axis_letter(h) == "z" and (h.cbore or h.spotface or h.bottom != "through")
+    ]
+    if not cands:
+        return
+    ys = [h.location[1] for h in cands]
+    y_star = max(
+        {round(y, 1) for y in ys},
+        key=lambda v: (sum(1 for y in ys if abs(y - v) <= 0.5), -abs(v - a.cy)),
+    )
+
+    # room check: same row as the front/side views, to the right — past any
+    # side-view callout labels already placed there
+    half_w = a.x_size * a.SCALE / 2
+    half_h = a.z_size * a.SCALE / 2
+    side_vis, side_hid = dwg.views["side"]
+    side_right = max(side_vis.bounding_box().max.X, side_hid.bounding_box().max.X)
+    left_edge = side_right + 10
+    for name, ann in dwg._named.items():
+        if name.startswith("hc_side") and getattr(ann, "label_bbox", None):
+            left_edge = max(left_edge, ann.label_bbox[2] + 6)
+    pos_x = left_edge + half_w
+    iso_x0, iso_y0, _, _ = _iso_bbox(dwg)
+    right_limit = a.PAGE_W - a.margin
+    if a.FV_Y + half_h + 6 > iso_y0 - 2:
+        right_limit = min(right_limit, iso_x0 - 4)
+    tb_left = a.PAGE_W - a.TB_W - 11
+    if a.FV_Y - half_h - 10 < 11 + _TB_H and pos_x + half_w > tb_left - 4:
+        _log.info("Section A–A skipped (would collide with the title block)")
+        return
+    if pos_x + half_w > right_limit:
+        _log.info("Section A–A skipped (no room right of the side view)")
+        return
+
+    big = 4 * a.bbox_max
+    keep_behind = a.part - Pos(a.cx, y_star - big / 2, a.cz) * Box(big, big, big)
+    camera = (dwg.look_at[0], dwg.look_at[1] - dwg.dist, dwg.look_at[2])
+    dwg.add_view("section_aa", keep_behind, camera, (0, 0, 1), (pos_x, a.FV_Y))
+    dwg.add(
+        Note("SECTION A–A", (pos_x, a.FV_Y - half_h - 7), dwg.draft),
+        "section_caption",
+    )
+
+    # cutting-plane line + identification letters on the plan view
+    def PX(x):
+        return a.PV_X + (x - a.cx) * a.SCALE
+
+    def PY(y):
+        return a.PV_Y + (y - a.cy) * a.SCALE
+
+    y_page = PY(y_star)
+    x0, x1 = PX(a.bb.min.X) - 4, PX(a.bb.max.X) + 4
+    dwg.add(Centerline((x0, y_page, 0), (x1, y_page, 0)), "section_line")
+    dwg.add(Note("A", (x0 - 4, y_page), dwg.draft), "section_a_left")
+    dwg.add(Note("A", (x1 + 4, y_page), dwg.draft), "section_a_right")
 
 
 def _add_furniture(dwg, a, view, j, pattern, to_page):
@@ -1039,7 +1240,7 @@ def _add_pitch_dim(dwg, a, view, j, pattern, to_page):
     )
 
 
-def _annotate_holes(dwg, a, view_of_axis, axis_letter):
+def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
     """Leader-attached HoleCallouts, one per distinct hole spec per view (#91).
 
     Identical holes share one callout with an ``n×`` count prefix (#92's
@@ -1081,7 +1282,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
     # A pattern annotates only when it accounts for the whole spec group —
     # a 7th same-size hole off the circle would make "7× ... EQ SP ON BC"
     # a lie about six of them.
-    patterns = {frozenset(p.holes): p for p in find_hole_patterns(a.holes)}
+    patterns = {frozenset(p.holes): p for p in found_patterns}
 
     def _build_callout(holes, pattern):
         h = holes[0]

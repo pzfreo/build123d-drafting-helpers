@@ -1046,6 +1046,86 @@ class TestHolePatternAnnotations:
         assert [i for i in lint_drawing([dim]) if i.code == "label_vs_measured"] == []
 
 
+class TestLocationDimsAndSection:
+    """Baseline location dims (#93) and auto section views (#94)."""
+
+    @pytest.fixture(scope="class")
+    def plate_drawing(self):
+        # corners (a square → bolt-circle group) + centre cbore stack +
+        # off-centre blind hole: refs are the BC centre (= cbore hole,
+        # deduped) and the blind hole
+        part = (
+            Box(100, 100, 20)
+            - Pos(35, 35, 0) * Cylinder(5, 20)
+            - Pos(-35, 35, 0) * Cylinder(5, 20)
+            - Pos(35, -35, 0) * Cylinder(5, 20)
+            - Pos(-35, -35, 0) * Cylinder(5, 20)
+            - Cylinder(4, 20)
+            - Pos(0, 0, 7) * Cylinder(8, 6)
+            - Pos(-20, -10, 6) * Cylinder(6, 8)
+        )
+        return build_drawing(part)
+
+    @pytest.mark.timeout(120)
+    def test_x_dims_above_the_plan_view(self, plate_drawing):
+        labels = {a.label for n, a in plate_drawing._named.items() if n.startswith("dim_locx")}
+        assert labels == {"50", "30"}
+        plan_top = plate_drawing.views["plan"][0].bounding_box().max.Y
+        assert all(
+            a.dim_level_y > plan_top
+            for n, a in plate_drawing._named.items()
+            if n.startswith("dim_locx")
+        )
+
+    @pytest.mark.timeout(120)
+    def test_y_dims_above_the_side_view(self, plate_drawing):
+        labels = {a.label for n, a in plate_drawing._named.items() if n.startswith("dim_locy")}
+        assert labels == {"50", "40"}
+        side_top = plate_drawing.views["side"][0].bounding_box().max.Y
+        assert all(
+            a.dim_level_y > side_top
+            for n, a in plate_drawing._named.items()
+            if n.startswith("dim_locy")
+        )
+
+    @pytest.mark.timeout(120)
+    def test_section_view_with_cutting_plane_markers(self, plate_drawing):
+        assert "section_aa" in plate_drawing.views
+        assert plate_drawing._named["section_caption"].label == "SECTION A–A"
+        assert plate_drawing._named["section_line"].is_centerline
+        assert plate_drawing._named["section_a_left"].label == "A"
+
+    @pytest.mark.timeout(120)
+    def test_sheet_is_lint_clean(self, plate_drawing):
+        assert [i for i in plate_drawing.lint() if i.severity != "info"] == []
+
+    @pytest.mark.timeout(120)
+    def test_through_only_plate_gets_no_section(self):
+        part = Box(80, 60, 10) - Pos(20, 10, 0) * Cylinder(5, 10)
+        dwg = build_drawing(part)
+        assert "section_aa" not in dwg.views
+        assert "section_line" not in dwg._named
+        # but it still gets located
+        assert any(n.startswith("dim_locx") for n in dwg._named)
+
+    @pytest.mark.timeout(120)
+    def test_underside_cbore_triggers_a_section(self):
+        # The issue's acceptance case: a blind cbore from the underside is
+        # hidden-line-only everywhere — the section shows it as line-work.
+        part = Box(80, 60, 20) - Cylinder(4, 20) - Pos(10, 5, -7) * Cylinder(6, 6)
+        dwg = build_drawing(part)
+        assert "section_aa" in dwg.views
+        vis, _hid = dwg.views["section_aa"]
+        assert len(vis.edges()) > 0
+        assert [i for i in dwg.lint() if i.severity != "info"] == []
+
+    @pytest.mark.timeout(60)
+    def test_rotational_part_gets_neither(self):
+        dwg = build_drawing(Cylinder(30, 40) - Cylinder(10, 40))
+        assert "section_aa" not in dwg.views
+        assert not any(n.startswith("dim_loc") for n in dwg._named)
+
+
 class TestIsRotational:
     def test_plain_cylinder(self):
         assert _is_rotational(30.0, 30.0, 30.0, 0.0)
