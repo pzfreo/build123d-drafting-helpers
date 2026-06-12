@@ -923,21 +923,27 @@ _MAX_CALLOUTS_PER_VIEW = 4
 def _annotate_holes(dwg, a, view_of_axis, axis_letter):
     """Leader-attached HoleCallouts, one per distinct hole spec per view (#91).
 
-    Identical holes (same diameter, depth, bottom, and steps) share one
-    callout with an ``n×`` count prefix (#92's grouping half); the leader
-    points at the group's hole nearest the callout.
+    Identical holes share one callout with an ``n×`` count prefix (#92's
+    grouping half) — through holes group on diameter and steps regardless of
+    wall thickness. The leader tip lands on the hole's circumference, on the
+    group's hole nearest the callout.
 
     Placement: plan- and side-view callouts go to the right of their view
-    (the strip before the iso view / page margin), front-view callouts go
-    below the front view (the strip above the title block). Each callout is
-    width-checked against its limit and falls back to the opposite side;
-    callouts that fit nowhere are logged, not force-placed.
+    (the strip before the iso view / page margin; plan falls back to its
+    left, the side view has no usable left strip), front-view callouts go
+    below the front view, deconflicted so no leader shaft crosses an earlier
+    callout's text. Each callout is width-checked; anything that fits
+    nowhere is logged and skipped — never force-placed — and then surfaces
+    through the coverage lint as ``feature_not_dimensioned``.
     """
     draft = dwg.draft
     gap = draft.pad_around_text
+    min_gap = draft.font_size * 2.2
     groups: dict = {}
     for h in a.holes:
-        key = (axis_letter(h), h.diameter, h.depth, h.bottom, h.cbore, h.spotface)
+        # a through drill is the same callout whatever wall it pierces
+        depth_key = None if h.bottom == "through" else h.depth
+        key = (axis_letter(h), h.diameter, depth_key, h.bottom, h.cbore, h.spotface)
         groups.setdefault(key, []).append(h)
 
     by_view: dict = {}
@@ -946,98 +952,139 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
 
     iso_x0, iso_y0, _, _ = _iso_bbox(dwg)
     plan_right = a.PV_X + (a.bb.max.X - a.cx) * a.SCALE
+    plan_left = a.PV_X + (a.bb.min.X - a.cx) * a.SCALE
     side_right = a.SV_X + (a.bb.max.Y - a.cy) * a.SCALE
     front_bottom = a.FV_Y + (a.bb.min.Z - a.cz) * a.SCALE
+    tb_left = a.PAGE_W - a.TB_W - 11
     tb_top = 11 + _TB_H
-    min_gap = draft.font_size * 2.2
 
-    def _right_limit(view, elbow_y):
-        # the iso view caps the right-hand strip only on rows it occupies
-        if view == "plan" or elbow_y >= iso_y0 - draft.font_size:
-            return iso_x0 - 4
-        return a.PAGE_W - a.margin
+    def _build_callout(holes):
+        h = holes[0]
+        step = h.cbore or h.spotface
+        if h.cbore and h.spotface:
+            _log.info(
+                "Hole ø%s has both cbore and spotface; spotface not in the callout",
+                _fmt(h.diameter),
+            )
+            step = h.cbore
+        through = h.bottom == "through"
+        return HoleCallout(
+            _fmt(h.diameter),
+            count=len(holes) if len(holes) > 1 else None,
+            through=through,
+            depth=None if through else _fmt(h.depth),
+            cbore_dia=_fmt(step.diameter) if step else None,
+            cbore_depth=_fmt(step.depth) if step else None,
+            draft=draft,
+        )
+
+    def _rim_tip(centre, elbow, holes):
+        """Pull the tip from the hole centre to its circumference."""
+        r = holes[0].diameter * a.SCALE / 2
+        dx, dy = elbow[0] - centre[0], elbow[1] - centre[1]
+        norm = math.hypot(dx, dy)
+        if norm <= r:
+            return centre
+        return (centre[0] + dx / norm * r, centre[1] + dy / norm * r)
+
+    def _add(view, i, tip, elbow, side, callout):
+        dwg.add(
+            Leader(
+                tip=(tip[0], tip[1], 0),
+                elbow=(elbow[0], elbow[1], 0),
+                label="",
+                draft=draft,
+                text_side=side,
+                callout=callout,
+            ),
+            f"hc_{view}{i}",
+        )
 
     for view, view_groups in by_view.items():
         to_page = view_of_axis[{"plan": "z", "front": "y", "side": "x"}[view]][1]
-        placed = []
-        for holes in view_groups:
-            rep = max(holes, key=lambda h: to_page(h)[0])
-            placed.append((to_page(rep), holes))
-        placed.sort(key=lambda t: t[0][1])
-        if len(placed) > _MAX_CALLOUTS_PER_VIEW:
+        specs = [(holes, _build_callout(holes)) for holes in view_groups]
+        if len(specs) > _MAX_CALLOUTS_PER_VIEW:
+            # annotate the largest features; the rest surface via the lint
+            specs.sort(key=lambda s: s[0][0].diameter, reverse=True)
             _log.info(
-                "%d hole specs in %s view; annotating %d (rest need manual callouts)",
-                len(placed),
+                "%d hole specs in %s view; annotating the %d largest "
+                "(the rest surface as feature_not_dimensioned)",
+                len(specs),
                 view,
                 _MAX_CALLOUTS_PER_VIEW,
             )
-            placed = placed[:_MAX_CALLOUTS_PER_VIEW]
+            specs = specs[:_MAX_CALLOUTS_PER_VIEW]
 
-        prev_y = None
-        for i, (tip, holes) in enumerate(placed):
-            h = holes[0]
-            step = h.cbore or h.spotface
-            if h.cbore and h.spotface:
-                _log.info(
-                    "Hole ø%s has both cbore and spotface; spotface not in the callout",
-                    _fmt(h.diameter),
-                )
-                step = h.cbore
-            through = h.bottom == "through"
-            callout = HoleCallout(
-                _fmt(h.diameter),
-                count=len(holes) if len(holes) > 1 else None,
-                through=through,
-                depth=None if through else _fmt(h.depth),
-                cbore_dia=_fmt(step.diameter) if step else None,
-                cbore_depth=_fmt(step.depth) if step else None,
-                draft=draft,
-            )
-            w = callout.callout_width
-
-            if view == "front":
-                # Below the view: shaft drops from the hole, shelf runs right
+        if view == "front":
+            # Below the view, vertical shafts. Rows are assigned right-to-
+            # left so a deeper row's shaft never crosses a shallower row's
+            # right-running label; left-side labels get an explicit guard.
+            specs.sort(key=lambda s: max(to_page(h)[0] for h in s[0]), reverse=True)
+            occupied: list[tuple] = []  # (x0, x1, row_y) of placed labels
+            for i, (holes, callout) in enumerate(specs):
+                w = callout.callout_width
+                centre = to_page(max(holes, key=lambda h: to_page(h)[0]))
                 elbow_y = front_bottom - 0.6 * a.DIM_PAD - i * min_gap
-                if elbow_y < tb_top + 4:
-                    _log.info("Hole callout ø%s skipped (front strip full)", _fmt(h.diameter))
-                    continue
-                elbow = (tip[0], elbow_y)
-                side = "right" if tip[0] + gap + w <= a.PAGE_W - a.margin else "left"
-                if side == "left" and tip[0] - gap - w < a.margin:
-                    _log.info("Hole callout ø%s skipped (no room)", _fmt(h.diameter))
-                    continue
-            else:
-                edge_x = plan_right if view == "plan" else side_right
-                elbow_y = tip[1] if prev_y is None else max(prev_y + min_gap, tip[1])
-                prev_y = elbow_y
-                elbow_x = edge_x + 0.6 * a.DIM_PAD
-                if elbow_x + gap + w <= _right_limit(view, elbow_y):
-                    elbow, side = (elbow_x, elbow_y), "right"
+                if centre[0] + gap + w <= a.PAGE_W - a.margin:
+                    side, x0, x1 = "right", centre[0] + gap, centre[0] + gap + w
+                elif centre[0] - gap - w >= a.margin:
+                    side, x0, x1 = "left", centre[0] - gap - w, centre[0] - gap
                 else:
-                    # fall back to the left of the view
-                    left_edge = (
-                        a.PV_X + (a.bb.min.X - a.cx) * a.SCALE
-                        if view == "plan"
-                        else a.SV_X + (a.bb.min.Y - a.cy) * a.SCALE
+                    _log.info("Hole callout ø%s skipped (no room)", _fmt(holes[0].diameter))
+                    continue
+                # the title block only constrains rows that reach its x-range
+                floor = (tb_top + 4) if x1 > tb_left - 4 else a.margin + 4
+                if elbow_y < floor:
+                    _log.info(
+                        "Hole callout ø%s skipped (front strip full)", _fmt(holes[0].diameter)
                     )
-                    elbow_x = left_edge - 0.6 * a.DIM_PAD
-                    if elbow_x - gap - w < a.margin:
-                        _log.info("Hole callout ø%s skipped (no room)", _fmt(h.diameter))
-                        continue
-                    elbow, side = (elbow_x, elbow_y), "left"
-                    tip, _ = min(((to_page(hh), hh) for hh in holes), key=lambda t: t[0][0])
+                    continue
+                if any(ox0 <= centre[0] <= ox1 and row_y > elbow_y for ox0, ox1, row_y in occupied):
+                    _log.info(
+                        "Hole callout ø%s skipped (shaft would cross another callout)",
+                        _fmt(holes[0].diameter),
+                    )
+                    continue
+                elbow = (centre[0], elbow_y)
+                occupied.append((x0, x1, elbow_y))
+                _add(view, i, _rim_tip(centre, elbow, holes), elbow, side, callout)
+            continue
 
-            dwg.add(
-                Leader(
-                    tip=(tip[0], tip[1], 0),
-                    elbow=(elbow[0], elbow[1], 0),
-                    label="",
-                    draft=draft,
-                    text_side=side,
-                    callout=callout,
-                ),
-                f"hc_{view}{i}",
+        # plan / side: stacked to the right of the view
+        edge_right = plan_right if view == "plan" else side_right
+        specs.sort(key=lambda s: to_page(max(s[0], key=lambda h: to_page(h)[1]))[1])
+        prev_y = None
+        for i, (holes, callout) in enumerate(specs):
+            w = callout.callout_width
+            rep = max(holes, key=lambda h: to_page(h)[0])
+            centre = to_page(rep)
+            elbow_y = centre[1] if prev_y is None else max(prev_y + min_gap, centre[1])
+            if elbow_y > a.PAGE_H - a.margin - draft.font_size:
+                _log.info("Hole callout ø%s skipped (no room above)", _fmt(holes[0].diameter))
+                continue
+            # the iso view caps the right-hand strip only on rows it occupies
+            limit = (
+                iso_x0 - 4
+                if view == "plan" or elbow_y >= iso_y0 - draft.font_size
+                else a.PAGE_W - a.margin
             )
+            elbow_x = edge_right + 0.6 * a.DIM_PAD
+            if elbow_x + gap + w <= limit:
+                side = "right"
+            elif view == "plan" and plan_left - 0.6 * a.DIM_PAD - gap - w >= a.margin:
+                # plan is the leftmost column, so its left strip is the margin
+                side = "left"
+                elbow_x = plan_left - 0.6 * a.DIM_PAD
+                rep = min(holes, key=lambda h: to_page(h)[0])
+                centre = to_page(rep)
+                elbow_y = centre[1] if prev_y is None else max(prev_y + min_gap, centre[1])
+            else:
+                # the side view's left flank is the front view — no fallback
+                _log.info("Hole callout ø%s skipped (no room)", _fmt(holes[0].diameter))
+                continue
+            prev_y = elbow_y
+            elbow = (elbow_x, elbow_y)
+            _add(view, i, _rim_tip(centre, elbow, holes), elbow, side, callout)
 
 
 def _add_title_block(dwg, a):

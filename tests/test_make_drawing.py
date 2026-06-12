@@ -890,6 +890,48 @@ class TestAutoHoleAnnotations:
         assert [i.code for i in issues] == []
 
     @pytest.mark.timeout(60)
+    def test_through_holes_group_across_wall_thicknesses(self):
+        # The same drill through a 10mm and a 7.5mm wall is one "2× ø5 THRU"
+        # callout — through specs group regardless of depth.
+        part = (
+            Box(80, 40, 10)
+            - Pos(20, 0, 5) * Box(40, 40, 5)
+            - Pos(-20, 0, 0) * Cylinder(2.5, 10)
+            - Pos(20, 0, -1.25) * Cylinder(2.5, 7.5)
+        )
+        dwg = build_drawing(part)
+        assert len([n for n in dwg._named if n.startswith("hc_")]) == 1
+
+    @pytest.mark.timeout(60)
+    def test_two_front_view_specs_fit_below_the_view(self):
+        # The title block only constrains rows that reach its x-range, so
+        # the strip below the front view holds multiple callouts (review
+        # round 1: the old veto blanked the whole strip on A4).
+        part = (
+            Box(80, 40, 30)
+            - Pos(-20, 0, 5) * Cylinder(2.5, 50, rotation=(90, 0, 0))
+            - Pos(25, 0, -5) * Cylinder(4, 50, rotation=(90, 0, 0))
+        )
+        dwg = build_drawing(part)
+        assert len([n for n in dwg._named if n.startswith("hc_front")]) == 2
+        assert [i for i in dwg.lint() if i.severity != "info"] == []
+
+    @pytest.mark.timeout(60)
+    def test_callout_cap_keeps_the_largest_holes(self):
+        part = Box(120, 80, 10)
+        for i, r in enumerate([1, 1.5, 2, 2.5, 3, 4]):
+            part = part - Pos(-50 + i * 20, 0, 0) * Cylinder(r, 10)
+        dwg = build_drawing(part)
+        covered = set()
+        for name, ann in dwg._named.items():
+            if name.startswith("hc_"):
+                covered.update(ann.covers_diameters)
+        assert covered == {4.0, 5.0, 6.0, 8.0}
+        # the dropped specs surface through the coverage lint by design
+        flagged = {i.message for i in dwg.lint() if i.code == "feature_not_dimensioned"}
+        assert len(flagged) == 2
+
+    @pytest.mark.timeout(60)
     def test_rotational_part_keeps_leader_annotations(self):
         dwg = build_drawing(Cylinder(30, 40) - Cylinder(10, 40))
         assert "ldr_z0" in dwg._named

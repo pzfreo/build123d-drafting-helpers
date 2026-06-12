@@ -11,8 +11,11 @@
   per distinct hole spec, in the view the hole's axis is normal to. Callouts
   are width-checked against the page layout (right of plan/side, below
   front, with left-side fallback) and skipped with a log message rather than
-  force-placed. Their structured coverage feeds `lint_feature_coverage`, so
-  an auto-generated prismatic sheet passes the #80 lint out of the box.
+  force-placed. Their structured coverage feeds `lint_feature_coverage`:
+  when the layout has room the auto-generated prismatic sheet passes the #80
+  lint out of the box, and anything skipped (more than 4 specs per view —
+  the largest diameters win — or no clear strip) is logged and surfaces as
+  `feature_not_dimensioned`, marking exactly what needs a manual callout.
 - **`CenterMark(point, size)`** (#95): crosshair centre marks, added
   automatically for every hole in its normal view (all part classes); exempt
   from view-overlap lint like `Centerline`.
