@@ -1119,6 +1119,37 @@ class TestLocationDimsAndSection:
         assert len(vis.edges()) > 0
         assert [i for i in dwg.lint() if i.severity != "info"] == []
 
+    @pytest.mark.timeout(120)
+    def test_section_clears_the_step_dim_ladder(self):
+        # Step dims are placed before the section; the section's room check
+        # must clear their labels (here: no room at all → skip, never a
+        # section with a dim ladder through it).
+        part = (
+            Box(40, 12, 40)
+            - Pos(10, 0, 20) * Box(20, 12, 40)
+            - Pos(-10, 0, 0) * Cylinder(3, 40)
+            - Pos(-10, 0, 16) * Cylinder(5, 8)
+        )
+        dwg = build_drawing(part)
+        if "section_aa" in dwg.views:
+            sb = dwg.views["section_aa"][0].bounding_box()
+            for name, ann in dwg._named.items():
+                if name.startswith("dim_step") and getattr(ann, "label_bbox", None):
+                    x0, y0, x1, y1 = ann.label_bbox
+                    assert not (x1 > sb.min.X and x0 < sb.max.X and y1 > sb.min.Y and y0 < sb.max.Y)
+        assert [i for i in dwg.lint() if i.severity != "info"] == []
+
+    @pytest.mark.timeout(120)
+    def test_linear_array_locates_its_nearest_member(self):
+        # The baseline dim goes to the hole nearest the datum corner; the
+        # pitch dim chains the rest outward.
+        part = Box(100, 50, 10)
+        for x in (-30, -10, 10, 30):
+            part = part - Pos(x, 0, 6) * Cylinder(4, 8)
+        dwg = build_drawing(part)
+        labels = sorted(a.label for n, a in dwg._named.items() if n.startswith("dim_locx"))
+        assert labels == ["20"]
+
     @pytest.mark.timeout(60)
     def test_rotational_part_gets_neither(self):
         dwg = build_drawing(Cylinder(30, 40) - Cylinder(10, 40))

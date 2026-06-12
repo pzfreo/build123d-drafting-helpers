@@ -919,7 +919,6 @@ def _auto_annotate(dwg, a):
         patterns = find_hole_patterns(a.holes)
         _annotate_holes(dwg, a, view_of_axis, _axis_letter, patterns)
         _add_location_dims(dwg, a, _axis_letter, patterns)
-        _add_section_view(dwg, a, _axis_letter)
 
     if a.cross_diams and a.is_rotational:
         _log.info(
@@ -956,6 +955,12 @@ def _auto_annotate(dwg, a):
             "dim_width",
         )
 
+    # The section view goes last: its room check clears every annotation
+    # already placed right of the side view (callout labels, height/step
+    # dim ladders)
+    if not a.is_rotational and a.holes:
+        _add_section_view(dwg, a, _axis_letter)
+
     _add_title_block(dwg, a)
 
 
@@ -989,8 +994,13 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
         if isinstance(p, BoltCircle):
             refs.append((p.center[0], p.center[1], p.holes[0].diameter))
         else:
-            first = p.holes[0]
-            refs.append((first.location[0], first.location[1], first.diameter))
+            # locate the array's member nearest the datum corner — the pitch
+            # dim chains the rest outward (shortest baseline, per practice)
+            near = min(
+                p.holes,
+                key=lambda h: (h.location[0] - a.bb.min.X) ** 2 + (h.location[1] - a.bb.min.Y) ** 2,
+            )
+            refs.append((near.location[0], near.location[1], near.diameter))
     refs += [(h.location[0], h.location[1], h.diameter) for h in z_holes if h not in patterned]
     # dedupe coincident references (e.g. a hole at a bolt-circle's centre)
     unique: list = []
@@ -1021,7 +1031,11 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
 
     # X locations: dims above the plan view, shortest span innermost, on
     # tiers beyond any pitch dims already stacked there
-    base = 8.0 + 10.0 * sum(1 for n in dwg._named if n.startswith("dim_pitch_plan"))
+    base = 8.0 + 10.0 * sum(
+        1
+        for n, ann in dwg._named.items()
+        if n.startswith("dim_pitch_plan") and getattr(ann, "dim_level_y", 0) > plan_top
+    )
     x_refs: list = []
     for r in refs:
         if not any(abs(r[0] - u[0]) < 0.5 for u in x_refs):
@@ -1047,8 +1061,8 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
 
     # Y locations: the side view maps world Y horizontally, and the strip
     # above it is open (the plan view's left margin fits barely one tier) —
-    # dims go above the side view, with witness lines to the holes' hidden
-    # lines
+    # dims go above the side view, witness lines rising from its top edge at
+    # each hole's axis position
     def SX(y):
         return a.SV_X + (y - a.cy) * a.SCALE
 
@@ -1066,7 +1080,7 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
             continue
         level = side_top + 8.0 + tier * i
         limit = a.PAGE_H - a.margin - draft.font_size
-        if SX(max(ry, datum_y)) + 10 > iso_x0 - 4:
+        if SX(ry) + 10 > iso_x0 - 4:
             limit = min(limit, iso_y0 - 4)
         if level > limit:
             _log.info("Y location dim for y=%s skipped (no room above the side view)", _fmt(ry))
@@ -1116,10 +1130,15 @@ def _add_section_view(dwg, a, axis_letter):
     half_w = a.x_size * a.SCALE / 2
     half_h = a.z_size * a.SCALE / 2
     side_vis, side_hid = dwg.views["side"]
-    side_right = max(side_vis.bounding_box().max.X, side_hid.bounding_box().max.X)
+    side_right = side_vis.bounding_box().max.X
+    if side_hid:
+        side_right = max(side_right, side_hid.bounding_box().max.X)
     left_edge = side_right + 10
     for name, ann in dwg._named.items():
-        if name.startswith("hc_side") and getattr(ann, "label_bbox", None):
+        # past side-view callout labels and the height/step dim ladder
+        if name.startswith(("hc_side", "dim_height", "dim_step")) and getattr(
+            ann, "label_bbox", None
+        ):
             left_edge = max(left_edge, ann.label_bbox[2] + 6)
     pos_x = left_edge + half_w
     iso_x0, iso_y0, _, _ = _iso_bbox(dwg)
@@ -1153,8 +1172,11 @@ def _add_section_view(dwg, a, axis_letter):
     y_page = PY(y_star)
     x0, x1 = PX(a.bb.min.X) - 4, PX(a.bb.max.X) + 4
     dwg.add(Centerline((x0, y_page, 0), (x1, y_page, 0)), "section_line")
-    dwg.add(Note("A", (x0 - 4, y_page), dwg.draft), "section_a_left")
-    dwg.add(Note("A", (x1 + 4, y_page), dwg.draft), "section_a_right")
+    # letters sit above the line's ends — callout leaders to the cut row's
+    # holes run along the same y, and the letters must stay clear of them
+    lift = dwg.draft.font_size * 1.4
+    dwg.add(Note("A", (x0 - 3, y_page + lift), dwg.draft), "section_a_left")
+    dwg.add(Note("A", (x1 + 3, y_page + lift), dwg.draft), "section_a_right")
 
 
 def _add_furniture(dwg, a, view, j, pattern, to_page):
