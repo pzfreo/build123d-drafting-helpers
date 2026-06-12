@@ -299,7 +299,7 @@ class Strip:
     direction: float = 1.0
     gap: float = 8.0
     spacing: float = 4.0
-    _cursor: float = field(init=False)
+    _cursor: float = field(init=False, compare=False, repr=False)
 
     def __post_init__(self):
         self._cursor = self.anchor + self.direction * self.gap
@@ -576,9 +576,6 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     # through strip.allocate().  The iso view's outer limits are conservative
     # here (PAGE_H - margin / iso_right_limit); _auto_annotate() tightens
     # them once the iso has been projected.
-    _gap = 8.0   # inner clearance from view edge to first annotation line
-    _spc = 4.0   # spacing between successive annotations in a strip
-
     fv_right_edge = FV_X + fv_hw
     fv_left_edge  = FV_X - fv_hw
     fv_top_edge   = FV_Y + fv_hh
@@ -586,25 +583,26 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     pv_right_edge = PV_X + fv_hw   # plan has the same X half-width as front
     pv_left_edge  = PV_X - fv_hw
     pv_top_edge   = PV_Y + pv_hh
-    sv_right_edge = SV_X + sv_hw   # geometric edge of side view
     sv_top_edge   = SV_Y + fv_hh   # side view has the same Z height as front
 
     fv_zones = ViewZones(
-        right=Strip(fv_right_edge, iso_right_limit,   direction= 1, gap=_gap, spacing=_spc),
-        left =Strip(fv_left_edge,  margin,            direction=-1, gap=_gap, spacing=_spc),
-        above=Strip(fv_top_edge,   PV_Y - pv_hh - 2, direction= 1, gap=_gap, spacing=_spc),
-        below=Strip(fv_bottom_edge, margin,           direction=-1, gap=_gap, spacing=_spc),
+        right=Strip(fv_right_edge, iso_right_limit,   direction= 1),
+        left =Strip(fv_left_edge,  margin,            direction=-1),
+        above=Strip(fv_top_edge,   PV_Y - pv_hh - 2, direction= 1),
+        below=Strip(fv_bottom_edge, margin,           direction=-1),
     )
     pv_zones = ViewZones(
-        right=Strip(pv_right_edge, iso_right_limit,   direction= 1, gap=_gap, spacing=_spc),
-        left =Strip(pv_left_edge,  margin,            direction=-1, gap=_gap, spacing=_spc),
-        above=Strip(pv_top_edge,   PAGE_H - margin,   direction= 1, gap=_gap, spacing=_spc),
+        right=Strip(pv_right_edge, iso_right_limit,   direction= 1),
+        left =Strip(pv_left_edge,  margin,            direction=-1),
+        above=Strip(pv_top_edge,   PAGE_H - margin,   direction= 1),
         below=None,   # immediately abuts the front view's top edge
     )
     sv_zones = ViewZones(
-        right=Strip(sv_right_edge, iso_right_limit,   direction= 1, gap=_gap, spacing=_spc),
+        # sv_right already includes DIM_PAD; anchor here so the strip never
+        # places annotations inside that gap
+        right=Strip(sv_right, iso_right_limit, direction= 1),
         left =None,   # immediately abuts the front view's right edge
-        above=Strip(sv_top_edge,   PAGE_H - margin,   direction= 1, gap=_gap, spacing=_spc),
+        above=Strip(sv_top_edge, PAGE_H - margin, direction= 1),
         below=None,
     )
 
