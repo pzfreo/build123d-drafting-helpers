@@ -419,14 +419,9 @@ def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w) -> bool:
     if w <= page_w:
         return True
     views_bottom = max(0.0, (page_h - h) / 2) + _MARGIN + _DIM_PAD
-    if views_bottom >= _MARGIN + _TB_H:
-        # iso view sits above the title block; only the front+side columns
-        # need to fit the page width (no iso estimate, no title-block deduction)
-        side_w = (
-            _MARGIN + _DIM_PAD + x_size * scale + _DIM_PAD + y_size * scale + _DIM_PAD + _MARGIN
-        )
-        return side_w <= page_w
-    return w - _DIM_PAD - tb_w <= page_w
+    # When views clear the title block row, the iso can sit above it and the
+    # title-block column does not consume horizontal space for the view layout.
+    return w - _DIM_PAD - tb_w <= page_w and views_bottom >= _MARGIN + _TB_H
 
 
 def choose_scale(x_size: float, y_size: float, z_size: float, scale=None, page=None) -> tuple:

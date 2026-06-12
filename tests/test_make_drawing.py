@@ -332,6 +332,43 @@ class TestStripZones:
         assert a.pv_zones.right.outer_limit == pytest.approx(expected, abs=0.1)
         assert a.sv_zones.right.outer_limit == pytest.approx(expected, abs=0.1)
 
+    def test_sv_zones_below_strip_is_active(self):
+        # sv_zones.below must be a Strip (not None) after _analyse().
+        from build123d import Box
+
+        from build123d_drafting import build_drawing
+
+        part = Box(80, 60, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        assert a.sv_zones.below is not None, "sv_zones.below should be a Strip"
+
+    def test_dim_depth_routed_through_sv_zones_below(self):
+        # dim_depth (Y envelope) must be placed below side_top via sv_zones.below.
+        # Uses a part where x_size != y_size by > 5% to trigger the annotation.
+        from build123d import Box
+
+        from build123d_drafting import build_drawing
+
+        # 80×40×20 box: x_size=80, y_size=40 — differ by > 5%, so dim_depth fires
+        part = Box(80, 40, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        assert "dim_depth" in dwg._named, "expected dim_depth for part with x_size != y_size"
+        ann = dwg._named["dim_depth"]
+        assert ann.label == "40", f"dim_depth label should be y_size=40, got {ann.label!r}"
+        assert a.sv_zones.below.depth_used > 0
+
+    def test_dim_depth_absent_for_square_plan(self):
+        # dim_depth must be omitted when x_size == y_size (within 5%).
+        from build123d import Box
+
+        from build123d_drafting import build_drawing
+
+        part = Box(60, 60, 20)  # square plan: x_size == y_size
+        dwg = build_drawing(part)
+        assert "dim_depth" not in dwg._named, "dim_depth should be skipped for square plan"
+
 
 # ---------------------------------------------------------------------------
 # Integration test — requires build123d + OCP (slow)
