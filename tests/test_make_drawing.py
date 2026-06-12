@@ -996,6 +996,19 @@ class TestHolePatternAnnotations:
         assert dim.dim_level_y > plan_top
         assert [i for i in dwg.lint() if i.severity != "info"] == []
 
+    @pytest.mark.timeout(120)
+    def test_pitch_dim_skipped_when_off_page(self):
+        # Two parallel vertical arrays on a snug layout: the second tier
+        # would cross the page margin — it must skip, never force-place.
+        part = Box(60, 180, 10)
+        for i in range(5):
+            part = part - Pos(-15, -70 + i * 35, 0) * Cylinder(3.5, 10)
+        for i in range(4):
+            part = part - Pos(15, -52.5 + i * 35, 0) * Cylinder(2.5, 10)
+        dwg = build_drawing(part)
+        assert "dim_pitch_plan0" in dwg._named
+        assert [i for i in dwg.lint() if i.severity != "info"] == []
+
     @pytest.mark.timeout(60)
     def test_count_mismatch_surfaces_in_lint(self):
         from build123d import Draft

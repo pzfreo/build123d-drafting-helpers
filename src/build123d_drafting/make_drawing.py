@@ -1015,6 +1015,16 @@ def _add_pitch_dim(dwg, a, view, j, pattern, to_page):
     # stack further pitch dims in this view on outer tiers
     prior = sum(1 for name in dwg._named if name.startswith(f"dim_pitch_{view}"))
     offset = reach + 8 + 10 * prior
+    # never force-place: skip (and log) when the dim line would leave the page
+    ox = mid[0] + side[0] * (offset + 6)
+    oy = mid[1] + side[1] * (offset + 6)
+    if not (a.margin <= ox <= a.PAGE_W - a.margin and a.margin <= oy <= a.PAGE_H - a.margin):
+        _log.info(
+            "Pitch dimension for the %s× %s array skipped (no room)",
+            len(pattern.holes),
+            _fmt(pattern.pitch),
+        )
+        return
     n = len(pattern.holes)
     dwg.add(
         Dimension(
