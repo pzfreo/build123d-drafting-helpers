@@ -12,15 +12,19 @@ scripts — no MCP server required::
 """
 
 from build123d_drafting.features import (
+    BoltCircle,
     BossFeature,
     CounterBore,
     HoleFeature,
+    LinearArray,
     analyse_cylinders,
     find_bosses,
+    find_hole_patterns,
     find_holes,
 )
 from build123d_drafting.helpers import (
     Centerline,
+    CenterlineCircle,
     CenterMark,
     CompositeFeatureControlFrame,
     DatumFeature,
@@ -71,12 +75,16 @@ __all__ = [
     "analyse_face_levels",
     "choose_scale",
     "dedup_diams",
+    "BoltCircle",
     "BossFeature",
+    "LinearArray",
     "CounterBore",
     "HoleFeature",
     "find_bosses",
+    "find_hole_patterns",
     "find_holes",
     "CenterMark",
+    "CenterlineCircle",
     "Centerline",
     "CompositeFeatureControlFrame",
     "DatumFeature",

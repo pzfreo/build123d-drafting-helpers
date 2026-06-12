@@ -53,8 +53,9 @@ For a fully automatic STEP → SVG + DXF pipeline with no drawing code required,
 `make_drawing()` or the bundled `make-drawing` CLI. It analyses the part geometry,
 chooses a scale and page size, projects four views, and annotates automatically:
 hole callouts with count grouping ("4× ø10 THRU", counterbore/depth symbols) from
-the recognised hole features, centre marks, envelope dimensions, centrelines, and
-a title block.
+the recognised hole features, bolt-circle callouts with pitch-circle centrelines
+("6× ø8 THRU EQ SP ON ø60 BC"), linear-array pitch dimensions ("4× 20"), centre
+marks, envelope dimensions, centrelines, and a title block.
 
 ### CLI
 
@@ -403,6 +404,11 @@ uncovered diameter yields a `feature_not_dimensioned` warning. Title blocks are
 skipped (a part name like "BRACKET R8" is not a callout). Size coverage only — location
 coverage needs feature recognition and is future work.
 
+Counts are checked too: the part's holes give a required count per diameter, and
+structured callouts declare how many holes they dimension (the `n×` prefix). A
+shortfall yields `feature_count_mismatch`; diameters covered by free-text ø-labels
+are exempt (text carries no count semantics).
+
 `Drawing.lint()` (and therefore `export()`) runs this automatically when the drawing
 knows its source part, which `build_drawing` / `make_drawing` always provide.
 
@@ -438,6 +444,12 @@ for h in find_holes(part):
   around their axis); a bore split by a slot or keyway still counts, and a bore
   interrupted by a crossing hole is recombined into one feature. Coaxial blind
   holes drilled from opposite faces stay separate features.
+
+`find_hole_patterns(holes)` recognises patterns among the hole records: ≥3
+identical-spec holes equally spaced on a circle become a `BoltCircle(holes,
+center, diameter)`, collinear holes at constant pitch a `LinearArray(holes,
+pitch, direction)`. Collinearity is tested first (any three points are
+concyclic), and each hole belongs to at most one pattern.
 
 `find_bosses` returns one `BossFeature(axis, location, diameter, height)` per
 external cylinder segment — including a turned part's OD; filter on diameter

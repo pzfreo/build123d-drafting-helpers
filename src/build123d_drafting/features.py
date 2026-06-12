@@ -532,3 +532,162 @@ def find_bosses(part) -> list:
             )
         )
     return bosses
+
+
+# ---------------------------------------------------------------------------
+# Hole patterns — bolt circles and linear arrays (#92)
+# ---------------------------------------------------------------------------
+
+# A pattern's holes must share a radius (bolt circle) or pitch (linear array)
+# to within this fraction of the nominal, plus a small absolute floor.
+_PATTERN_REL_TOL = 0.02
+_PATTERN_ABS_TOL = 0.1
+# Bolt-circle angular spacing must be even to within this fraction of 2π/n.
+# Tight on purpose: at 15% a 100×80 rectangle reads as an equally spaced
+# bolt circle; real patterns (even from noisy STEP) are within a fraction
+# of a degree.
+_BC_SPACING_TOL = 0.04
+
+
+@dataclass(frozen=True)
+class BoltCircle:
+    """≥3 identical holes equally spaced on a circle.
+
+    ``center`` is the world point at the holes' opening plane, ``diameter``
+    the bolt-circle diameter (BCD), ``holes`` the member features.
+    """
+
+    holes: tuple
+    center: tuple
+    diameter: float
+
+
+@dataclass(frozen=True)
+class LinearArray:
+    """≥3 identical holes collinear at constant pitch.
+
+    ``direction`` is the unit vector from the first hole toward the last
+    (members are ordered along it).
+    """
+
+    holes: tuple
+    pitch: float
+    direction: tuple
+
+
+def _pattern_tol(nominal: float) -> float:
+    return _PATTERN_REL_TOL * nominal + _PATTERN_ABS_TOL
+
+
+def _spec_key(h):
+    """Holes sharing one machining spec: identical drill (a through drill is
+    the same spec whatever wall it pierces) and identical drilling direction.
+    The axis is snapped to 6 dp — boolean ops leave ~1e-16 noise on the
+    components, and exact float keys would split a pattern silently."""
+    depth_key = None if h.bottom == "through" else h.depth
+    axis = tuple(0.0 if abs(c) < 1e-6 else round(c, 6) for c in h.axis)
+    return (axis, h.diameter, depth_key, h.bottom, h.cbore, h.spotface)
+
+
+def _plane_uv(axis):
+    """Two unit vectors spanning the plane perpendicular to *axis*."""
+    ax, ay, az = axis
+    ref = (0.0, 0.0, 1.0) if abs(az) < 0.9 else (1.0, 0.0, 0.0)
+    ux = ay * ref[2] - az * ref[1]
+    uy = az * ref[0] - ax * ref[2]
+    uz = ax * ref[1] - ay * ref[0]
+    n = math.hypot(ux, math.hypot(uy, uz))
+    u = (ux / n, uy / n, uz / n)
+    v = (
+        ay * u[2] - az * u[1],
+        az * u[0] - ax * u[2],
+        ax * u[1] - ay * u[0],
+    )
+    return u, v
+
+
+def _as_bolt_circle(holes, pts):
+    """BoltCircle when *pts* (2D) are equally spaced on a common circle."""
+    n = len(pts)
+    cx = sum(p[0] for p in pts) / n
+    cy = sum(p[1] for p in pts) / n
+    radii = [math.hypot(p[0] - cx, p[1] - cy) for p in pts]
+    r = sum(radii) / n
+    if r < _PATTERN_ABS_TOL or max(abs(ri - r) for ri in radii) > _pattern_tol(r):
+        return None
+    angles = sorted(math.atan2(p[1] - cy, p[0] - cx) for p in pts)
+    gaps = [angles[i + 1] - angles[i] for i in range(n - 1)]
+    gaps.append(2 * math.pi - (angles[-1] - angles[0]))
+    even = 2 * math.pi / n
+    if max(abs(g - even) for g in gaps) > _BC_SPACING_TOL * even:
+        return None
+    center = tuple(sum(c) / n for c in zip(*(h.location for h in holes), strict=True))
+    return BoltCircle(holes=tuple(holes), center=center, diameter=round(2 * r, 2))
+
+
+def _as_linear_array(holes, pts):
+    """LinearArray when *pts* (2D) are collinear at constant pitch."""
+    n = len(pts)
+    order = sorted(range(n), key=lambda i: (pts[i][0], pts[i][1]))
+    first, last = pts[order[0]], pts[order[-1]]
+    dx, dy = last[0] - first[0], last[1] - first[1]
+    span = math.hypot(dx, dy)
+    if span < _PATTERN_ABS_TOL:
+        return None
+    ux, uy = dx / span, dy / span
+    # collinearity: every point within tolerance of the first→last line —
+    # scaled to the pitch, not the span (a long row must not absorb holes
+    # millimetres off-line)
+    line_tol = _pattern_tol(span / (n - 1))
+    if any(abs((p[0] - first[0]) * -uy + (p[1] - first[1]) * ux) > line_tol for p in pts):
+        return None
+    ts = sorted((p[0] - first[0]) * ux + (p[1] - first[1]) * uy for p in pts)
+    pitches = [ts[i + 1] - ts[i] for i in range(n - 1)]
+    pitch = span / (n - 1)
+    if max(abs(p - pitch) for p in pitches) > _pattern_tol(pitch):
+        return None
+    # order members along the array, in world coordinates
+    ts_unsorted = [(p[0] - first[0]) * ux + (p[1] - first[1]) * uy for p in pts]
+    ordered = sorted(zip(ts_unsorted, holes, strict=True), key=lambda t: t[0])
+    w0 = ordered[0][1].location
+    w1 = ordered[-1][1].location
+    d = tuple(b - a for a, b in zip(w0, w1, strict=True))
+    norm = math.hypot(d[0], math.hypot(d[1], d[2]))
+    return LinearArray(
+        holes=tuple(h for _, h in ordered),
+        pitch=round(pitch, 2),
+        direction=_unit(tuple(c / norm for c in d)),
+    )
+
+
+def find_hole_patterns(holes) -> list:
+    """Recognise :class:`BoltCircle` and :class:`LinearArray` patterns among
+    *holes* (``HoleFeature`` records, e.g. from :func:`find_holes`).
+
+    Identical-spec, identical-axis holes are tested together: collinear sets
+    at constant pitch become a :class:`LinearArray`; sets equally spaced on a
+    common circle become a :class:`BoltCircle` (collinearity is tested first
+    — any three points are concyclic, so a 3-hole "bolt circle" must really
+    be an equilateral triangle). Each hole belongs to at most one pattern;
+    unpatterned holes are simply absent from the result.
+    """
+    groups: dict = {}
+    for h in holes:
+        groups.setdefault(_spec_key(h), []).append(h)
+
+    patterns = []
+    for (axis, *_), members in groups.items():
+        if len(members) < 3:
+            continue
+        u, v = _plane_uv(axis)
+        pts = [
+            (
+                sum(a * b for a, b in zip(h.location, u, strict=True)),
+                sum(a * b for a, b in zip(h.location, v, strict=True)),
+            )
+            for h in members
+        ]
+        pattern = _as_linear_array(members, pts) or _as_bolt_circle(members, pts)
+        if pattern:
+            patterns.append(pattern)
+    return patterns

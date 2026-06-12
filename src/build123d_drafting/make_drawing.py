@@ -37,12 +37,17 @@ from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_Plane
 
 from build123d_drafting.features import (
+    BoltCircle,
+    LinearArray,
     _full_cyls,
+    _spec_key,
     analyse_cylinders,
+    find_hole_patterns,
     find_holes,
 )
 from build123d_drafting.helpers import (
     Centerline,
+    CenterlineCircle,
     CenterMark,
     Dimension,
     HoleCallout,
@@ -165,23 +170,33 @@ def lint_feature_coverage(part, annotations, tol: float = 0.15, cyls=None) -> li
     ``cyls`` accepts a precomputed ``analyse_cylinders(part)`` result so
     repeated lint runs need not re-scan the solid.
 
-    This checks *size* coverage only; location coverage needs feature
-    recognition and is out of scope.
+    Counts are checked too (#92): the part's holes (via ``find_holes``) give
+    a required count per diameter (each bore, counterbore, and spotface
+    occurrence counts one), and structured callouts declare how many holes
+    they dimension (``covers_count`` — the ``n×`` prefix). A shortfall
+    yields a ``feature_count_mismatch`` warning. A diameter covered by any
+    free-text ø-label is exempt from the count check — text labels carry no
+    count semantics. Location coverage remains out of scope (#93).
     """
     z_cyls, cross_cyls = cyls if cyls is not None else analyse_cylinders(part)
     inventory = dedup_diams(_full_cyls(z_cyls + cross_cyls), tol=tol)
 
     mentioned: set[float] = set()
+    text_mentioned: set[float] = set()
+    provided: dict[float, int] = {}
     for ann in annotations:
         if isinstance(ann, TitleBlock):
             continue
         label = getattr(ann, "label", None) or ""
         for m in _DIAM_RE.finditer(label):
             mentioned.add(float(m.group(1)))
+            text_mentioned.add(float(m.group(1)))
+        count = getattr(ann, "covers_count", 1)
         for v in getattr(ann, "covers_diameters", ()):
             mentioned.add(float(v))
+            provided[float(v)] = provided.get(float(v), 0) + count
 
-    return [
+    issues = [
         LintIssue(
             severity="warning",
             code="feature_not_dimensioned",
@@ -190,6 +205,27 @@ def lint_feature_coverage(part, annotations, tol: float = 0.15, cyls=None) -> li
         for d in inventory
         if not any(abs(d - v) <= tol for v in mentioned)
     ]
+
+    required: dict[float, int] = {}
+    for h in find_holes(part, cyls=(z_cyls, cross_cyls)):
+        for d in (h.diameter, *(s.diameter for s in (h.cbore, h.spotface) if s)):
+            key = next((k for k in required if abs(k - d) <= tol), d)
+            required[key] = required.get(key, 0) + 1
+    for d, need in sorted(required.items(), reverse=True):
+        if any(abs(d - v) <= tol for v in text_mentioned):
+            continue  # free-text coverage carries no count to check against
+        have = sum(c for v, c in provided.items() if abs(d - v) <= tol)
+        if 0 < have < need:
+            issues.append(
+                LintIssue(
+                    severity="warning",
+                    code="feature_count_mismatch",
+                    message=(
+                        f"{need} ø{_fmt(d)} features on the part but callouts account for {have}"
+                    ),
+                )
+            )
+    return issues
 
 
 def analyse_face_levels(part, tol: float = 0.5) -> list:
@@ -920,6 +956,89 @@ def _auto_annotate(dwg, a):
 _MAX_CALLOUTS_PER_VIEW = 4
 
 
+def _add_furniture(dwg, a, view, j, pattern, to_page):
+    """Pattern sheet furniture, added once its callout is placed (#92)."""
+    if isinstance(pattern, BoltCircle):
+        cx = sum(to_page(h)[0] for h in pattern.holes) / len(pattern.holes)
+        cy = sum(to_page(h)[1] for h in pattern.holes) / len(pattern.holes)
+        dwg.add(CenterlineCircle((cx, cy), pattern.diameter * a.SCALE), f"bc_{view}{j}")
+    elif isinstance(pattern, LinearArray):
+        _add_pitch_dim(dwg, a, view, j, pattern, to_page)
+
+
+def _add_pitch_dim(dwg, a, view, j, pattern, to_page):
+    """Pitch dimension for a linear hole array: first→last hole centres,
+    labelled ``(n-1)× pitch``, placed just outside the view on the side of
+    the row's outward perpendicular (#92)."""
+    p1 = to_page(pattern.holes[0])
+    p2 = to_page(pattern.holes[-1])
+    ux, uy = p2[0] - p1[0], p2[1] - p1[1]
+    norm = math.hypot(ux, uy)
+    if norm < 1e-9:
+        return
+    ux, uy = ux / norm, uy / norm
+    mid = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+    # view extents in page coordinates, to push the dim line outside
+    if view == "plan":
+        corners = [
+            (a.PV_X + (x - a.cx) * a.SCALE, a.PV_Y + (y - a.cy) * a.SCALE)
+            for x in (a.bb.min.X, a.bb.max.X)
+            for y in (a.bb.min.Y, a.bb.max.Y)
+        ]
+    elif view == "front":
+        corners = [
+            (a.FV_X + (x - a.cx) * a.SCALE, a.FV_Y + (z - a.cz) * a.SCALE)
+            for x in (a.bb.min.X, a.bb.max.X)
+            for z in (a.bb.min.Z, a.bb.max.Z)
+        ]
+    else:
+        corners = [
+            (a.SV_X + (y - a.cy) * a.SCALE, a.SV_Y + (z - a.cz) * a.SCALE)
+            for y in (a.bb.min.Y, a.bb.max.Y)
+            for z in (a.bb.min.Z, a.bb.max.Z)
+        ]
+    # Pick the perpendicular side from the page layout, not raw distance:
+    # below the plan view sit dim_width and the front view, above the front
+    # view sits the plan — so plan dims go up, front dims go down, and
+    # vertical rows go left (callouts own the right strip). The side view
+    # alone uses the shorter reach. A row far from its chosen side simply
+    # gets long extension lines — standard practice when the near side is
+    # occupied.
+    reach_pos = max((c[0] - mid[0]) * -uy + (c[1] - mid[1]) * ux for c in corners)
+    reach_neg = max((c[0] - mid[0]) * uy + (c[1] - mid[1]) * -ux for c in corners)
+    cands = (((-uy, ux, 0), reach_pos), ((uy, -ux, 0), reach_neg))
+    if view == "side":
+        side, reach = min(cands, key=lambda c: c[1])
+    else:
+        pref = (-0.3, 1.0) if view == "plan" else (-0.3, -1.0)
+        side, reach = max(cands, key=lambda c: c[0][0] * pref[0] + c[0][1] * pref[1])
+    # stack further pitch dims in this view on outer tiers
+    prior = sum(1 for name in dwg._named if name.startswith(f"dim_pitch_{view}"))
+    offset = reach + 8 + 10 * prior
+    # never force-place: skip (and log) when the dim line would leave the page
+    ox = mid[0] + side[0] * (offset + 6)
+    oy = mid[1] + side[1] * (offset + 6)
+    if not (a.margin <= ox <= a.PAGE_W - a.margin and a.margin <= oy <= a.PAGE_H - a.margin):
+        _log.info(
+            "Pitch dimension for the %s× %s array skipped (no room)",
+            len(pattern.holes),
+            _fmt(pattern.pitch),
+        )
+        return
+    n = len(pattern.holes)
+    dwg.add(
+        Dimension(
+            (p1[0], p1[1], 0),
+            (p2[0], p2[1], 0),
+            side,
+            offset,
+            dwg.draft,
+            label=f"{n - 1}× {_fmt(pattern.pitch)}",
+        ),
+        f"dim_pitch_{view}{j}",
+    )
+
+
 def _annotate_holes(dwg, a, view_of_axis, axis_letter):
     """Leader-attached HoleCallouts, one per distinct hole spec per view (#91).
 
@@ -939,16 +1058,17 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
     draft = dwg.draft
     gap = draft.pad_around_text
     min_gap = draft.font_size * 2.2
+    # Group on the same machining-spec key pattern detection uses (snapped
+    # axis vector included): blind holes drilled from opposite faces are
+    # different operations and get separate callouts, and a spec group's
+    # hole set therefore lines up exactly with find_hole_patterns' groups.
     groups: dict = {}
     for h in a.holes:
-        # a through drill is the same callout whatever wall it pierces
-        depth_key = None if h.bottom == "through" else h.depth
-        key = (axis_letter(h), h.diameter, depth_key, h.bottom, h.cbore, h.spotface)
-        groups.setdefault(key, []).append(h)
+        groups.setdefault(_spec_key(h), []).append(h)
 
     by_view: dict = {}
-    for (ax, *_), holes in groups.items():
-        by_view.setdefault(view_of_axis[ax][0], []).append(holes)
+    for holes in groups.values():
+        by_view.setdefault(view_of_axis[axis_letter(holes[0])][0], []).append(holes)
 
     iso_x0, iso_y0, _, _ = _iso_bbox(dwg)
     plan_right = a.PV_X + (a.bb.max.X - a.cx) * a.SCALE
@@ -958,7 +1078,12 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
     tb_left = a.PAGE_W - a.TB_W - 11
     tb_top = 11 + _TB_H
 
-    def _build_callout(holes):
+    # A pattern annotates only when it accounts for the whole spec group —
+    # a 7th same-size hole off the circle would make "7× ... EQ SP ON BC"
+    # a lie about six of them.
+    patterns = {frozenset(p.holes): p for p in find_hole_patterns(a.holes)}
+
+    def _build_callout(holes, pattern):
         h = holes[0]
         step = h.cbore or h.spotface
         if h.cbore and h.spotface:
@@ -968,6 +1093,9 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
             )
             step = h.cbore
         through = h.bottom == "through"
+        suffix = (
+            f"EQ SP ON ø{_fmt(pattern.diameter)} BC" if isinstance(pattern, BoltCircle) else None
+        )
         return HoleCallout(
             _fmt(h.diameter),
             count=len(holes) if len(holes) > 1 else None,
@@ -975,6 +1103,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
             depth=None if through else _fmt(h.depth),
             cbore_dia=_fmt(step.diameter) if step else None,
             cbore_depth=_fmt(step.depth) if step else None,
+            suffix=suffix,
             draft=draft,
         )
 
@@ -1002,9 +1131,14 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
 
     for view, view_groups in by_view.items():
         to_page = view_of_axis[{"plan": "z", "front": "y", "side": "x"}[view]][1]
-        specs = [(holes, _build_callout(holes)) for holes in view_groups]
+        specs = []
+        for holes in view_groups:
+            pattern = patterns.get(frozenset(holes))
+            specs.append((holes, _build_callout(holes, pattern), pattern))
         if len(specs) > _MAX_CALLOUTS_PER_VIEW:
             # annotate the largest features; the rest surface via the lint
+            # (their pattern furniture is withheld too — a bare pitch circle
+            # with no callout referencing it explains nothing)
             specs.sort(key=lambda s: s[0][0].diameter, reverse=True)
             _log.info(
                 "%d hole specs in %s view; annotating the %d largest "
@@ -1021,7 +1155,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
             # right-running label; left-side labels get an explicit guard.
             specs.sort(key=lambda s: max(to_page(h)[0] for h in s[0]), reverse=True)
             occupied: list[tuple] = []  # (x0, x1, row_y) of placed labels
-            for i, (holes, callout) in enumerate(specs):
+            for i, (holes, callout, pattern) in enumerate(specs):
                 w = callout.callout_width
                 centre = to_page(max(holes, key=lambda h: to_page(h)[0]))
                 elbow_y = front_bottom - 0.6 * a.DIM_PAD - i * min_gap
@@ -1048,6 +1182,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
                 elbow = (centre[0], elbow_y)
                 occupied.append((x0, x1, elbow_y))
                 _add(view, i, _rim_tip(centre, elbow, holes), elbow, side, callout)
+                _add_furniture(dwg, a, view, i, pattern, to_page)
             continue
 
         # plan / side: stacked to the right of the view. The ladder is
@@ -1056,7 +1191,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
         edge_right = plan_right if view == "plan" else side_right
         specs.sort(key=lambda s: to_page(max(s[0], key=lambda h: to_page(h)[0]))[1])
         prev_y = None
-        for i, (holes, callout) in enumerate(specs):
+        for i, (holes, callout, pattern) in enumerate(specs):
             w = callout.callout_width
             rep = max(holes, key=lambda h: to_page(h)[0])
             centre = to_page(rep)
@@ -1087,6 +1222,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
             prev_y = elbow_y
             elbow = (elbow_x, elbow_y)
             _add(view, i, _rim_tip(centre, elbow, holes), elbow, side, callout)
+            _add_furniture(dwg, a, view, i, pattern, to_page)
 
 
 def _add_title_block(dwg, a):

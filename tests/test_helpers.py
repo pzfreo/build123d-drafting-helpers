@@ -7,6 +7,7 @@ from build123d import Color, Draft, ExportSVG, Sketch
 
 from build123d_drafting import (
     Centerline,
+    CenterlineCircle,
     CenterMark,
     CompositeFeatureControlFrame,
     DatumFeature,
@@ -1888,6 +1889,39 @@ class TestCenterMark:
     def test_rejects_nonpositive_size(self):
         with pytest.raises(ValueError, match="size"):
             CenterMark((0, 0), 0.0)
+
+
+class TestCenterlineCircle:
+    def test_stroked_loop_geometry(self):
+        cc = CenterlineCircle((5, 7), 60.0)
+        assert len(cc.faces()) == 2  # two stroked half-circles, not a disc
+        bb = cc.bounding_box()
+        assert bb.size.X == pytest.approx(60.0, abs=0.5)
+        assert (bb.min.X + bb.max.X) / 2 == pytest.approx(5.0, abs=0.1)
+        assert cc.is_centerline is True
+
+    def test_rejects_nonpositive_diameter(self):
+        with pytest.raises(ValueError, match="diameter"):
+            CenterlineCircle((0, 0), 0)
+
+
+class TestHoleCalloutPatternExtensions:
+    def test_suffix_token_renders(self):
+        d = Draft(font_size=2.5)
+        plain = HoleCallout("8", count=6, through=True, draft=d)
+        suffixed = HoleCallout("8", count=6, through=True, suffix="EQ SP ON ø60 BC", draft=d)
+        assert suffixed.callout_width > plain.callout_width + 10
+        assert suffixed.covers_diameters == (8.0,)
+
+    def test_covers_count_metadata(self):
+        d = Draft(font_size=2.5)
+        assert HoleCallout(10, draft=d).covers_count == 1
+        assert HoleCallout(10, count=6, draft=d).covers_count == 6
+
+    def test_leader_propagates_covers_count(self):
+        d = Draft(font_size=2.5)
+        hc = HoleCallout(10, count=4, through=True, draft=d)
+        assert Leader((0, 0, 0), (10, 8, 0), "", d, callout=hc).covers_count == 4
 
 
 class TestNote:

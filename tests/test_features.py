@@ -452,3 +452,130 @@ class TestFindBosses:
         part = Box(60, 60, 20) - Cylinder(5, 20)
         assert find_bosses(part) == []
         assert len(find_holes(part)) == 1
+
+
+class TestFindHolePatterns:
+    @staticmethod
+    def _bc_plate(n=6, r=30, hole_r=4, phase=15.0):
+        part = Box(100, 100, 12)
+        for i in range(n):
+            ang = math.radians(360 / n * i + phase)
+            part = part - Pos(r * math.cos(ang), r * math.sin(ang), 0) * Cylinder(hole_r, 12)
+        return part
+
+    @pytest.mark.timeout(60)
+    def test_six_hole_bolt_circle(self):
+        from build123d_drafting import BoltCircle, find_hole_patterns
+
+        (pat,) = find_hole_patterns(find_holes(self._bc_plate()))
+        assert isinstance(pat, BoltCircle)
+        assert pat.diameter == pytest.approx(60.0)
+        assert len(pat.holes) == 6
+        assert pat.center[0] == pytest.approx(0.0, abs=0.01)
+        assert pat.center[1] == pytest.approx(0.0, abs=0.01)
+
+    @pytest.mark.timeout(60)
+    def test_three_equally_spaced_holes_are_a_bolt_circle(self):
+        from build123d_drafting import BoltCircle, find_hole_patterns
+
+        (pat,) = find_hole_patterns(find_holes(self._bc_plate(n=3, r=25)))
+        assert isinstance(pat, BoltCircle)
+        assert pat.diameter == pytest.approx(50.0)
+
+    @pytest.mark.timeout(60)
+    def test_linear_array(self):
+        from build123d_drafting import LinearArray, find_hole_patterns
+
+        part = Box(120, 40, 10)
+        for i in range(5):
+            part = part - Pos(-40 + i * 20, 0, 0) * Cylinder(3, 10)
+        (pat,) = find_hole_patterns(find_holes(part))
+        assert isinstance(pat, LinearArray)
+        assert pat.pitch == pytest.approx(20.0)
+        assert len(pat.holes) == 5
+        assert abs(pat.direction[0]) == pytest.approx(1.0)
+
+    @pytest.mark.timeout(60)
+    def test_three_collinear_holes_are_an_array_not_a_circle(self):
+        # any three points are concyclic — collinearity must win
+        from build123d_drafting import LinearArray, find_hole_patterns
+
+        part = (
+            Box(100, 40, 10)
+            - Pos(-20, 0, 0) * Cylinder(3, 10)
+            - Cylinder(3, 10)
+            - Pos(20, 0, 0) * Cylinder(3, 10)
+        )
+        (pat,) = find_hole_patterns(find_holes(part))
+        assert isinstance(pat, LinearArray)
+
+    @pytest.mark.timeout(60)
+    def test_scattered_holes_are_no_pattern(self):
+        from build123d_drafting import find_hole_patterns
+
+        part = (
+            Box(100, 100, 10)
+            - Pos(10, 5, 0) * Cylinder(3, 10)
+            - Pos(-30, 22, 0) * Cylinder(3, 10)
+            - Pos(17, -38, 0) * Cylinder(3, 10)
+            - Pos(-5, -11, 0) * Cylinder(3, 10)
+        )
+        assert find_hole_patterns(find_holes(part)) == []
+
+    @pytest.mark.timeout(60)
+    def test_uneven_spacing_is_not_a_bolt_circle(self):
+        from build123d_drafting import find_hole_patterns
+
+        part = Box(100, 100, 10)
+        for deg in (0, 60, 100, 240):
+            ang = math.radians(deg)
+            part = part - Pos(30 * math.cos(ang), 30 * math.sin(ang), 0) * Cylinder(4, 10)
+        assert find_hole_patterns(find_holes(part)) == []
+
+    @pytest.mark.timeout(60)
+    def test_mixed_diameters_do_not_pattern(self):
+        from build123d_drafting import find_hole_patterns
+
+        part = Box(100, 100, 10)
+        for i, r in zip(range(4), (3, 3, 4, 3), strict=True):
+            ang = math.radians(90 * i)
+            part = part - Pos(30 * math.cos(ang), 30 * math.sin(ang), 0) * Cylinder(r, 10)
+        assert find_hole_patterns(find_holes(part)) == []
+
+    @pytest.mark.timeout(60)
+    def test_rectangle_corners_are_not_a_bolt_circle(self):
+        # 100×80 rectangle corners are equidistant from the centre but not
+        # equally spaced (77.3°/102.7°) — must not read as EQ SP ON BC.
+        from build123d_drafting import find_hole_patterns
+
+        part = Box(140, 120, 10)
+        for sx in (-50, 50):
+            for sy in (-40, 40):
+                part = part - Pos(sx, sy, 0) * Cylinder(3, 10)
+        assert find_hole_patterns(find_holes(part)) == []
+
+    @pytest.mark.timeout(60)
+    def test_axis_epsilon_noise_does_not_split_a_pattern(self):
+        # Mixed construction history leaves ~1e-16 components on cross-axis
+        # hole axes; the spec key snaps them so the pattern still groups.
+        from build123d import Circle, extrude
+
+        from build123d_drafting import LinearArray, find_hole_patterns
+
+        part = Box(20, 90, 30)
+        part = part - Pos(0, -30, 0) * Cylinder(4, 20, rotation=(0, 90, 0))
+        part = part - extrude(Plane.YZ * Circle(4), 10, both=True)
+        part = part - Pos(0, 30, 0) * Cylinder(4, 20, rotation=(0, 90, 0))
+        (pat,) = find_hole_patterns(find_holes(part))
+        assert isinstance(pat, LinearArray)
+        assert len(pat.holes) == 3
+
+    @pytest.mark.timeout(60)
+    def test_radius_jitter_beyond_tolerance_rejected(self):
+        from build123d_drafting import find_hole_patterns
+
+        part = Box(100, 100, 10)
+        for i, r in zip(range(5), (30, 30, 30, 32, 30), strict=True):
+            ang = math.radians(72 * i)
+            part = part - Pos(r * math.cos(ang), r * math.sin(ang), 0) * Cylinder(4, 10)
+        assert find_hole_patterns(find_holes(part)) == []
