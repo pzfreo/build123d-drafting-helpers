@@ -191,6 +191,7 @@ class TestStripZones:
 
     def test_analyse_returns_view_zones(self):
         from build123d import Box, Cylinder
+
         from build123d_drafting import build_drawing
         from build123d_drafting.make_drawing import Strip, ViewZones
 
@@ -207,6 +208,7 @@ class TestStripZones:
 
     def test_strip_limits_are_within_page(self):
         from build123d import Box, Cylinder
+
         from build123d_drafting import build_drawing
 
         part = Box(80, 60, 20) - Cylinder(5, 20)
@@ -222,6 +224,7 @@ class TestStripZones:
         # dim_height must be placed via the strip; its dimension line must
         # land within the fv_zones.right corridor (anchor..outer_limit).
         from build123d import Box
+
         from build123d_drafting import build_drawing
 
         part = Box(60, 40, 30)
@@ -237,6 +240,7 @@ class TestStripZones:
     def test_pv_below_strip_is_now_active(self):
         # pv_zones.below should be a Strip (not None) after Phase 3
         from build123d import Box
+
         from build123d_drafting import build_drawing
         from build123d_drafting.make_drawing import Strip
 
@@ -251,6 +255,7 @@ class TestStripZones:
     def test_dim_width_routed_through_pv_below_strip(self):
         # dim_width must exist below the plan view, with depth_used > 0
         from build123d import Box
+
         from build123d_drafting import build_drawing
 
         # non-square part → x_size != y_size → dim_width should appear
@@ -265,6 +270,7 @@ class TestStripZones:
     def test_dim_locx_routed_through_pv_above_strip(self):
         # dim_locx dims must be above plan_top and allocated from pv_zones.above
         from build123d import Box, Cylinder, Pos
+
         from build123d_drafting import build_drawing
 
         part = Box(80, 60, 20) - Pos(20, 10, 0) * Cylinder(5, 20)
@@ -279,6 +285,7 @@ class TestStripZones:
     def test_dim_locy_routed_through_sv_above_strip(self):
         # dim_locy dims must be above side_top and allocated from sv_zones.above
         from build123d import Box, Cylinder, Pos
+
         from build123d_drafting import build_drawing
 
         # Cylinder at Y=10 → offset from datum_y=bb.min.Y → generates dim_locy0
@@ -295,11 +302,11 @@ class TestStripZones:
         # Step dims must be placed via the strip and land right of dim_height.
         # Each dim_step x must be strictly right of dim_height x.
         from build123d import Box, Pos
+
         from build123d_drafting import build_drawing
 
         part = Box(40, 12, 40) - Pos(10, 0, 20) * Box(20, 12, 20)
         dwg = build_drawing(part)
-        a = dwg._analysis
         step_dims = {n: v for n, v in dwg._named.items() if n.startswith("dim_step")}
         if step_dims and "dim_height" in dwg._named:
             h_ann = dwg._named["dim_height"]
