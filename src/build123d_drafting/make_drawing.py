@@ -979,12 +979,14 @@ def _auto_annotate(dwg, a):
         return a.PV_Y + (y - a.cy) * a.SCALE
 
     # Tighten right-strip outer_limits to the actual iso view left edge now
-    # that the iso has been projected and fitted.
+    # that the iso has been projected and fitted.  Guard: only apply if the
+    # limit is above the strip cursor — an overflowing iso can produce
+    # _iso_x_limit < cursor, which would silence every right-strip allocation.
     _iso_x0, _, _, _ = _iso_bbox(dwg)
     _iso_x_limit = _iso_x0 - 4
-    a.fv_zones.right.outer_limit = min(a.fv_zones.right.outer_limit, _iso_x_limit)
-    a.pv_zones.right.outer_limit = min(a.pv_zones.right.outer_limit, _iso_x_limit)
-    a.sv_zones.right.outer_limit = min(a.sv_zones.right.outer_limit, _iso_x_limit)
+    for _rs in (a.fv_zones.right, a.pv_zones.right, a.sv_zones.right):
+        if _iso_x_limit > _rs._cursor:
+            _rs.outer_limit = min(_rs.outer_limit, _iso_x_limit)
 
     # Overall height — slot reserved in fv_zones.right.
     # _right_ladder tracks the witness x for the progressive ladder: each
@@ -1265,6 +1267,12 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
         above = a.sv_zones.above
         if cap > above._cursor:
             above.outer_limit = min(above.outer_limit, cap)
+        else:
+            _log.warning(
+                "sv_zones.above cursor %.1f >= iso_y0 cap %.1f: Y-location dims may overlap iso view",
+                above._cursor,
+                cap,
+            )
     for i, (_rx, ry, _) in enumerate(sorted(y_refs, key=lambda r: abs(r[1] - datum_y))):
         if abs(ry - datum_y) * a.SCALE < 1.0:
             continue
