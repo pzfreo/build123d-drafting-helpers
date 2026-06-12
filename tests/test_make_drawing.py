@@ -892,6 +892,31 @@ class TestIsRotational:
         assert dwg._named["dim_od"].label == "ø85"
 
     @pytest.mark.timeout(60)
+    def test_unrounded_od_does_not_duplicate_a_bore_leader(self, monkeypatch):
+        # analyse_cylinders rounds diameters at source today, which masks the
+        # #86 scenario — but the OD/bore exclusion must not depend on that:
+        # feature records may carry raw OCCT diameters after the #87 lift.
+        # With an unrounded OD (59.9999999 vs the dedup'd 60.0), a float !=
+        # leaks the OD into the bore leaders as a duplicate ø60 callout.
+        import importlib
+
+        md = importlib.import_module("build123d_drafting.make_drawing")
+        real = md.analyse_cylinders
+
+        def unrounded(part):
+            z_cyls, cross_cyls = real(part)
+            for c in z_cyls:
+                if c["external"]:
+                    c["diameter"] = 59.9999999
+            return z_cyls, cross_cyls
+
+        monkeypatch.setattr(md, "analyse_cylinders", unrounded)
+        dwg = build_drawing(Cylinder(30, 40) - Cylinder(10, 40))
+        assert dwg._named["dim_od"].label == "ø60"
+        leader_labels = [a.label for n, a in dwg._named.items() if n.startswith("ldr_z")]
+        assert leader_labels == ["ø20"]
+
+    @pytest.mark.timeout(60)
     def test_lint_reuses_build_drawing_cylinder_analysis(self, monkeypatch):
         # build_drawing seeds the cache, so lint()/export() must not re-scan
         # the solid with analyse_cylinders.

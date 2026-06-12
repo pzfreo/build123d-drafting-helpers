@@ -14,6 +14,13 @@
   moved from `make_drawing` into a new `features` module (old import paths
   still work).
 
+### Fixed
+
+- **OD/bore-leader exclusion is exact by construction** (#86): `od_diam` is
+  snapped to its dedup representative, so the bore-leader filter cannot
+  duplicate the OD callout if cylinder records ever carry unrounded OCCT
+  diameters.
+
 ## v0.5.0 — 2026-06-11
 
 All four fixes come from issues found by a one-shot engineering-drawing
