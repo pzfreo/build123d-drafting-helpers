@@ -800,10 +800,14 @@ class TestLintFeatureCoverage:
 
     @pytest.mark.timeout(60)
     def test_drawing_lint_reports_unannotated_bore(self):
-        # Prismatic bores are no longer auto-annotated (#81), so coverage
-        # lint must surface them as the missing-dimension signal (#80).
+        # Prismatic bores now get automatic callouts (#91) — so the sheet is
+        # born clean, and removing the callout must surface the bore through
+        # the coverage lint as the missing-dimension signal (#80).
         part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(5, 30)
         dwg = build_drawing(part)
+        assert "feature_not_dimensioned" not in [i.code for i in dwg.lint()]
+        for name in [n for n in dwg._named if n.startswith("hc_")]:
+            dwg.remove(name)
         codes = [i.code for i in dwg.lint()]
         assert "feature_not_dimensioned" in codes
 
@@ -833,6 +837,107 @@ class TestLintFeatureCoverage:
         part = Box(100, 60, 20) - Pos(20, 10, 0) * Cylinder(4.25, 30)
         callout = HoleCallout(8.5, count=4, through=True)
         assert lint_feature_coverage(part, [callout]) == []
+
+
+class TestAutoHoleAnnotations:
+    """Auto hole callouts (#91), count grouping (#92), centre marks (#95)."""
+
+    @pytest.fixture(scope="class")
+    def plate_drawing(self):
+        # 4x o10 thru corners + centre o8 thru with o16x6 cbore + o6 x-axis
+        # cross hole + o12 blind hole
+        part = (
+            Box(100, 100, 20)
+            - Pos(35, 35, 0) * Cylinder(5, 20)
+            - Pos(-35, 35, 0) * Cylinder(5, 20)
+            - Pos(35, -35, 0) * Cylinder(5, 20)
+            - Pos(-35, -35, 0) * Cylinder(5, 20)
+            - Cylinder(4, 20)
+            - Pos(0, 0, 7) * Cylinder(8, 6)
+            - Pos(0, 25, 0) * Cylinder(3, 100, rotation=(0, 90, 0))
+            - Pos(-20, -10, 10 - 4) * Cylinder(6, 8)
+        )
+        return build_drawing(part)
+
+    @pytest.mark.timeout(120)
+    def test_identical_holes_share_one_counted_callout(self, plate_drawing):
+        hc = [n for n in plate_drawing._named if n.startswith("hc_plan")]
+        # 3 distinct Z specs (4x o10 thru, o8 cbore stack, o12 blind), not 6
+        assert len(hc) == 3
+
+    @pytest.mark.timeout(120)
+    def test_callouts_cover_all_feature_diameters(self, plate_drawing):
+        covered = set()
+        for name, ann in plate_drawing._named.items():
+            if name.startswith("hc_"):
+                covered.update(getattr(ann, "covers_diameters", ()))
+        assert covered == {10.0, 8.0, 16.0, 6.0, 12.0}
+
+    @pytest.mark.timeout(120)
+    def test_cross_axis_hole_gets_side_view_callout(self, plate_drawing):
+        (name,) = [n for n in plate_drawing._named if n.startswith("hc_side")]
+        assert plate_drawing._named[name].covers_diameters == (6.0,)
+
+    @pytest.mark.timeout(120)
+    def test_every_hole_gets_a_centre_mark(self, plate_drawing):
+        cm = [n for n in plate_drawing._named if n.startswith("cm_")]
+        assert len(cm) == 7  # 6 z-holes in plan + 1 x-hole in side
+        assert all(plate_drawing._named[n].is_centerline for n in cm)
+
+    @pytest.mark.timeout(120)
+    def test_sheet_is_lint_clean(self, plate_drawing):
+        issues = [i for i in plate_drawing.lint() if i.severity != "info"]
+        assert [i.code for i in issues] == []
+
+    @pytest.mark.timeout(60)
+    def test_through_holes_group_across_wall_thicknesses(self):
+        # The same drill through a 10mm and a 7.5mm wall is one "2× ø5 THRU"
+        # callout — through specs group regardless of depth.
+        part = (
+            Box(80, 40, 10)
+            - Pos(20, 0, 5) * Box(40, 40, 5)
+            - Pos(-20, 0, 0) * Cylinder(2.5, 10)
+            - Pos(20, 0, -1.25) * Cylinder(2.5, 7.5)
+        )
+        dwg = build_drawing(part)
+        assert len([n for n in dwg._named if n.startswith("hc_")]) == 1
+
+    @pytest.mark.timeout(60)
+    def test_two_front_view_specs_fit_below_the_view(self):
+        # The title block only constrains rows that reach its x-range, so
+        # the strip below the front view holds multiple callouts (review
+        # round 1: the old veto blanked the whole strip on A4).
+        part = (
+            Box(80, 40, 30)
+            - Pos(-20, 0, 5) * Cylinder(2.5, 50, rotation=(90, 0, 0))
+            - Pos(25, 0, -5) * Cylinder(4, 50, rotation=(90, 0, 0))
+        )
+        dwg = build_drawing(part)
+        assert len([n for n in dwg._named if n.startswith("hc_front")]) == 2
+        assert [i for i in dwg.lint() if i.severity != "info"] == []
+
+    @pytest.mark.timeout(60)
+    def test_callout_cap_keeps_the_largest_holes(self):
+        part = Box(120, 80, 10)
+        for i, r in enumerate([1, 1.5, 2, 2.5, 3, 4]):
+            part = part - Pos(-50 + i * 20, 0, 0) * Cylinder(r, 10)
+        dwg = build_drawing(part)
+        covered = set()
+        for name, ann in dwg._named.items():
+            if name.startswith("hc_"):
+                covered.update(ann.covers_diameters)
+        assert covered == {4.0, 5.0, 6.0, 8.0}
+        # the dropped specs surface through the coverage lint by design
+        flagged = {i.message for i in dwg.lint() if i.code == "feature_not_dimensioned"}
+        assert len(flagged) == 2
+
+    @pytest.mark.timeout(60)
+    def test_rotational_part_keeps_leader_annotations(self):
+        dwg = build_drawing(Cylinder(30, 40) - Cylinder(10, 40))
+        assert "ldr_z0" in dwg._named
+        assert not any(n.startswith("hc_") for n in dwg._named)
+        # the central bore still gets a centre mark in the plan view
+        assert any(n.startswith("cm_plan") for n in dwg._named)
 
 
 class TestIsRotational:

@@ -21,6 +21,7 @@ from build123d_drafting.features import (
 )
 from build123d_drafting.helpers import (
     Centerline,
+    CenterMark,
     CompositeFeatureControlFrame,
     DatumFeature,
     DatumTarget,
@@ -75,6 +76,7 @@ __all__ = [
     "HoleFeature",
     "find_bosses",
     "find_holes",
+    "CenterMark",
     "Centerline",
     "CompositeFeatureControlFrame",
     "DatumFeature",

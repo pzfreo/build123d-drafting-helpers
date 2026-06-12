@@ -7,6 +7,7 @@ from build123d import Color, Draft, ExportSVG, Sketch
 
 from build123d_drafting import (
     Centerline,
+    CenterMark,
     CompositeFeatureControlFrame,
     DatumFeature,
     DatumTarget,
@@ -1836,6 +1837,57 @@ class TestLintViewShapes:
         view = self._make_box_shape(80, 10, 40, 30)
         codes = {i.code for i in lint_drawing([], view_shapes=[view])}
         assert "view_out_of_bounds" not in codes
+
+
+class TestLeaderCallout:
+    def test_callout_hangs_at_shelf_end(self):
+        d = Draft(font_size=2.5)
+        hc = HoleCallout(8.5, count=4, through=True, draft=d)
+        plain = Leader((0, 0, 0), (10, 8, 0), "", d)
+        ld = Leader((0, 0, 0), (10, 8, 0), "", d, callout=hc)
+        # the callout's glyph faces ride on the leader sketch
+        assert len(ld.faces()) > len(plain.faces())
+        # label_bbox is the placed callout's extents: right of the elbow,
+        # vertically centred on the shelf
+        x0, y0, x1, y1 = ld.label_bbox
+        assert x0 >= 10
+        assert (y0 + y1) / 2 == pytest.approx(8.0, abs=0.1)
+        assert x1 - x0 == pytest.approx(hc.callout_width, abs=0.1)
+
+    def test_callout_coverage_surfaces_on_the_leader(self):
+        d = Draft(font_size=2.5)
+        hc = HoleCallout(8.5, cbore_dia=14, cbore_depth=5, draft=d)
+        ld = Leader((0, 0, 0), (10, 8, 0), "", d, callout=hc)
+        assert ld.covers_diameters == (8.5, 14.0)
+
+    def test_left_side_callout_extends_left(self):
+        d = Draft(font_size=2.5)
+        hc = HoleCallout(10, through=True, draft=d)
+        ld = Leader((0, 0, 0), (-10, 8, 0), "", d, callout=hc, text_side="left")
+        assert ld.label_bbox[2] <= -10
+
+    def test_label_and_callout_together_rejected(self):
+        d = Draft(font_size=2.5)
+        with pytest.raises(ValueError, match="not both"):
+            Leader((0, 0, 0), (10, 8, 0), "ø10", d, callout=HoleCallout(10, draft=d))
+
+
+class TestCenterMark:
+    def test_crosshair_geometry(self):
+        cm = CenterMark((5, 7), 4.0)
+        assert len(cm.faces()) == 2
+        bb = cm.bounding_box()
+        assert bb.size.X == pytest.approx(4.0, abs=0.01)
+        assert bb.size.Y == pytest.approx(4.0, abs=0.01)
+        assert (bb.min.X + bb.max.X) / 2 == pytest.approx(5.0, abs=0.01)
+        assert (bb.min.Y + bb.max.Y) / 2 == pytest.approx(7.0, abs=0.01)
+
+    def test_exempt_from_view_overlap_lint(self):
+        assert CenterMark((0, 0), 2.0).is_centerline is True
+
+    def test_rejects_nonpositive_size(self):
+        with pytest.raises(ValueError, match="size"):
+            CenterMark((0, 0), 0.0)
 
 
 class TestNote:

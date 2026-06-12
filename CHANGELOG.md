@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- **Automatic hole callouts on prismatic parts** (#91, the grouping half of
+  #92): `make_drawing()` / `build_drawing()` now annotate every recognised
+  hole from the #87 feature records — leader-attached `HoleCallout`s with
+  count grouping (`4× ø10 THRU`), blind depths, and counterbore symbols, one
+  per distinct hole spec, in the view the hole's axis is normal to. Callouts
+  are width-checked against the page layout (right of plan/side, below
+  front, with left-side fallback) and skipped with a log message rather than
+  force-placed. Their structured coverage feeds `lint_feature_coverage`:
+  when the layout has room the auto-generated prismatic sheet passes the #80
+  lint out of the box, and anything skipped (more than 4 specs per view —
+  the largest diameters win — or no clear strip) is logged and surfaces as
+  `feature_not_dimensioned`, marking exactly what needs a manual callout.
+- **`CenterMark(point, size)`** (#95): crosshair centre marks, added
+  automatically for every hole in its normal view (all part classes); exempt
+  from view-overlap lint like `Centerline`.
+- **`Leader(..., callout=...)`**: a leader can carry a symbol-built sketch
+  (e.g. `HoleCallout`) in place of its text label; the callout's bbox becomes
+  `label_bbox` and its `covers_diameters` is surfaced on the leader.
+- `find_holes()` gains a `cyls=` parameter (precomputed `analyse_cylinders`
+  result) mirroring `lint_feature_coverage`, so the drawing pipeline reuses
+  one face scan.
+
 ## v0.6.0 — 2026-06-12
 
 ### Added
