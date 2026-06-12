@@ -1171,6 +1171,16 @@ class TestLocationDimsAndSection:
         assert locy and pitch
         assert min(abs(ly - py) for ly in locy for py in pitch) >= 8
 
+    @pytest.mark.timeout(120)
+    def test_section_survives_a_pmi_compound(self):
+        # AP242 STEP with PMI imports as a Compound of solid + annotation
+        # curves; the section cut must use the solids and never abort the
+        # drawing on a failed boolean.
+        solid = Box(80, 60, 20) - Cylinder(4, 20) - Pos(10, 5, -7) * Cylinder(6, 6)
+        part = Compound(children=[solid, Edge.make_line((0, 0, 9), (30, 0, 9))])
+        dwg = build_drawing(part)
+        assert "section_aa" in dwg.views
+
     @pytest.mark.timeout(60)
     def test_rotational_part_gets_neither(self):
         dwg = build_drawing(Cylinder(30, 40) - Cylinder(10, 40))

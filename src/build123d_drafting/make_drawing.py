@@ -1160,7 +1160,19 @@ def _add_section_view(dwg, a, axis_letter):
         return
 
     big = 4 * a.bbox_max
-    keep_behind = a.part - Pos(a.cx, y_star - big / 2, a.cz) * Box(big, big, big)
+    # STEP imports with PMI carry annotation curves beside the solid, and a
+    # mixed-dimension compound cannot be cut — section the solids only, and
+    # never let a failed boolean abort the whole drawing
+    solids = a.part.solids()
+    if not solids:
+        _log.info("Section A–A skipped (no solid bodies to cut)")
+        return
+    body = solids[0] if len(solids) == 1 else Compound(children=list(solids))
+    try:
+        keep_behind = body - Pos(a.cx, y_star - big / 2, a.cz) * Box(big, big, big)
+    except Exception as exc:  # noqa: BLE001 — OCC booleans raise broadly
+        _log.warning("Section A–A skipped (cut failed: %s)", exc)
+        return
     camera = (dwg.look_at[0], dwg.look_at[1] - dwg.dist, dwg.look_at[2])
     dwg.add_view("section_aa", keep_behind, camera, (0, 0, 1), (pos_x, a.FV_Y))
     dwg.add(
