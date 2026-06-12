@@ -315,6 +315,22 @@ class TestStripZones:
                     # step dim label must be to the right of dim_height label
                     assert ann.label_bbox[0] > h_ann.label_bbox[0] - 1
 
+    def test_right_strip_outer_limits_tightened_to_iso(self):
+        # After _auto_annotate runs, pv/sv/fv right strip outer_limits must
+        # equal iso_x0 - 4 (the actual iso view left edge minus clearance).
+        from build123d import Box, Cylinder
+        from build123d_drafting import build_drawing
+        from build123d_drafting.make_drawing import _iso_bbox
+
+        part = Box(80, 60, 20) - Cylinder(5, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        iso_x0, _, _, _ = _iso_bbox(dwg)
+        expected = iso_x0 - 4
+        assert a.fv_zones.right.outer_limit == pytest.approx(expected, abs=0.1)
+        assert a.pv_zones.right.outer_limit == pytest.approx(expected, abs=0.1)
+        assert a.sv_zones.right.outer_limit == pytest.approx(expected, abs=0.1)
+
 
 # ---------------------------------------------------------------------------
 # Integration test — requires build123d + OCP (slow)
