@@ -4,6 +4,20 @@
 
 ### Added
 
+- **Hole-pattern recognition** (#92): `find_hole_patterns(holes)` returns
+  `BoltCircle` / `LinearArray` records for ≥3 identical-spec holes equally
+  spaced on a circle or collinear at constant pitch. `make_drawing` uses
+  them: bolt circles get an `EQ SP ON øD BC` callout suffix plus a
+  `CenterlineCircle` pitch-circle centreline, linear arrays a `(n-1)× pitch`
+  dimension placed outside the view (the `label_vs_measured` lint now
+  understands repetition labels). A pattern annotates only when it accounts
+  for the whole spec group.
+- **Count-aware coverage lint** (#92, the #80 rewiring deferred from #87):
+  structured callouts declare how many holes they dimension
+  (`covers_count`, from the `n×` prefix) and `lint_feature_coverage`
+  compares against the part's per-diameter hole counts — a shortfall yields
+  `feature_count_mismatch`. Free-text ø-labels stay exempt.
+
 - **Automatic hole callouts on prismatic parts** (#91, the grouping half of
   #92): `make_drawing()` / `build_drawing()` now annotate every recognised
   hole from the #87 feature records — leader-attached `HoleCallout`s with

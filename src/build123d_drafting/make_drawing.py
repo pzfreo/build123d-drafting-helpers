@@ -37,12 +37,16 @@ from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_Plane
 
 from build123d_drafting.features import (
+    BoltCircle,
+    LinearArray,
     _full_cyls,
     analyse_cylinders,
+    find_hole_patterns,
     find_holes,
 )
 from build123d_drafting.helpers import (
     Centerline,
+    CenterlineCircle,
     CenterMark,
     Dimension,
     HoleCallout,
@@ -165,23 +169,33 @@ def lint_feature_coverage(part, annotations, tol: float = 0.15, cyls=None) -> li
     ``cyls`` accepts a precomputed ``analyse_cylinders(part)`` result so
     repeated lint runs need not re-scan the solid.
 
-    This checks *size* coverage only; location coverage needs feature
-    recognition and is out of scope.
+    Counts are checked too (#92): the part's holes (via ``find_holes``) give
+    a required count per diameter (each bore, counterbore, and spotface
+    occurrence counts one), and structured callouts declare how many holes
+    they dimension (``covers_count`` — the ``n×`` prefix). A shortfall
+    yields a ``feature_count_mismatch`` warning. A diameter covered by any
+    free-text ø-label is exempt from the count check — text labels carry no
+    count semantics. Location coverage remains out of scope (#93).
     """
     z_cyls, cross_cyls = cyls if cyls is not None else analyse_cylinders(part)
     inventory = dedup_diams(_full_cyls(z_cyls + cross_cyls), tol=tol)
 
     mentioned: set[float] = set()
+    text_mentioned: set[float] = set()
+    provided: dict[float, int] = {}
     for ann in annotations:
         if isinstance(ann, TitleBlock):
             continue
         label = getattr(ann, "label", None) or ""
         for m in _DIAM_RE.finditer(label):
             mentioned.add(float(m.group(1)))
+            text_mentioned.add(float(m.group(1)))
+        count = getattr(ann, "covers_count", 1)
         for v in getattr(ann, "covers_diameters", ()):
             mentioned.add(float(v))
+            provided[float(v)] = provided.get(float(v), 0) + count
 
-    return [
+    issues = [
         LintIssue(
             severity="warning",
             code="feature_not_dimensioned",
@@ -190,6 +204,27 @@ def lint_feature_coverage(part, annotations, tol: float = 0.15, cyls=None) -> li
         for d in inventory
         if not any(abs(d - v) <= tol for v in mentioned)
     ]
+
+    required: dict[float, int] = {}
+    for h in find_holes(part, cyls=(z_cyls, cross_cyls)):
+        for d in (h.diameter, *(s.diameter for s in (h.cbore, h.spotface) if s)):
+            key = next((k for k in required if abs(k - d) <= tol), d)
+            required[key] = required.get(key, 0) + 1
+    for d, need in sorted(required.items(), reverse=True):
+        if any(abs(d - v) <= tol for v in text_mentioned):
+            continue  # free-text coverage carries no count to check against
+        have = sum(c for v, c in provided.items() if abs(d - v) <= tol)
+        if 0 < have < need:
+            issues.append(
+                LintIssue(
+                    severity="warning",
+                    code="feature_count_mismatch",
+                    message=(
+                        f"{need} ø{_fmt(d)} features on the part but callouts account for {have}"
+                    ),
+                )
+            )
+    return issues
 
 
 def analyse_face_levels(part, tol: float = 0.5) -> list:
@@ -920,6 +955,53 @@ def _auto_annotate(dwg, a):
 _MAX_CALLOUTS_PER_VIEW = 4
 
 
+def _add_pitch_dim(dwg, a, view, j, pattern, to_page):
+    """Pitch dimension for a linear hole array: first→last hole centres,
+    labelled ``(n-1)× pitch``, placed just outside the view on the side of
+    the row's outward perpendicular (#92)."""
+    p1 = to_page(pattern.holes[0])
+    p2 = to_page(pattern.holes[-1])
+    ux, uy = p2[0] - p1[0], p2[1] - p1[1]
+    norm = math.hypot(ux, uy)
+    if norm < 1e-9:
+        return
+    ux, uy = ux / norm, uy / norm
+    side = (-uy, ux, 0)
+    mid = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+    # view extents in page coordinates, to push the dim line outside
+    if view == "plan":
+        corners = [
+            (a.PV_X + (x - a.cx) * a.SCALE, a.PV_Y + (y - a.cy) * a.SCALE)
+            for x in (a.bb.min.X, a.bb.max.X)
+            for y in (a.bb.min.Y, a.bb.max.Y)
+        ]
+    elif view == "front":
+        corners = [
+            (a.FV_X + (x - a.cx) * a.SCALE, a.FV_Y + (z - a.cz) * a.SCALE)
+            for x in (a.bb.min.X, a.bb.max.X)
+            for z in (a.bb.min.Z, a.bb.max.Z)
+        ]
+    else:
+        corners = [
+            (a.SV_X + (y - a.cy) * a.SCALE, a.SV_Y + (z - a.cz) * a.SCALE)
+            for y in (a.bb.min.Y, a.bb.max.Y)
+            for z in (a.bb.min.Z, a.bb.max.Z)
+        ]
+    reach = max((c[0] - mid[0]) * side[0] + (c[1] - mid[1]) * side[1] for c in corners)
+    n = len(pattern.holes)
+    dwg.add(
+        Dimension(
+            (p1[0], p1[1], 0),
+            (p2[0], p2[1], 0),
+            side,
+            reach + 8,
+            dwg.draft,
+            label=f"{n - 1}× {_fmt(pattern.pitch)}",
+        ),
+        f"dim_pitch_{view}{j}",
+    )
+
+
 def _annotate_holes(dwg, a, view_of_axis, axis_letter):
     """Leader-attached HoleCallouts, one per distinct hole spec per view (#91).
 
@@ -958,7 +1040,12 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
     tb_left = a.PAGE_W - a.TB_W - 11
     tb_top = 11 + _TB_H
 
-    def _build_callout(holes):
+    # A pattern annotates only when it accounts for the whole spec group —
+    # a 7th same-size hole off the circle would make "7× ... EQ SP ON BC"
+    # a lie about six of them.
+    patterns = {frozenset(p.holes): p for p in find_hole_patterns(a.holes)}
+
+    def _build_callout(holes, pattern):
         h = holes[0]
         step = h.cbore or h.spotface
         if h.cbore and h.spotface:
@@ -968,6 +1055,9 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
             )
             step = h.cbore
         through = h.bottom == "through"
+        suffix = (
+            f"EQ SP ON ø{_fmt(pattern.diameter)} BC" if isinstance(pattern, BoltCircle) else None
+        )
         return HoleCallout(
             _fmt(h.diameter),
             count=len(holes) if len(holes) > 1 else None,
@@ -975,6 +1065,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
             depth=None if through else _fmt(h.depth),
             cbore_dia=_fmt(step.diameter) if step else None,
             cbore_depth=_fmt(step.depth) if step else None,
+            suffix=suffix,
             draft=draft,
         )
 
@@ -1002,7 +1093,20 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
 
     for view, view_groups in by_view.items():
         to_page = view_of_axis[{"plan": "z", "front": "y", "side": "x"}[view]][1]
-        specs = [(holes, _build_callout(holes)) for holes in view_groups]
+        specs = []
+        for j, holes in enumerate(view_groups):
+            pattern = patterns.get(frozenset(holes))
+            specs.append((holes, _build_callout(holes, pattern)))
+            if isinstance(pattern, BoltCircle):
+                # pitch-circle centreline through the pattern (#92)
+                cx = sum(to_page(h)[0] for h in pattern.holes) / len(pattern.holes)
+                cy = sum(to_page(h)[1] for h in pattern.holes) / len(pattern.holes)
+                dwg.add(
+                    CenterlineCircle((cx, cy), pattern.diameter * a.SCALE),
+                    f"bc_{view}{j}",
+                )
+            elif isinstance(pattern, LinearArray):
+                _add_pitch_dim(dwg, a, view, j, pattern, to_page)
         if len(specs) > _MAX_CALLOUTS_PER_VIEW:
             # annotate the largest features; the rest surface via the lint
             specs.sort(key=lambda s: s[0][0].diameter, reverse=True)

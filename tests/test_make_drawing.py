@@ -940,6 +940,73 @@ class TestAutoHoleAnnotations:
         assert any(n.startswith("cm_plan") for n in dwg._named)
 
 
+class TestHolePatternAnnotations:
+    """Bolt-circle and linear-array sheet furniture + count-aware lint (#92)."""
+
+    @pytest.mark.timeout(120)
+    def test_bolt_circle_gets_suffix_and_pitch_circle(self):
+        import math
+
+        part = Box(100, 100, 12) - Cylinder(10, 12)
+        for i in range(6):
+            ang = math.radians(60 * i + 15)
+            part = part - Pos(30 * math.cos(ang), 30 * math.sin(ang), 0) * Cylinder(4, 12)
+        dwg = build_drawing(part)
+        assert any(n.startswith("bc_plan") for n in dwg._named)
+        (hc8,) = [
+            a
+            for n, a in dwg._named.items()
+            if n.startswith("hc_") and 8.0 in getattr(a, "covers_diameters", ())
+        ]
+        assert hc8.covers_count == 6
+        assert [i for i in dwg.lint() if i.severity != "info"] == []
+
+    @pytest.mark.timeout(120)
+    def test_linear_array_gets_pitch_dimension(self):
+        part = Box(140, 50, 10)
+        for i in range(5):
+            part = part - Pos(-40 + i * 20, 0, 0) * Cylinder(3, 10)
+        dwg = build_drawing(part)
+        assert dwg._named["dim_pitch_plan0"].label == "4× 20"
+        assert [i for i in dwg.lint() if i.severity != "info"] == []
+
+    @pytest.mark.timeout(60)
+    def test_count_mismatch_surfaces_in_lint(self):
+        from build123d import Draft
+
+        from build123d_drafting import HoleCallout
+
+        part = Box(100, 100, 10)
+        for x in (-30, -10, 10, 30):
+            part = part - Pos(x, 0, 0) * Cylinder(5, 10)
+        d = Draft(font_size=2.5)
+        under = lint_feature_coverage(part, [HoleCallout(10, count=2, draft=d)])
+        assert [i.code for i in under] == ["feature_count_mismatch"]
+        assert lint_feature_coverage(part, [HoleCallout(10, count=4, draft=d)]) == []
+
+    @pytest.mark.timeout(60)
+    def test_text_labels_are_exempt_from_count_check(self):
+        from build123d import Draft
+
+        from build123d_drafting import Note
+
+        part = Box(100, 100, 10)
+        for x in (-30, 30):
+            part = part - Pos(x, 0, 0) * Cylinder(5, 10)
+        d = Draft(font_size=2.5)
+        assert lint_feature_coverage(part, [Note("ø10 (2 PL)", (0, 0), d)]) == []
+
+    @pytest.mark.timeout(60)
+    def test_repetition_label_passes_measured_check(self):
+        from build123d import Draft
+
+        from build123d_drafting import Dimension, lint_drawing
+
+        d = Draft(font_size=2.5)
+        dim = Dimension((0, 0, 0), (80, 0, 0), "above", 8, d, label="4× 20")
+        assert [i for i in lint_drawing([dim]) if i.code == "label_vs_measured"] == []
+
+
 class TestIsRotational:
     def test_plain_cylinder(self):
         assert _is_rotational(30.0, 30.0, 30.0, 0.0)

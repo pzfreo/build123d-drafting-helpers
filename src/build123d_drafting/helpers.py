@@ -584,6 +584,39 @@ class CenterMark(_Annotation):
         self.is_centerline = True
 
 
+class CenterlineCircle(_Annotation):
+    """A circular centreline — e.g. the pitch circle of a bolt pattern (#92).
+
+    Drawn as two stroked half-circles so the loop is a line, not a flooded
+    disc. Metadata: ``.label`` (""), ``.segments``, ``.is_centerline``
+    (True) — exempt from view-overlap lint like :class:`Centerline`.
+    """
+
+    def __init__(
+        self,
+        center: tuple,
+        diameter: float,
+        draft: Draft | None = None,  # noqa: ARG002 — reserved for dash patterns
+        line_width: float = 0.15,
+        rotation: float = 0,
+        align=None,
+        mode: Mode = Mode.ADD,
+    ):
+        if diameter <= 0:
+            raise ValueError(f"diameter must be positive, got {diameter!r}")
+        loc = Location(Vector(center[0], center[1], 0.0))
+        edges = [
+            e.moved(loc)
+            for a0, a1 in ((0, 180), (180, 360))
+            for e in Edge.make_circle(diameter / 2, start_angle=a0, end_angle=a1).edges()
+        ]
+        sk, seg = _strokes_and_text(edges, [], line_width)
+        super().__init__(
+            sk, label="", label_bbox=None, segments=seg, rotation=rotation, align=align, mode=mode
+        )
+        self.is_centerline = True
+
+
 # ---------------------------------------------------------------------------
 # Note — free-text annotation
 # ---------------------------------------------------------------------------
@@ -930,6 +963,7 @@ class Leader(_Annotation):
         covers = getattr(callout, "covers_diameters", ())
         if covers:
             self.covers_diameters = tuple(covers)
+            self.covers_count = getattr(callout, "covers_count", 1)
 
     @property
     def tip(self):
@@ -1689,9 +1723,11 @@ def _lint_dim(item, part_bbox, issues, drawing_scale: float = 1.0) -> None:
     measured = getattr(item, "measured_length", None)
 
     nums = re.findall(r"\d+\.?\d*", label.split("±")[0].split("+")[0].lstrip("ø⌀Rr"))
+    # ISO repetition syntax: a pitch label "4× 20" dimensions a span of 4·20
+    rep = re.match(r"\s*(\d+)\s*[×x]\s*(\d+\.?\d*)\s*$", label)
     if nums and measured is not None:
         try:
-            label_val = float(nums[0])
+            label_val = int(rep.group(1)) * float(rep.group(2)) if rep else float(nums[0])
             # When drawing_scale != 1.0 the geometry was scaled up before projecting
             # (e.g. part.scale(5) for a 7.5 mm feature drawn at 5:1). The measured
             # path length is the *scaled* length; the label carries the *real* value.
@@ -2688,6 +2724,7 @@ class HoleCallout(_Annotation):
         cbore_depth: float | str | None = None,
         csink_dia=None,
         csink_angle: float | None = None,
+        suffix: str | None = None,
         draft: Draft | None = None,
         line_width: float = 0.15,
         rotation: float = 0,
@@ -2719,6 +2756,8 @@ class HoleCallout(_Annotation):
             tokens += [("sym", "countersink"), ("sym", "diameter"), ("text", _fmt(csink_dia))]
             if csink_angle is not None:
                 tokens.append(("text", f"× {_fmt(csink_angle)}°"))
+        if suffix:
+            tokens.append(("text", suffix))
 
         strokes: list[Edge] = []
         text_faces = []
@@ -2760,6 +2799,9 @@ class HoleCallout(_Annotation):
             if v:
                 covers.append(float(v))
         self.covers_diameters = tuple(covers)
+        # How many holes this single callout dimensions (the n× prefix) —
+        # read by lint_feature_coverage's count check (#92)
+        self.covers_count = count or 1
 
 
 # ---------------------------------------------------------------------------
