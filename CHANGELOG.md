@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- **`find_holes(part)` / `find_bosses(part)`** (#87): public feature
+  recognition. Coaxial internal cylinders group into one `HoleFeature` per
+  drilled hole (drill + counterbore + spotface), with the bottom classified
+  as through / flat / drill-point by probing adjacent faces; entry chamfers
+  and countersinks are recognised as openings; bores interrupted by crossing
+  holes are recombined; slot end caps are excluded. `find_bosses` reports
+  external segments (including a turned part's OD). The cylinder analysis
+  moved from `make_drawing` into a new `features` module (old import paths
+  still work).
+
 ### Fixed
 
 - **OD/bore-leader exclusion is exact by construction** (#86): `od_diam` is

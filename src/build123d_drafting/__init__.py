@@ -11,6 +11,14 @@ scripts — no MCP server required::
     )
 """
 
+from build123d_drafting.features import (
+    BossFeature,
+    CounterBore,
+    HoleFeature,
+    analyse_cylinders,
+    find_bosses,
+    find_holes,
+)
 from build123d_drafting.helpers import (
     Centerline,
     CompositeFeatureControlFrame,
@@ -42,7 +50,6 @@ from build123d_drafting.helpers import (
 )
 from build123d_drafting.make_drawing import (
     Drawing,
-    analyse_cylinders,
     analyse_face_levels,
     build_drawing,
     choose_scale,
@@ -63,6 +70,11 @@ __all__ = [
     "analyse_face_levels",
     "choose_scale",
     "dedup_diams",
+    "BossFeature",
+    "CounterBore",
+    "HoleFeature",
+    "find_bosses",
+    "find_holes",
     "Centerline",
     "CompositeFeatureControlFrame",
     "DatumFeature",
