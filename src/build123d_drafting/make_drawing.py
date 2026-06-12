@@ -576,25 +576,25 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     # here (PAGE_H - margin / iso_right_limit); _auto_annotate() tightens
     # them once the iso has been projected.
     fv_right_edge = FV_X + fv_hw
-    fv_left_edge  = FV_X - fv_hw
-    fv_top_edge   = FV_Y + fv_hh
+    fv_left_edge = FV_X - fv_hw
+    fv_top_edge = FV_Y + fv_hh
     fv_bottom_edge = FV_Y - fv_hh
-    pv_right_edge = PV_X + fv_hw   # plan has the same X half-width as front
-    pv_left_edge  = PV_X - fv_hw
-    pv_top_edge   = PV_Y + pv_hh
-    pv_bottom_edge = PV_Y - pv_hh   # = fv_top_edge + DIM_PAD
-    sv_top_edge   = SV_Y + fv_hh   # side view has the same Z height as front
+    pv_right_edge = PV_X + fv_hw  # plan has the same X half-width as front
+    pv_left_edge = PV_X - fv_hw
+    pv_top_edge = PV_Y + pv_hh
+    pv_bottom_edge = PV_Y - pv_hh  # = fv_top_edge + DIM_PAD
+    sv_top_edge = SV_Y + fv_hh  # side view has the same Z height as front
 
     fv_zones = ViewZones(
-        right=Strip(fv_right_edge, iso_right_limit,   direction= 1),
-        left =Strip(fv_left_edge,  margin,            direction=-1),
-        above=Strip(fv_top_edge,   pv_bottom_edge - 2, direction= 1),
-        below=Strip(fv_bottom_edge, margin,           direction=-1),
+        right=Strip(fv_right_edge, iso_right_limit, direction=1),
+        left=Strip(fv_left_edge, margin, direction=-1),
+        above=Strip(fv_top_edge, pv_bottom_edge - 2, direction=1),
+        below=Strip(fv_bottom_edge, margin, direction=-1),
     )
     pv_zones = ViewZones(
-        right=Strip(pv_right_edge, iso_right_limit,   direction= 1),
-        left =Strip(pv_left_edge,  margin,            direction=-1),
-        above=Strip(pv_top_edge,   PAGE_H - margin,   direction= 1),
+        right=Strip(pv_right_edge, iso_right_limit, direction=1),
+        left=Strip(pv_left_edge, margin, direction=-1),
+        above=Strip(pv_top_edge, PAGE_H - margin, direction=1),
         # DIM_PAD gap between plan bottom and front top: 18 mm, enough for
         # one width dimension (slot=8, gap=8 fits exactly)
         below=Strip(pv_bottom_edge, fv_top_edge + 2, direction=-1),
@@ -602,9 +602,9 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     sv_zones = ViewZones(
         # sv_right already includes DIM_PAD; anchor here so the strip never
         # places annotations inside that gap
-        right=Strip(sv_right, iso_right_limit, direction= 1),
-        left =None,   # immediately abuts the front view's right edge
-        above=Strip(sv_top_edge, PAGE_H - margin, direction= 1),
+        right=Strip(sv_right, iso_right_limit, direction=1),
+        left=None,  # immediately abuts the front view's right edge
+        above=Strip(sv_top_edge, PAGE_H - margin, direction=1),
         below=None,
     )
 
@@ -740,6 +740,7 @@ class Drawing:
         self._named: dict = {}
         self.svg_path: str | None = None
         self.dxf_path: str | None = None
+        self._analysis: SimpleNamespace | None = None
 
     # -- views ----------------------------------------------------------------
     def add_view(self, name, shape, camera, up, position, *, look_at=None, scaled=False):
@@ -978,12 +979,21 @@ def _auto_annotate(dwg, a):
         return a.PV_Y + (y - a.cy) * a.SCALE
 
     # Tighten right-strip outer_limits to the actual iso view left edge now
-    # that the iso has been projected and fitted.
+    # that the iso has been projected and fitted.  Guard: only apply if the
+    # limit is above the strip cursor — an overflowing iso can produce
+    # _iso_x_limit < cursor, which would silence every right-strip allocation.
     _iso_x0, _, _, _ = _iso_bbox(dwg)
     _iso_x_limit = _iso_x0 - 4
-    a.fv_zones.right.outer_limit = min(a.fv_zones.right.outer_limit, _iso_x_limit)
-    a.pv_zones.right.outer_limit = min(a.pv_zones.right.outer_limit, _iso_x_limit)
-    a.sv_zones.right.outer_limit = min(a.sv_zones.right.outer_limit, _iso_x_limit)
+    for _rs in (a.fv_zones.right, a.pv_zones.right, a.sv_zones.right):
+        if _iso_x_limit > _rs._cursor:
+            _rs.outer_limit = min(_rs.outer_limit, _iso_x_limit)
+        else:
+            _log.warning(
+                "right-strip cursor %.1f >= iso_x limit %.1f: right-strip dims"
+                " may overlap iso view (iso view overflows into annotation zone)",
+                _rs._cursor,
+                _iso_x_limit,
+            )
 
     # Overall height — slot reserved in fv_zones.right.
     # _right_ladder tracks the witness x for the progressive ladder: each
@@ -1255,9 +1265,21 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
     for n, ann in dwg._named.items():
         if n.startswith("dim_pitch_side") and getattr(ann, "dim_level_y", 0) > side_top:
             a.sv_zones.above.allocate(10.0)  # consume space used by pitch dim
-    # Tighten outer_limit if any witness line approaches the iso view boundary
+    # Tighten outer_limit if any witness line approaches the iso view boundary.
+    # Guard: only cap if iso_y0-4 is above the strip's current cursor — an iso
+    # view that overflows left (too large to fit) can have iso_y0 below
+    # sv_top_edge, which would make all allocations return None if applied.
     if y_refs and any(SX(ry) + 10 > iso_x0 - 4 for _, ry, _ in y_refs):
-        a.sv_zones.above.outer_limit = min(a.sv_zones.above.outer_limit, iso_y0 - 4)
+        cap = iso_y0 - 4
+        above = a.sv_zones.above
+        if cap > above._cursor:
+            above.outer_limit = min(above.outer_limit, cap)
+        else:
+            _log.warning(
+                "sv_zones.above cursor %.1f >= iso_y0 cap %.1f: Y-location dims may overlap iso view",
+                above._cursor,
+                cap,
+            )
     for i, (_rx, ry, _) in enumerate(sorted(y_refs, key=lambda r: abs(r[1] - datum_y))):
         if abs(ry - datum_y) * a.SCALE < 1.0:
             continue
@@ -1822,7 +1844,7 @@ def build_drawing(
         part=a.part,
         cyls=a.cyls,
     )
-    dwg._analysis = a   # expose analysis namespace for testing and future strip access
+    dwg._analysis = a  # expose analysis namespace for testing and future strip access
 
     part_s = a.part.scale(a.SCALE)
     dwg.add_view("front", part_s, (cxs, cys - dist, czs), (0, 0, 1), (a.FV_X, a.FV_Y), scaled=True)
