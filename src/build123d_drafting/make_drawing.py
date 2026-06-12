@@ -20,6 +20,7 @@ import argparse
 import logging
 import math
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -270,6 +271,90 @@ _LADDER = [
 _SCALES = [10.0, 5.0, 2.0, 1.0, 0.5, 0.2]
 
 
+# ---------------------------------------------------------------------------
+# Strip / zone layout model
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Strip:
+    """A one-dimensional annotation band adjacent to an orthographic view.
+
+    Annotations are stacked outward from the view edge by calling
+    :meth:`allocate`.  The cursor starts at ``anchor + direction * gap`` and
+    advances after each successful allocation.
+
+    Attributes:
+        anchor:      Page coordinate of the view edge this strip starts from.
+        outer_limit: Page coordinate at which the strip ends (page margin,
+                     neighbouring view, or title-block boundary).
+        direction:   ``+1`` — cursor moves away from anchor (right/above);
+                     ``-1`` — cursor retreats from anchor (left/below).
+        gap:         Clearance between the view edge and the first annotation.
+        spacing:     Clearance between successive annotations.
+    """
+
+    anchor: float
+    outer_limit: float
+    direction: float = 1.0
+    gap: float = 8.0
+    spacing: float = 4.0
+    _cursor: float = field(init=False)
+
+    def __post_init__(self):
+        self._cursor = self.anchor + self.direction * self.gap
+
+    # ------------------------------------------------------------------
+    # Public API
+
+    @property
+    def available(self) -> float:
+        """Total space available in this strip (mm)."""
+        return abs(self.outer_limit - self.anchor)
+
+    @property
+    def depth_used(self) -> float:
+        """How far the cursor has advanced from the anchor (mm)."""
+        return abs(self._cursor - self.anchor)
+
+    def allocate(self, size: float) -> float | None:
+        """Reserve *size* mm; return the near-edge page coordinate, or ``None`` if full.
+
+        The returned value is the page coordinate of the annotation's
+        dimension line (or leader elbow).  Convert to a relative offset with::
+
+            distance = abs(page_coord - strip.anchor)
+        """
+        if self.direction == 1:
+            start = self._cursor
+            end = start + size
+            if end > self.outer_limit:
+                return None
+            self._cursor = end + self.spacing
+            return start
+        else:
+            end = self._cursor
+            start = end - size
+            if start < self.outer_limit:
+                return None
+            self._cursor = start - self.spacing
+            return end
+
+
+@dataclass
+class ViewZones:
+    """The four annotation strips surrounding one orthographic view.
+
+    Any strip that has no usable space (e.g. a side view's left strip, which
+    abuts the front view) is ``None``.
+    """
+
+    right: Strip | None = None
+    left: Strip | None = None
+    above: Strip | None = None
+    below: Strip | None = None
+
+
 def _tb_width(page_w: float) -> float:
     """Title-block width for a page: 120 mm on A4, 150 mm on A3 and larger."""
     return 120.0 if page_w <= 297.0 else 150.0
@@ -484,6 +569,45 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     face_zs = analyse_face_levels(part)
     step_zs = [z for z in face_zs if z > bb.min.Z + 0.6 and z < bb.max.Z - 0.6]
 
+    # ------------------------------------------------------------------
+    # Strip / zone construction.
+    # Phase 1: defines regions only — annotation functions still use their
+    # own hard-coded offsets.  Later phases will route each annotation
+    # through strip.allocate().  The iso view's outer limits are conservative
+    # here (PAGE_H - margin / iso_right_limit); _auto_annotate() tightens
+    # them once the iso has been projected.
+    _gap = 8.0   # inner clearance from view edge to first annotation line
+    _spc = 4.0   # spacing between successive annotations in a strip
+
+    fv_right_edge = FV_X + fv_hw
+    fv_left_edge  = FV_X - fv_hw
+    fv_top_edge   = FV_Y + fv_hh
+    fv_bottom_edge = FV_Y - fv_hh
+    pv_right_edge = PV_X + fv_hw   # plan has the same X half-width as front
+    pv_left_edge  = PV_X - fv_hw
+    pv_top_edge   = PV_Y + pv_hh
+    sv_right_edge = SV_X + sv_hw   # geometric edge of side view
+    sv_top_edge   = SV_Y + fv_hh   # side view has the same Z height as front
+
+    fv_zones = ViewZones(
+        right=Strip(fv_right_edge, iso_right_limit,   direction= 1, gap=_gap, spacing=_spc),
+        left =Strip(fv_left_edge,  margin,            direction=-1, gap=_gap, spacing=_spc),
+        above=Strip(fv_top_edge,   PV_Y - pv_hh - 2, direction= 1, gap=_gap, spacing=_spc),
+        below=Strip(fv_bottom_edge, margin,           direction=-1, gap=_gap, spacing=_spc),
+    )
+    pv_zones = ViewZones(
+        right=Strip(pv_right_edge, iso_right_limit,   direction= 1, gap=_gap, spacing=_spc),
+        left =Strip(pv_left_edge,  margin,            direction=-1, gap=_gap, spacing=_spc),
+        above=Strip(pv_top_edge,   PAGE_H - margin,   direction= 1, gap=_gap, spacing=_spc),
+        below=None,   # immediately abuts the front view's top edge
+    )
+    sv_zones = ViewZones(
+        right=Strip(sv_right_edge, iso_right_limit,   direction= 1, gap=_gap, spacing=_spc),
+        left =None,   # immediately abuts the front view's right edge
+        above=Strip(sv_top_edge,   PAGE_H - margin,   direction= 1, gap=_gap, spacing=_spc),
+        below=None,
+    )
+
     page_label = {297: "A4", 420: "A3", 594: "A2", 841: "A1", 1189: "A0"}.get(
         int(PAGE_W), f"{PAGE_W:.0f}mm"
     )
@@ -535,6 +659,15 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
         SV_Y=SV_Y,
         ISO_X=ISO_X,
         ISO_Y=ISO_Y,
+        # View half-extents in page units (convenient for strip arithmetic)
+        fv_hw=fv_hw,
+        fv_hh=fv_hh,
+        pv_hh=pv_hh,
+        sv_hw=sv_hw,
+        # Strip / zone layout model (Phase 1 — regions defined, not yet used)
+        fv_zones=fv_zones,
+        pv_zones=pv_zones,
+        sv_zones=sv_zones,
         step_file=step_file,
         title=title,
         number=number,
@@ -1661,6 +1794,7 @@ def build_drawing(
         part=a.part,
         cyls=a.cyls,
     )
+    dwg._analysis = a   # expose analysis namespace for testing and future strip access
 
     part_s = a.part.scale(a.SCALE)
     dwg.add_view("front", part_s, (cxs, cys - dist, czs), (0, 0, 1), (a.FV_X, a.FV_Y), scaled=True)

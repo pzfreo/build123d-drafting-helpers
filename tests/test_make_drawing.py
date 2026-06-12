@@ -144,6 +144,81 @@ class TestChooseScaleOverrides:
             choose_scale(10, 10, 10, scale=0)
 
 
+class TestStripZones:
+    """Unit tests for the Strip / ViewZones layout primitives (issue #105)."""
+
+    def test_strip_import(self):
+        from build123d_drafting.make_drawing import Strip, ViewZones  # noqa: F401
+
+    def test_outward_strip_allocates_and_advances(self):
+        from build123d_drafting.make_drawing import Strip
+
+        s = Strip(anchor=100.0, outer_limit=200.0, direction=1, gap=8.0, spacing=4.0)
+        pos = s.allocate(10.0)
+        assert pos == pytest.approx(108.0)   # anchor + gap
+        pos2 = s.allocate(10.0)
+        assert pos2 == pytest.approx(122.0)  # 108 + 10 + 4
+
+    def test_inward_strip_allocates_and_retreats(self):
+        from build123d_drafting.make_drawing import Strip
+
+        s = Strip(anchor=100.0, outer_limit=0.0, direction=-1, gap=8.0, spacing=4.0)
+        pos = s.allocate(10.0)
+        assert pos == pytest.approx(92.0)   # anchor - gap (near edge of first slot)
+        pos2 = s.allocate(10.0)
+        assert pos2 == pytest.approx(78.0)  # 92 - 10 - 4
+
+    def test_strip_returns_none_when_full(self):
+        from build123d_drafting.make_drawing import Strip
+
+        s = Strip(anchor=0.0, outer_limit=20.0, direction=1, gap=2.0, spacing=2.0)
+        assert s.allocate(10.0) is not None   # fits: 2..12
+        assert s.allocate(10.0) is None       # would need 14..24, over limit=20
+
+    def test_strip_available(self):
+        from build123d_drafting.make_drawing import Strip
+
+        s = Strip(anchor=50.0, outer_limit=150.0, direction=1)
+        assert s.available == pytest.approx(100.0)
+
+    def test_strip_depth_used(self):
+        from build123d_drafting.make_drawing import Strip
+
+        s = Strip(anchor=100.0, outer_limit=200.0, direction=1, gap=8.0, spacing=4.0)
+        s.allocate(10.0)
+        # cursor is now at 108 + 10 + 4 = 122; depth_used = 122 - 100 = 22
+        assert s.depth_used == pytest.approx(22.0)
+
+    def test_analyse_returns_view_zones(self):
+        from build123d import Box, Cylinder
+        from build123d_drafting import build_drawing
+        from build123d_drafting.make_drawing import Strip, ViewZones
+
+        part = Box(80, 60, 20) - Cylinder(5, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        assert isinstance(a.fv_zones, ViewZones)
+        assert isinstance(a.pv_zones, ViewZones)
+        assert isinstance(a.sv_zones, ViewZones)
+        assert isinstance(a.fv_zones.right, Strip)
+        assert isinstance(a.pv_zones.above, Strip)
+        assert a.pv_zones.below is None   # abuts front view
+        assert a.sv_zones.left is None    # abuts front view
+
+    def test_strip_limits_are_within_page(self):
+        from build123d import Box, Cylinder
+        from build123d_drafting import build_drawing
+
+        part = Box(80, 60, 20) - Cylinder(5, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        margin = a.margin
+        # Outer limits should be within the page
+        assert a.fv_zones.right.outer_limit <= a.PAGE_W
+        assert a.pv_zones.above.outer_limit <= a.PAGE_H
+        assert a.fv_zones.left.outer_limit >= margin
+
+
 # ---------------------------------------------------------------------------
 # Integration test — requires build123d + OCP (slow)
 # ---------------------------------------------------------------------------
