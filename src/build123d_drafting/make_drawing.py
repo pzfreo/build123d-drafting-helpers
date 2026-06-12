@@ -740,6 +740,7 @@ class Drawing:
         self._named: dict = {}
         self.svg_path: str | None = None
         self.dxf_path: str | None = None
+        self._analysis: SimpleNamespace | None = None
 
     # -- views ----------------------------------------------------------------
     def add_view(self, name, shape, camera, up, position, *, look_at=None, scaled=False):
@@ -1255,9 +1256,15 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
     for n, ann in dwg._named.items():
         if n.startswith("dim_pitch_side") and getattr(ann, "dim_level_y", 0) > side_top:
             a.sv_zones.above.allocate(10.0)  # consume space used by pitch dim
-    # Tighten outer_limit if any witness line approaches the iso view boundary
+    # Tighten outer_limit if any witness line approaches the iso view boundary.
+    # Guard: only cap if iso_y0-4 is above the strip's current cursor — an iso
+    # view that overflows left (too large to fit) can have iso_y0 below
+    # sv_top_edge, which would make all allocations return None if applied.
     if y_refs and any(SX(ry) + 10 > iso_x0 - 4 for _, ry, _ in y_refs):
-        a.sv_zones.above.outer_limit = min(a.sv_zones.above.outer_limit, iso_y0 - 4)
+        cap = iso_y0 - 4
+        above = a.sv_zones.above
+        if cap > above._cursor:
+            above.outer_limit = min(above.outer_limit, cap)
     for i, (_rx, ry, _) in enumerate(sorted(y_refs, key=lambda r: abs(r[1] - datum_y))):
         if abs(ry - datum_y) * a.SCALE < 1.0:
             continue
