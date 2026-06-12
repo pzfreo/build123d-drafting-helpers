@@ -1172,14 +1172,20 @@ class TestLocationDimsAndSection:
         assert min(abs(ly - py) for ly in locy for py in pitch) >= 8
 
     @pytest.mark.timeout(120)
-    def test_section_survives_a_pmi_compound(self):
+    def test_pmi_compound_draws_the_solid_only(self):
         # AP242 STEP with PMI imports as a Compound of solid + annotation
-        # curves; the section cut must use the solids and never abort the
-        # drawing on a failed boolean.
+        # geometry (plane border wires, leader curves). The drawing is of
+        # the solids: no phantom rectangles in the views, no bbox inflation
+        # corrupting the scale and envelope dims, and the section cut works.
         solid = Box(80, 60, 20) - Cylinder(4, 20) - Pos(10, 5, -7) * Cylinder(6, 6)
-        part = Compound(children=[solid, Edge.make_line((0, 0, 9), (30, 0, 9))])
+        pmi = Edge.make_line((-80, 0, 40), (80, 0, 40))  # well outside the part
+        part = Compound(children=[solid, pmi])
         dwg = build_drawing(part)
         assert "section_aa" in dwg.views
+        assert dwg._named["dim_height"].label == "20"  # not the PMI z-extent
+        # the views contain no line-work above the solid's top
+        for vis, hid in dwg.views.values():
+            assert vis.bounding_box().size.Y < 200  # sanity: no 160mm phantom
 
     @pytest.mark.timeout(60)
     def test_rotational_part_gets_neither(self):

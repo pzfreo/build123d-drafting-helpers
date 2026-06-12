@@ -399,6 +399,22 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     else:
         part = import_step(step_file)
         src = str(step_file)
+    # AP242 STEP files carry PMI presentation geometry (annotation-plane
+    # border wires, leader curves) beside the solid; left in, it draws as
+    # phantom rectangles in every view and inflates the bounding box —
+    # corrupting the scale choice and the envelope dimensions. The drawing
+    # is of the solids.
+    solids = part.solids()
+    if solids:
+        body = solids[0] if len(solids) == 1 else Compound(children=list(solids))
+        if body.bounding_box().size != part.bounding_box().size or len(part.edges()) != len(
+            body.edges()
+        ):
+            _log.info(
+                "Dropping non-solid geometry from %s (PMI presentation data)",
+                src,
+            )
+        part = body
     bb = part.bounding_box()
     x_size = bb.max.X - bb.min.X
     y_size = bb.max.Y - bb.min.Y
