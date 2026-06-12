@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.6.0 — 2026-06-12
+
 ### Added
 
 - **`find_holes(part)` / `find_bosses(part)`** (#87): public feature
