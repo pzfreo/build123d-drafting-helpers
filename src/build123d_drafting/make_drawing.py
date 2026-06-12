@@ -1050,9 +1050,11 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
                 _add(view, i, _rim_tip(centre, elbow, holes), elbow, side, callout)
             continue
 
-        # plan / side: stacked to the right of the view
+        # plan / side: stacked to the right of the view. The ladder is
+        # ordered by the y of each group's leader target (its max-x rep) so
+        # shafts don't cross between rungs.
         edge_right = plan_right if view == "plan" else side_right
-        specs.sort(key=lambda s: to_page(max(s[0], key=lambda h: to_page(h)[1]))[1])
+        specs.sort(key=lambda s: to_page(max(s[0], key=lambda h: to_page(h)[0]))[1])
         prev_y = None
         for i, (holes, callout) in enumerate(specs):
             w = callout.callout_width
