@@ -445,7 +445,13 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
         _log.info("Cross-hole diams: %s", cross_diams)
 
     od_cyl = max((c for c in full_z if c["external"]), key=lambda c: c["diameter"], default=None)
-    od_diam = od_cyl["diameter"] if od_cyl else None
+    od_diam = None
+    if od_cyl:
+        # Snap to the dedup_diams representative so comparisons against
+        # z_diams entries (bore-leader exclusion, labels) are exact even if
+        # the cylinder records ever carry unrounded OCCT diameters (#86)
+        raw_od = od_cyl["diameter"]
+        od_diam = min(z_diams, key=lambda d: abs(d - raw_od))
     od_axis_offset = (
         math.hypot(od_cyl["axis_xyz"][0] - cx, od_cyl["axis_xyz"][1] - cy) if od_cyl else 0.0
     )
