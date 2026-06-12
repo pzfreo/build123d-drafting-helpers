@@ -155,7 +155,7 @@ class TestStripZones:
 
         s = Strip(anchor=100.0, outer_limit=200.0, direction=1, gap=8.0, spacing=4.0)
         pos = s.allocate(10.0)
-        assert pos == pytest.approx(108.0)   # anchor + gap
+        assert pos == pytest.approx(108.0)  # anchor + gap
         pos2 = s.allocate(10.0)
         assert pos2 == pytest.approx(122.0)  # 108 + 10 + 4
 
@@ -164,7 +164,7 @@ class TestStripZones:
 
         s = Strip(anchor=100.0, outer_limit=0.0, direction=-1, gap=8.0, spacing=4.0)
         pos = s.allocate(10.0)
-        assert pos == pytest.approx(92.0)   # anchor - gap (near edge of first slot)
+        assert pos == pytest.approx(92.0)  # anchor - gap (near edge of first slot)
         pos2 = s.allocate(10.0)
         assert pos2 == pytest.approx(78.0)  # 92 - 10 - 4
 
@@ -172,8 +172,8 @@ class TestStripZones:
         from build123d_drafting.make_drawing import Strip
 
         s = Strip(anchor=0.0, outer_limit=20.0, direction=1, gap=2.0, spacing=2.0)
-        assert s.allocate(10.0) is not None   # fits: 2..12
-        assert s.allocate(10.0) is None       # would need 14..24, over limit=20
+        assert s.allocate(10.0) is not None  # fits: 2..12
+        assert s.allocate(10.0) is None  # would need 14..24, over limit=20
 
     def test_strip_available(self):
         from build123d_drafting.make_drawing import Strip
@@ -204,7 +204,7 @@ class TestStripZones:
         assert isinstance(a.fv_zones.right, Strip)
         assert isinstance(a.pv_zones.above, Strip)
         assert isinstance(a.pv_zones.below, Strip)  # dim_width goes here
-        assert a.sv_zones.left is None    # abuts front view
+        assert a.sv_zones.left is None  # abuts front view
 
     def test_strip_limits_are_within_page(self):
         from build123d import Box, Cylinder
@@ -319,6 +319,7 @@ class TestStripZones:
         # After _auto_annotate runs, pv/sv/fv right strip outer_limits must
         # equal iso_x0 - 4 (the actual iso view left edge minus clearance).
         from build123d import Box, Cylinder
+
         from build123d_drafting import build_drawing
         from build123d_drafting.make_drawing import _iso_bbox
 
