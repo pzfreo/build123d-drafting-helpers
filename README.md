@@ -54,8 +54,13 @@ For a fully automatic STEP → SVG + DXF pipeline with no drawing code required,
 chooses a scale and page size, projects four views, and annotates automatically:
 hole callouts with count grouping ("4× ø10 THRU", counterbore/depth symbols) from
 the recognised hole features, bolt-circle callouts with pitch-circle centrelines
-("6× ø8 THRU EQ SP ON ø60 BC"), linear-array pitch dimensions ("4× 20"), centre
-marks, envelope dimensions, centrelines, and a title block.
+("6× ø8 THRU EQ SP ON ø60 BC"), linear-array pitch dimensions ("4× 20"), baseline
+X/Y hole-location dimensions from a default datum corner (the part's minimum-X/Y
+corner — re-anchor in a manual pass if the functional datum differs), an automatic
+SECTION A–A when blind or counterbored holes are hidden-line-only (cut through the
+densest row of qualifying holes, with a cutting-plane centreline and letters on
+the plan view; hatching staged for a follow-up), centre marks, envelope
+dimensions, centrelines, and a title block.
 
 ### CLI
 
