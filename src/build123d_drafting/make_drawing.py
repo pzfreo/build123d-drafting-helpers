@@ -974,21 +974,25 @@ def _auto_annotate(dwg, a):
     def PY(y):
         return a.PV_Y + (y - a.cy) * a.SCALE
 
-    # Overall height — slot reserved in fv_zones.right
-    _witness_rx = FX(a.bb.max.X) + 2
+    # Overall height — slot reserved in fv_zones.right.
+    # _right_ladder tracks the witness x for the progressive ladder: each
+    # subsequent dim witnesses from the previous dim's line, so extension
+    # lines are adjacent rather than coincident.
+    _right_ladder = FX(a.bb.max.X) + 2
     _px = a.fv_zones.right.allocate(10.0)
     if _px is not None:
         dwg.add(
             Dimension(
-                (_witness_rx, FZ(a.bb.min.Z), 0),
-                (_witness_rx, FZ(a.bb.max.Z), 0),
+                (_right_ladder, FZ(a.bb.min.Z), 0),
+                (_right_ladder, FZ(a.bb.max.Z), 0),
                 "right",
-                _px - _witness_rx,
+                _px - _right_ladder,
                 draft,
                 label=_fmt(a.z_size),
             ),
             "dim_height",
         )
+        _right_ladder = _px
     else:
         _log.warning("dim_height skipped: fv_zones.right strip full")
 
@@ -1078,7 +1082,8 @@ def _auto_annotate(dwg, a):
         )
 
     # Step heights — only where the step is tall enough to fit a label;
-    # witness x shared with dim_height, positions allocated from fv_zones.right
+    # each step witnesses from the previous dim's line (_right_ladder) so
+    # extension lines are adjacent rather than coincident
     for col, z in enumerate([z for z in a.step_zs[:3] if (z - a.bb.min.Z) * a.SCALE >= 20]):
         _px = a.fv_zones.right.allocate(14.0)
         if _px is None:
@@ -1086,15 +1091,16 @@ def _auto_annotate(dwg, a):
             break
         dwg.add(
             Dimension(
-                (_witness_rx, FZ(a.bb.min.Z), 0),
-                (_witness_rx, FZ(z), 0),
+                (_right_ladder, FZ(a.bb.min.Z), 0),
+                (_right_ladder, FZ(z), 0),
                 "right",
-                _px - _witness_rx,
+                _px - _right_ladder,
                 draft,
                 label=_fmt(z - a.bb.min.Z),
             ),
             f"dim_step_{col}",
         )
+        _right_ladder = _px
 
     # Width (non-round / non-square parts only)
     if abs(a.x_size - a.y_size) > max(a.x_size, a.y_size) * 0.05:
