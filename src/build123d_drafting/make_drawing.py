@@ -582,19 +582,22 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     pv_right_edge = PV_X + fv_hw   # plan has the same X half-width as front
     pv_left_edge  = PV_X - fv_hw
     pv_top_edge   = PV_Y + pv_hh
+    pv_bottom_edge = PV_Y - pv_hh   # = fv_top_edge + DIM_PAD
     sv_top_edge   = SV_Y + fv_hh   # side view has the same Z height as front
 
     fv_zones = ViewZones(
         right=Strip(fv_right_edge, iso_right_limit,   direction= 1),
         left =Strip(fv_left_edge,  margin,            direction=-1),
-        above=Strip(fv_top_edge,   PV_Y - pv_hh - 2, direction= 1),
+        above=Strip(fv_top_edge,   pv_bottom_edge - 2, direction= 1),
         below=Strip(fv_bottom_edge, margin,           direction=-1),
     )
     pv_zones = ViewZones(
         right=Strip(pv_right_edge, iso_right_limit,   direction= 1),
         left =Strip(pv_left_edge,  margin,            direction=-1),
         above=Strip(pv_top_edge,   PAGE_H - margin,   direction= 1),
-        below=None,   # immediately abuts the front view's top edge
+        # DIM_PAD gap between plan bottom and front top: 18 mm, enough for
+        # one width dimension (slot=8, gap=8 fits exactly)
+        below=Strip(pv_bottom_edge, fv_top_edge + 2, direction=-1),
     )
     sv_zones = ViewZones(
         # sv_right already includes DIM_PAD; anchor here so the strip never
@@ -1102,19 +1105,24 @@ def _auto_annotate(dwg, a):
         )
         _right_ladder = _px
 
-    # Width (non-round / non-square parts only)
+    # Width (non-round / non-square parts only) — routed through pv_zones.below
     if abs(a.x_size - a.y_size) > max(a.x_size, a.y_size) * 0.05:
-        dwg.add(
-            Dimension(
-                (PX(a.bb.min.X), PY(a.bb.min.Y) - 2, 0),
-                (PX(a.bb.max.X), PY(a.bb.min.Y) - 2, 0),
-                "below",
-                8,
-                draft,
-                label=_fmt(a.x_size),
-            ),
-            "dim_width",
-        )
+        _below_witness = PY(a.bb.min.Y) - 2
+        _py = a.pv_zones.below.allocate(8.0)
+        if _py is not None:
+            dwg.add(
+                Dimension(
+                    (PX(a.bb.min.X), _below_witness, 0),
+                    (PX(a.bb.max.X), _below_witness, 0),
+                    "below",
+                    _below_witness - _py,
+                    draft,
+                    label=_fmt(a.x_size),
+                ),
+                "dim_width",
+            )
+        else:
+            _log.warning("dim_width skipped: pv_zones.below strip full")
 
     # The section view goes last: its room check clears every annotation
     # already placed right of the side view (callout labels, height/step
@@ -1190,30 +1198,28 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
     datum_x, datum_y = a.bb.min.X, a.bb.min.Y
     tier = draft.font_size * 3.0
 
-    # X locations: dims above the plan view, shortest span innermost, on
-    # tiers beyond any pitch dims already stacked there
-    base = 8.0 + 10.0 * sum(
-        1
-        for n, ann in dwg._named.items()
-        if n.startswith("dim_pitch_plan") and getattr(ann, "dim_level_y", 0) > plan_top
-    )
+    # X locations: dims above the plan view, routed through pv_zones.above.
+    # Pre-advance the strip past any pitch dims already placed above plan_top.
     x_refs: list = []
     for r in refs:
         if not any(abs(r[0] - u[0]) < 0.5 for u in x_refs):
             x_refs.append(r)
+    for n, ann in dwg._named.items():
+        if n.startswith("dim_pitch_plan") and getattr(ann, "dim_level_y", 0) > plan_top:
+            a.pv_zones.above.allocate(10.0)  # consume space used by pitch dim
     for i, (rx, ry, _) in enumerate(sorted(x_refs, key=lambda r: abs(r[0] - datum_x))):
         if abs(rx - datum_x) * a.SCALE < 1.0:
             continue  # on the datum edge — nothing to dimension
-        level = plan_top + base + tier * i
-        if level > a.PAGE_H - a.margin - draft.font_size:
-            _log.info("X location dim for x=%s skipped (no room above)", _fmt(rx))
+        _py = a.pv_zones.above.allocate(tier)
+        if _py is None:
+            _log.info("X location dim for x=%s skipped (no room above plan view)", _fmt(rx))
             continue
         dwg.add(
             Dimension(
                 (PX(datum_x), PY(ry), 0),
                 (PX(rx), PY(ry), 0),
                 "above",
-                level - PY(ry),
+                _py - PY(ry),
                 draft,
                 label=_fmt(rx - datum_x),
             ),
