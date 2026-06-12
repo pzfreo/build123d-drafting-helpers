@@ -987,6 +987,13 @@ def _auto_annotate(dwg, a):
     for _rs in (a.fv_zones.right, a.pv_zones.right, a.sv_zones.right):
         if _iso_x_limit > _rs._cursor:
             _rs.outer_limit = min(_rs.outer_limit, _iso_x_limit)
+        else:
+            _log.warning(
+                "right-strip cursor %.1f >= iso_x limit %.1f: right-strip dims"
+                " may overlap iso view (iso view overflows into annotation zone)",
+                _rs._cursor,
+                _iso_x_limit,
+            )
 
     # Overall height — slot reserved in fv_zones.right.
     # _right_ladder tracks the witness x for the progressive ladder: each
