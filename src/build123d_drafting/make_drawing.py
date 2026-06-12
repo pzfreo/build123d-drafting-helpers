@@ -40,6 +40,7 @@ from build123d_drafting.features import (
     BoltCircle,
     LinearArray,
     _full_cyls,
+    _spec_key,
     analyse_cylinders,
     find_hole_patterns,
     find_holes,
@@ -955,6 +956,16 @@ def _auto_annotate(dwg, a):
 _MAX_CALLOUTS_PER_VIEW = 4
 
 
+def _add_furniture(dwg, a, view, j, pattern, to_page):
+    """Pattern sheet furniture, added once its callout is placed (#92)."""
+    if isinstance(pattern, BoltCircle):
+        cx = sum(to_page(h)[0] for h in pattern.holes) / len(pattern.holes)
+        cy = sum(to_page(h)[1] for h in pattern.holes) / len(pattern.holes)
+        dwg.add(CenterlineCircle((cx, cy), pattern.diameter * a.SCALE), f"bc_{view}{j}")
+    elif isinstance(pattern, LinearArray):
+        _add_pitch_dim(dwg, a, view, j, pattern, to_page)
+
+
 def _add_pitch_dim(dwg, a, view, j, pattern, to_page):
     """Pitch dimension for a linear hole array: first→last hole centres,
     labelled ``(n-1)× pitch``, placed just outside the view on the side of
@@ -966,7 +977,6 @@ def _add_pitch_dim(dwg, a, view, j, pattern, to_page):
     if norm < 1e-9:
         return
     ux, uy = ux / norm, uy / norm
-    side = (-uy, ux, 0)
     mid = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
     # view extents in page coordinates, to push the dim line outside
     if view == "plan":
@@ -987,14 +997,31 @@ def _add_pitch_dim(dwg, a, view, j, pattern, to_page):
             for y in (a.bb.min.Y, a.bb.max.Y)
             for z in (a.bb.min.Z, a.bb.max.Z)
         ]
-    reach = max((c[0] - mid[0]) * side[0] + (c[1] - mid[1]) * side[1] for c in corners)
+    # Pick the perpendicular side from the page layout, not raw distance:
+    # below the plan view sit dim_width and the front view, above the front
+    # view sits the plan — so plan dims go up, front dims go down, and
+    # vertical rows go left (callouts own the right strip). The side view
+    # alone uses the shorter reach. A row far from its chosen side simply
+    # gets long extension lines — standard practice when the near side is
+    # occupied.
+    reach_pos = max((c[0] - mid[0]) * -uy + (c[1] - mid[1]) * ux for c in corners)
+    reach_neg = max((c[0] - mid[0]) * uy + (c[1] - mid[1]) * -ux for c in corners)
+    cands = (((-uy, ux, 0), reach_pos), ((uy, -ux, 0), reach_neg))
+    if view == "side":
+        side, reach = min(cands, key=lambda c: c[1])
+    else:
+        pref = (-0.3, 1.0) if view == "plan" else (-0.3, -1.0)
+        side, reach = max(cands, key=lambda c: c[0][0] * pref[0] + c[0][1] * pref[1])
+    # stack further pitch dims in this view on outer tiers
+    prior = sum(1 for name in dwg._named if name.startswith(f"dim_pitch_{view}"))
+    offset = reach + 8 + 10 * prior
     n = len(pattern.holes)
     dwg.add(
         Dimension(
             (p1[0], p1[1], 0),
             (p2[0], p2[1], 0),
             side,
-            reach + 8,
+            offset,
             dwg.draft,
             label=f"{n - 1}× {_fmt(pattern.pitch)}",
         ),
@@ -1021,16 +1048,17 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
     draft = dwg.draft
     gap = draft.pad_around_text
     min_gap = draft.font_size * 2.2
+    # Group on the same machining-spec key pattern detection uses (snapped
+    # axis vector included): blind holes drilled from opposite faces are
+    # different operations and get separate callouts, and a spec group's
+    # hole set therefore lines up exactly with find_hole_patterns' groups.
     groups: dict = {}
     for h in a.holes:
-        # a through drill is the same callout whatever wall it pierces
-        depth_key = None if h.bottom == "through" else h.depth
-        key = (axis_letter(h), h.diameter, depth_key, h.bottom, h.cbore, h.spotface)
-        groups.setdefault(key, []).append(h)
+        groups.setdefault(_spec_key(h), []).append(h)
 
     by_view: dict = {}
-    for (ax, *_), holes in groups.items():
-        by_view.setdefault(view_of_axis[ax][0], []).append(holes)
+    for holes in groups.values():
+        by_view.setdefault(view_of_axis[axis_letter(holes[0])][0], []).append(holes)
 
     iso_x0, iso_y0, _, _ = _iso_bbox(dwg)
     plan_right = a.PV_X + (a.bb.max.X - a.cx) * a.SCALE
@@ -1094,21 +1122,13 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
     for view, view_groups in by_view.items():
         to_page = view_of_axis[{"plan": "z", "front": "y", "side": "x"}[view]][1]
         specs = []
-        for j, holes in enumerate(view_groups):
+        for holes in view_groups:
             pattern = patterns.get(frozenset(holes))
-            specs.append((holes, _build_callout(holes, pattern)))
-            if isinstance(pattern, BoltCircle):
-                # pitch-circle centreline through the pattern (#92)
-                cx = sum(to_page(h)[0] for h in pattern.holes) / len(pattern.holes)
-                cy = sum(to_page(h)[1] for h in pattern.holes) / len(pattern.holes)
-                dwg.add(
-                    CenterlineCircle((cx, cy), pattern.diameter * a.SCALE),
-                    f"bc_{view}{j}",
-                )
-            elif isinstance(pattern, LinearArray):
-                _add_pitch_dim(dwg, a, view, j, pattern, to_page)
+            specs.append((holes, _build_callout(holes, pattern), pattern))
         if len(specs) > _MAX_CALLOUTS_PER_VIEW:
             # annotate the largest features; the rest surface via the lint
+            # (their pattern furniture is withheld too — a bare pitch circle
+            # with no callout referencing it explains nothing)
             specs.sort(key=lambda s: s[0][0].diameter, reverse=True)
             _log.info(
                 "%d hole specs in %s view; annotating the %d largest "
@@ -1125,7 +1145,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
             # right-running label; left-side labels get an explicit guard.
             specs.sort(key=lambda s: max(to_page(h)[0] for h in s[0]), reverse=True)
             occupied: list[tuple] = []  # (x0, x1, row_y) of placed labels
-            for i, (holes, callout) in enumerate(specs):
+            for i, (holes, callout, pattern) in enumerate(specs):
                 w = callout.callout_width
                 centre = to_page(max(holes, key=lambda h: to_page(h)[0]))
                 elbow_y = front_bottom - 0.6 * a.DIM_PAD - i * min_gap
@@ -1152,6 +1172,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
                 elbow = (centre[0], elbow_y)
                 occupied.append((x0, x1, elbow_y))
                 _add(view, i, _rim_tip(centre, elbow, holes), elbow, side, callout)
+                _add_furniture(dwg, a, view, i, pattern, to_page)
             continue
 
         # plan / side: stacked to the right of the view. The ladder is
@@ -1160,7 +1181,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
         edge_right = plan_right if view == "plan" else side_right
         specs.sort(key=lambda s: to_page(max(s[0], key=lambda h: to_page(h)[0]))[1])
         prev_y = None
-        for i, (holes, callout) in enumerate(specs):
+        for i, (holes, callout, pattern) in enumerate(specs):
             w = callout.callout_width
             rep = max(holes, key=lambda h: to_page(h)[0])
             centre = to_page(rep)
@@ -1191,6 +1212,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter):
             prev_y = elbow_y
             elbow = (elbow_x, elbow_y)
             _add(view, i, _rim_tip(centre, elbow, holes), elbow, side, callout)
+            _add_furniture(dwg, a, view, i, pattern, to_page)
 
 
 def _add_title_block(dwg, a):

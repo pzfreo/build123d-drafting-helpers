@@ -970,6 +970,32 @@ class TestHolePatternAnnotations:
         assert dwg._named["dim_pitch_plan0"].label == "4× 20"
         assert [i for i in dwg.lint() if i.severity != "info"] == []
 
+    @pytest.mark.timeout(120)
+    def test_opposite_face_arrays_get_separate_callouts_and_pitch_dims(self):
+        # Blind holes drilled from opposite faces are different machining
+        # operations: two counted callouts, two (tiered) pitch dims.
+        part = Box(140, 50, 14)
+        for i in range(3):
+            part = part - Pos(-30 + i * 20, 8, 4) * Cylinder(3, 6)
+            part = part - Pos(-30 + i * 20, -8, -4) * Cylinder(3, 6)
+        dwg = build_drawing(part)
+        assert len([n for n in dwg._named if n.startswith("hc_plan")]) == 2
+        assert len([n for n in dwg._named if n.startswith("dim_pitch_plan")]) == 2
+        assert [i for i in dwg.lint() if i.severity != "info"] == []
+
+    @pytest.mark.timeout(120)
+    def test_top_edge_array_dimensions_above_the_plan_view(self):
+        # Below the plan view sit dim_width and the front view — plan pitch
+        # dims always go up, with short extension lines for top-edge rows.
+        part = Box(140, 50, 10)
+        for i in range(4):
+            part = part - Pos(-30 + i * 20, 18, 0) * Cylinder(3, 10)
+        dwg = build_drawing(part)
+        dim = dwg._named["dim_pitch_plan0"]
+        plan_top = dwg.views["plan"][0].bounding_box().max.Y
+        assert dim.dim_level_y > plan_top
+        assert [i for i in dwg.lint() if i.severity != "info"] == []
+
     @pytest.mark.timeout(60)
     def test_count_mismatch_surfaces_in_lint(self):
         from build123d import Draft

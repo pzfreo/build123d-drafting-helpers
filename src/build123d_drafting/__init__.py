@@ -86,7 +86,6 @@ __all__ = [
     "CenterMark",
     "CenterlineCircle",
     "Centerline",
-    "CenterlineCircle",
     "CompositeFeatureControlFrame",
     "DatumFeature",
     "DatumTarget",

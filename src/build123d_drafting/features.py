@@ -543,7 +543,10 @@ def find_bosses(part) -> list:
 _PATTERN_REL_TOL = 0.02
 _PATTERN_ABS_TOL = 0.1
 # Bolt-circle angular spacing must be even to within this fraction of 2π/n.
-_BC_SPACING_TOL = 0.15
+# Tight on purpose: at 15% a 100×80 rectangle reads as an equally spaced
+# bolt circle; real patterns (even from noisy STEP) are within a fraction
+# of a degree.
+_BC_SPACING_TOL = 0.04
 
 
 @dataclass(frozen=True)
@@ -577,10 +580,13 @@ def _pattern_tol(nominal: float) -> float:
 
 
 def _spec_key(h):
-    """Holes that could form one pattern: identical spec, identical axis.
-    A through drill is the same spec whatever wall it pierces."""
+    """Holes sharing one machining spec: identical drill (a through drill is
+    the same spec whatever wall it pierces) and identical drilling direction.
+    The axis is snapped to 6 dp — boolean ops leave ~1e-16 noise on the
+    components, and exact float keys would split a pattern silently."""
     depth_key = None if h.bottom == "through" else h.depth
-    return (h.axis, h.diameter, depth_key, h.bottom, h.cbore, h.spotface)
+    axis = tuple(0.0 if abs(c) < 1e-6 else round(c, 6) for c in h.axis)
+    return (axis, h.diameter, depth_key, h.bottom, h.cbore, h.spotface)
 
 
 def _plane_uv(axis):
@@ -629,8 +635,11 @@ def _as_linear_array(holes, pts):
     if span < _PATTERN_ABS_TOL:
         return None
     ux, uy = dx / span, dy / span
-    # collinearity: every point within tolerance of the first→last line
-    if any(abs((p[0] - first[0]) * -uy + (p[1] - first[1]) * ux) > _pattern_tol(span) for p in pts):
+    # collinearity: every point within tolerance of the first→last line —
+    # scaled to the pitch, not the span (a long row must not absorb holes
+    # millimetres off-line)
+    line_tol = _pattern_tol(span / (n - 1))
+    if any(abs((p[0] - first[0]) * -uy + (p[1] - first[1]) * ux) > line_tol for p in pts):
         return None
     ts = sorted((p[0] - first[0]) * ux + (p[1] - first[1]) * uy for p in pts)
     pitches = [ts[i + 1] - ts[i] for i in range(n - 1)]
