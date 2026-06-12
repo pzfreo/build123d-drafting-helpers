@@ -276,6 +276,21 @@ class TestStripZones:
             assert all(d.dim_level_y > plan_top for d in locx_dims)
             assert a.pv_zones.above.depth_used > 0
 
+    def test_dim_locy_routed_through_sv_above_strip(self):
+        # dim_locy dims must be above side_top and allocated from sv_zones.above
+        from build123d import Box, Cylinder, Pos
+        from build123d_drafting import build_drawing
+
+        # Cylinder at Y=10 → offset from datum_y=bb.min.Y → generates dim_locy0
+        part = Box(80, 60, 20) - Pos(0, 10, 0) * Cylinder(5, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        locy_dims = [v for n, v in dwg._named.items() if n.startswith("dim_locy")]
+        if locy_dims:
+            side_top = dwg.views["side"][0].bounding_box().max.Y
+            assert all(d.dim_level_y > side_top for d in locy_dims)
+            assert a.sv_zones.above.depth_used > 0
+
     def test_dim_step_routed_through_fv_right_strip(self):
         # Step dims must be placed via the strip and land right of dim_height.
         # Each dim_step x must be strictly right of dim_height x.
