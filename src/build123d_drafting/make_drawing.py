@@ -1075,10 +1075,15 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
     for rx, ry, dia in refs:
         if not any(abs(ry - u[1]) < 0.5 for u in y_refs):
             y_refs.append((rx, ry, dia))
+    base_y = 8.0 + 10.0 * sum(
+        1
+        for n, ann in dwg._named.items()
+        if n.startswith("dim_pitch_side") and getattr(ann, "dim_level_y", 0) > side_top
+    )
     for i, (_rx, ry, _) in enumerate(sorted(y_refs, key=lambda r: abs(r[1] - datum_y))):
         if abs(ry - datum_y) * a.SCALE < 1.0:
             continue
-        level = side_top + 8.0 + tier * i
+        level = side_top + base_y + tier * i
         limit = a.PAGE_H - a.margin - draft.font_size
         if SX(ry) + 10 > iso_x0 - 4:
             limit = min(limit, iso_y0 - 4)
@@ -1127,7 +1132,8 @@ def _add_section_view(dwg, a, axis_letter):
 
     # room check: same row as the front/side views, to the right — past any
     # side-view callout labels already placed there
-    half_w = a.x_size * a.SCALE / 2
+    # the caption is ~19mm wide — narrow sections are bounded by it
+    half_w = max(a.x_size * a.SCALE / 2, 12.0)
     half_h = a.z_size * a.SCALE / 2
     side_vis, side_hid = dwg.views["side"]
     side_right = side_vis.bounding_box().max.X
@@ -1170,7 +1176,16 @@ def _add_section_view(dwg, a, axis_letter):
         return a.PV_Y + (y - a.cy) * a.SCALE
 
     y_page = PY(y_star)
-    x0, x1 = PX(a.bb.min.X) - 4, PX(a.bb.max.X) + 4
+    # the line and its letters must clear pattern centrelines that sweep
+    # past the part outline (a corner-hole bolt circle is always wider)
+    ext_x0, ext_x1 = PX(a.bb.min.X), PX(a.bb.max.X)
+    for name, ann in dwg._named.items():
+        if name.startswith("bc_plan"):
+            cb = ann.bounding_box()
+            if cb.min.Y - 3 < y_page < cb.max.Y + 3:
+                ext_x0 = min(ext_x0, cb.min.X)
+                ext_x1 = max(ext_x1, cb.max.X)
+    x0, x1 = ext_x0 - 4, ext_x1 + 4
     dwg.add(Centerline((x0, y_page, 0), (x1, y_page, 0)), "section_line")
     # letters sit above the line's ends — callout leaders to the cut row's
     # holes run along the same y, and the letters must stay clear of them

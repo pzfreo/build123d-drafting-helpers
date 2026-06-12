@@ -1150,6 +1150,27 @@ class TestLocationDimsAndSection:
         labels = sorted(a.label for n, a in dwg._named.items() if n.startswith("dim_locx"))
         assert labels == ["20"]
 
+    @pytest.mark.timeout(120)
+    def test_section_letters_clear_the_bolt_circle(self, plate_drawing):
+        # The corner-hole bolt circle sweeps wider than the part; the
+        # cutting-plane letters must sit outside it (lint flags the overlap
+        # otherwise).
+        codes = [i.code for i in plate_drawing.lint() if i.severity != "info"]
+        assert "label_centerline_overlap" not in codes
+
+    @pytest.mark.timeout(120)
+    def test_y_dims_tier_past_side_pitch_dims(self):
+        # An x-axis array's pitch dim lives above the side view too — the
+        # Y-location ladder must start beyond it, not on top of it.
+        part = Box(60, 40, 30) - Pos(0, 5, 11) * Cylinder(3, 8)
+        for y in (-12, 0, 12):
+            part = part - Pos(15, y, 8) * Cylinder(2, 60, rotation=(0, 90, 0))
+        dwg = build_drawing(part)
+        locy = [a.dim_level_y for n, a in dwg._named.items() if n.startswith("dim_locy")]
+        pitch = [a.dim_level_y for n, a in dwg._named.items() if n.startswith("dim_pitch_side")]
+        assert locy and pitch
+        assert min(abs(ly - py) for ly in locy for py in pitch) >= 8
+
     @pytest.mark.timeout(60)
     def test_rotational_part_gets_neither(self):
         dwg = build_drawing(Cylinder(30, 40) - Cylinder(10, 40))
