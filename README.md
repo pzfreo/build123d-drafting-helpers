@@ -51,8 +51,10 @@ Requires `build123d >= 0.9.0` and Python ≥ 3.10.
 
 For a fully automatic STEP → SVG + DXF pipeline with no drawing code required, use
 `make_drawing()` or the bundled `make-drawing` CLI. It analyses the part geometry,
-chooses a scale and page size, projects four views, and annotates diameter callouts,
-centrelines, and a title block automatically.
+chooses a scale and page size, projects four views, and annotates automatically:
+hole callouts with count grouping ("4× ø10 THRU", counterbore/depth symbols) from
+the recognised hole features, centre marks, envelope dimensions, centrelines, and
+a title block.
 
 ### CLI
 
@@ -282,6 +284,10 @@ bore_cl = Centerline((cx, -50, 0), (cx, 50, 0))   # vertical through bore axis
 Pass `Centerline` objects to `place_labels(..., centerlines=[bore_cl])` for auto-avoidance,
 or pass them to `lint_drawing([...] + [bore_cl])` to get `label_centerline_overlap` warnings.
 
+`CenterMark(point, size, draft=None)` is the crosshair sibling for hole centres —
+*size* is the full stroke length (pick it slightly larger than the hole's page-space
+diameter). Same `.is_centerline` lint exemption.
+
 ---
 
 ### `SafeDimension(path, label, draft, fallback_label=None)`
@@ -292,6 +298,10 @@ Truncates gracefully and retries.
 ---
 
 ### `Leader(tip, elbow, label, draft, all_around=False, all_over=False, text_side="auto")`
+
+`Leader(..., callout=HoleCallout(...))` hangs a symbol-built callout at the shelf
+end instead of text (pass `label=""`); the callout's bbox becomes `label_bbox` and
+its `covers_diameters` is surfaced on the leader for the coverage lint.
 
 Leader annotation built from scratch. The line stops cleanly before the label text.
 

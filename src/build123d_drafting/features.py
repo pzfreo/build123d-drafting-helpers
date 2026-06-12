@@ -406,7 +406,7 @@ def _merge_stacks(stacks, edge_faces):
     return merged
 
 
-def find_holes(part) -> list:
+def find_holes(part, cyls=None) -> list:
     """Recognise drilled holes on *part* (see :class:`HoleFeature`).
 
     Coaxial internal cylinders are grouped into stacks — drill + optional
@@ -415,8 +415,11 @@ def find_holes(part) -> list:
     the face adjacent to the deep end.  Countersinks are not recognised as
     steps (the cone is treated as an opening); steps on the far side of the
     bore (e.g. a second counterbore from the back face) are not reported.
+
+    Pass *cyls* — a precomputed ``analyse_cylinders(part)`` result — to avoid
+    re-scanning the solid (mirrors ``lint_feature_coverage``'s parameter).
     """
-    z_cyls, cross_cyls = analyse_cylinders(part)
+    z_cyls, cross_cyls = cyls if cyls is not None else analyse_cylinders(part)
     internal = [c for c in _full_cyls(z_cyls) + _full_cyls(cross_cyls) if not c["external"]]
     if not internal:
         return []

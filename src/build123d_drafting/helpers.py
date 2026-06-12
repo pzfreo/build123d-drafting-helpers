@@ -549,6 +549,41 @@ class Centerline(_Annotation):
         self.is_centerline = True
 
 
+class CenterMark(_Annotation):
+    """A centre mark — a small crosshair at a hole centre (#95).
+
+    *size* is the full length of each stroke; pick it a little larger than
+    the hole's page-space diameter so the mark protrudes past the circle.
+
+    Metadata: ``.label`` (""), ``.segments``, ``.is_centerline`` (True) —
+    exempt from view-overlap lint like :class:`Centerline`.
+    """
+
+    def __init__(
+        self,
+        point: tuple,
+        size: float,
+        draft: Draft | None = None,  # noqa: ARG002 — reserved for dash patterns
+        line_width: float = 0.15,
+        rotation: float = 0,
+        align=None,
+        mode: Mode = Mode.ADD,
+    ):
+        if size <= 0:
+            raise ValueError(f"size must be positive, got {size!r}")
+        cx, cy = point[0], point[1]
+        h = size / 2
+        edges = [
+            Edge.make_line(Vector(cx - h, cy, 0.0), Vector(cx + h, cy, 0.0)),
+            Edge.make_line(Vector(cx, cy - h, 0.0), Vector(cx, cy + h, 0.0)),
+        ]
+        sk, seg = _strokes_and_text(edges, [], line_width)
+        super().__init__(
+            sk, label="", label_bbox=None, segments=seg, rotation=rotation, align=align, mode=mode
+        )
+        self.is_centerline = True
+
+
 # ---------------------------------------------------------------------------
 # Note — free-text annotation
 # ---------------------------------------------------------------------------
@@ -763,6 +798,10 @@ class Leader(_Annotation):
             and label together) relative to the origin — it does not control
             which side of the elbow the label is on; use ``text_side`` for
             that.
+        callout: a sketch (e.g. :class:`HoleCallout`) hung at the shelf end
+            in place of text — pass ``label=""`` with it. Its bbox becomes
+            ``label_bbox`` and its ``covers_diameters`` (when present) is
+            surfaced on the leader for the coverage lint.
 
     Metadata: ``.label``, ``.label_bbox``, ``.tip``, ``.elbow``, ``.segments``.
     """
@@ -780,7 +819,10 @@ class Leader(_Annotation):
         rotation: float = 0,
         align=None,
         mode: Mode = Mode.ADD,
+        callout=None,
     ):
+        if callout is not None and label:
+            raise ValueError("Pass either label or callout, not both")
         if text_side not in ("auto", "left", "right"):
             raise ValueError(f"text_side must be 'auto', 'left', or 'right', got {text_side!r}")
         tip_v = Vector(tip[0], tip[1], 0.0)
@@ -833,7 +875,9 @@ class Leader(_Annotation):
         if ring_strokes:
             faces += trace(ring_strokes, line_width=line_width).faces()
 
-        # Text centred vertically at shelf height, inset by one gap
+        # Label content centred vertically at shelf height, inset by one gap:
+        # either rendered text, or a caller-supplied sketch (e.g. HoleCallout)
+        # hung where the text would go
         if shelf_dir > 0:
             text_align = (Align.MIN, Align.CENTER)
             text_x = elbow_v.X + gap
@@ -841,13 +885,19 @@ class Leader(_Annotation):
             text_align = (Align.MAX, Align.CENTER)
             text_x = elbow_v.X - gap
 
-        text_shape = Text(
-            txt=label,
-            font_size=draft.font_size,
-            font=draft.font,
-            align=text_align,
-            mode=Mode.PRIVATE,
-        ).moved(Location(Vector(text_x, elbow_v.Y, 0.0)))
+        if callout is not None:
+            cb = callout.bounding_box()
+            anchor_x = cb.min.X if shelf_dir > 0 else cb.max.X
+            mid_y = (cb.min.Y + cb.max.Y) / 2
+            text_shape = callout.moved(Location(Vector(text_x - anchor_x, elbow_v.Y - mid_y, 0.0)))
+        else:
+            text_shape = Text(
+                txt=label,
+                font_size=draft.font_size,
+                font=draft.font,
+                align=text_align,
+                mode=Mode.PRIVATE,
+            ).moved(Location(Vector(text_x, elbow_v.Y, 0.0)))
         _tb = text_shape.bounding_box()
         if text_side != "auto" and _seg_intersects_rect(
             (tip_v.X, tip_v.Y),
@@ -875,6 +925,11 @@ class Leader(_Annotation):
         )
         self._tip_local = self._bake_point((tip_v.X, tip_v.Y))
         self._elbow_local = self._bake_point((elbow_v.X, elbow_v.Y))
+        # A carried HoleCallout dimensions diameters as glyphs; surface its
+        # structured coverage on the leader for lint_feature_coverage (#80)
+        covers = getattr(callout, "covers_diameters", ())
+        if covers:
+            self.covers_diameters = tuple(covers)
 
     @property
     def tip(self):
@@ -2628,9 +2683,9 @@ class HoleCallout(_Annotation):
         *,
         count: int | None = None,
         through: bool = False,
-        depth: float | None = None,
+        depth: float | str | None = None,
         cbore_dia=None,
-        cbore_depth: float | None = None,
+        cbore_depth: float | str | None = None,
         csink_dia=None,
         csink_angle: float | None = None,
         draft: Draft | None = None,
