@@ -1242,19 +1242,19 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
     for rx, ry, dia in refs:
         if not any(abs(ry - u[1]) < 0.5 for u in y_refs):
             y_refs.append((rx, ry, dia))
-    base_y = 8.0 + 10.0 * sum(
-        1
-        for n, ann in dwg._named.items()
-        if n.startswith("dim_pitch_side") and getattr(ann, "dim_level_y", 0) > side_top
-    )
+    # Y locations: dims above the side view, routed through sv_zones.above.
+    # Pre-advance past any pitch dims already placed above side_top.
+    for n, ann in dwg._named.items():
+        if n.startswith("dim_pitch_side") and getattr(ann, "dim_level_y", 0) > side_top:
+            a.sv_zones.above.allocate(10.0)  # consume space used by pitch dim
+    # Tighten outer_limit if any witness line approaches the iso view boundary
+    if y_refs and any(SX(ry) + 10 > iso_x0 - 4 for _, ry, _ in y_refs):
+        a.sv_zones.above.outer_limit = min(a.sv_zones.above.outer_limit, iso_y0 - 4)
     for i, (_rx, ry, _) in enumerate(sorted(y_refs, key=lambda r: abs(r[1] - datum_y))):
         if abs(ry - datum_y) * a.SCALE < 1.0:
             continue
-        level = side_top + base_y + tier * i
-        limit = a.PAGE_H - a.margin - draft.font_size
-        if SX(ry) + 10 > iso_x0 - 4:
-            limit = min(limit, iso_y0 - 4)
-        if level > limit:
+        _py = a.sv_zones.above.allocate(tier)
+        if _py is None:
             _log.info("Y location dim for y=%s skipped (no room above the side view)", _fmt(ry))
             continue
         dwg.add(
@@ -1262,7 +1262,7 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
                 (SX(datum_y), SZ(a.bb.max.Z), 0),
                 (SX(ry), SZ(a.bb.max.Z), 0),
                 "above",
-                level - side_top,
+                _py - side_top,
                 draft,
                 label=_fmt(ry - datum_y),
             ),
