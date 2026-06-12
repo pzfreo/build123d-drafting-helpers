@@ -202,7 +202,7 @@ class TestStripZones:
         assert isinstance(a.sv_zones, ViewZones)
         assert isinstance(a.fv_zones.right, Strip)
         assert isinstance(a.pv_zones.above, Strip)
-        assert a.pv_zones.below is None   # abuts front view
+        assert isinstance(a.pv_zones.below, Strip)  # dim_width goes here
         assert a.sv_zones.left is None    # abuts front view
 
     def test_strip_limits_are_within_page(self):
@@ -233,6 +233,48 @@ class TestStripZones:
         assert a.fv_zones.right.depth_used > 0
         # label is the part height
         assert ann.label == "30"
+
+    def test_pv_below_strip_is_now_active(self):
+        # pv_zones.below should be a Strip (not None) after Phase 3
+        from build123d import Box
+        from build123d_drafting import build_drawing
+        from build123d_drafting.make_drawing import Strip
+
+        part = Box(80, 60, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        assert isinstance(a.pv_zones.below, Strip)
+        assert a.pv_zones.below.direction == -1
+        # The outer_limit must be above the front view top edge (fv_hh from FV_Y)
+        assert a.pv_zones.below.outer_limit < a.pv_zones.below.anchor
+
+    def test_dim_width_routed_through_pv_below_strip(self):
+        # dim_width must exist below the plan view, with depth_used > 0
+        from build123d import Box
+        from build123d_drafting import build_drawing
+
+        # non-square part → x_size != y_size → dim_width should appear
+        part = Box(80, 40, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        assert "dim_width" in dwg._named
+        ann = dwg._named["dim_width"]
+        assert ann.label == "80"
+        assert a.pv_zones.below.depth_used > 0
+
+    def test_dim_locx_routed_through_pv_above_strip(self):
+        # dim_locx dims must be above plan_top and allocated from pv_zones.above
+        from build123d import Box, Cylinder, Pos
+        from build123d_drafting import build_drawing
+
+        part = Box(80, 60, 20) - Pos(20, 10, 0) * Cylinder(5, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        locx_dims = [v for n, v in dwg._named.items() if n.startswith("dim_locx")]
+        if locx_dims:
+            plan_top = dwg.views["plan"][0].bounding_box().max.Y
+            assert all(d.dim_level_y > plan_top for d in locx_dims)
+            assert a.pv_zones.above.depth_used > 0
 
     def test_dim_step_routed_through_fv_right_strip(self):
         # Step dims must be placed via the strip and land right of dim_height.
