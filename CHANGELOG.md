@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.7.0 — 2026-06-12
+
+The zero-LLM prismatic-drawing roadmap (#91–#95; PRs #97, #98, #99): a
+CTC-02-class machined plate now produces a lint-clean, shop-usable sheet —
+grouped hole callouts, patterns, locations, sections, centre marks — with no
+LLM input. Known seams are tracked in #100.
+
 ### Added
 
 - **Baseline hole-location dimensions** (#93): X dims above the plan view
