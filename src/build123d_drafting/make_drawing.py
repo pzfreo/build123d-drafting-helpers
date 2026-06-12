@@ -977,6 +977,14 @@ def _auto_annotate(dwg, a):
     def PY(y):
         return a.PV_Y + (y - a.cy) * a.SCALE
 
+    # Tighten right-strip outer_limits to the actual iso view left edge now
+    # that the iso has been projected and fitted.
+    _iso_x0, _, _, _ = _iso_bbox(dwg)
+    _iso_x_limit = _iso_x0 - 4
+    a.fv_zones.right.outer_limit = min(a.fv_zones.right.outer_limit, _iso_x_limit)
+    a.pv_zones.right.outer_limit = min(a.pv_zones.right.outer_limit, _iso_x_limit)
+    a.sv_zones.right.outer_limit = min(a.sv_zones.right.outer_limit, _iso_x_limit)
+
     # Overall height — slot reserved in fv_zones.right.
     # _right_ladder tracks the witness x for the progressive ladder: each
     # subsequent dim witnesses from the previous dim's line, so extension
@@ -1487,7 +1495,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
     for holes in groups.values():
         by_view.setdefault(view_of_axis[axis_letter(holes[0])][0], []).append(holes)
 
-    iso_x0, iso_y0, _, _ = _iso_bbox(dwg)
+    _, iso_y0, _, _ = _iso_bbox(dwg)
     plan_right = a.PV_X + (a.bb.max.X - a.cx) * a.SCALE
     plan_left = a.PV_X + (a.bb.min.X - a.cx) * a.SCALE
     side_right = a.SV_X + (a.bb.max.Y - a.cy) * a.SCALE
@@ -1616,9 +1624,11 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
             if elbow_y > a.PAGE_H - a.margin - draft.font_size:
                 _log.info("Hole callout ø%s skipped (no room above)", _fmt(holes[0].diameter))
                 continue
-            # the iso view caps the right-hand strip only on rows it occupies
+            # the iso view caps the right-hand strip; use strip outer_limit
+            # (tightened to actual iso bounds in _auto_annotate) for consistency
+            right_strip = a.pv_zones.right if view == "plan" else a.sv_zones.right
             limit = (
-                iso_x0 - 4
+                right_strip.outer_limit
                 if view == "plan" or elbow_y >= iso_y0 - draft.font_size
                 else a.PAGE_W - a.margin
             )
