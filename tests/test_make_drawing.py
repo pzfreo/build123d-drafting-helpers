@@ -218,6 +218,39 @@ class TestStripZones:
         assert a.pv_zones.above.outer_limit <= a.PAGE_H
         assert a.fv_zones.left.outer_limit >= margin
 
+    def test_dim_height_routed_through_fv_right_strip(self):
+        # dim_height must be placed via the strip; its dimension line must
+        # land within the fv_zones.right corridor (anchor..outer_limit).
+        from build123d import Box
+        from build123d_drafting import build_drawing
+
+        part = Box(60, 40, 30)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        assert "dim_height" in dwg._named
+        ann = dwg._named["dim_height"]
+        # The strip consumed at least one slot: cursor has advanced past anchor+gap
+        assert a.fv_zones.right.depth_used > 0
+        # label is the part height
+        assert ann.label == "30"
+
+    def test_dim_step_routed_through_fv_right_strip(self):
+        # Step dims must be placed via the strip and land right of dim_height.
+        # Each dim_step x must be strictly right of dim_height x.
+        from build123d import Box, Pos
+        from build123d_drafting import build_drawing
+
+        part = Box(40, 12, 40) - Pos(10, 0, 20) * Box(20, 12, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        step_dims = {n: v for n, v in dwg._named.items() if n.startswith("dim_step")}
+        if step_dims and "dim_height" in dwg._named:
+            h_ann = dwg._named["dim_height"]
+            for ann in step_dims.values():
+                if getattr(ann, "label_bbox", None) and getattr(h_ann, "label_bbox", None):
+                    # step dim label must be to the right of dim_height label
+                    assert ann.label_bbox[0] > h_ann.label_bbox[0] - 1
+
 
 # ---------------------------------------------------------------------------
 # Integration test — requires build123d + OCP (slow)

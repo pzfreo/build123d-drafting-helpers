@@ -63,7 +63,6 @@ from build123d_drafting.helpers import (
     draft_preset,
     format_drawing_scale,
     lint_drawing,
-    place_dims,
     set_page,
     view_axes,
 )
@@ -975,18 +974,23 @@ def _auto_annotate(dwg, a):
     def PY(y):
         return a.PV_Y + (y - a.cy) * a.SCALE
 
-    # Overall height
-    dwg.add(
-        Dimension(
-            (FX(a.bb.max.X) + 2, FZ(a.bb.min.Z), 0),
-            (FX(a.bb.max.X) + 2, FZ(a.bb.max.Z), 0),
-            "right",
-            8,
-            draft,
-            label=_fmt(a.z_size),
-        ),
-        "dim_height",
-    )
+    # Overall height — slot reserved in fv_zones.right
+    _witness_rx = FX(a.bb.max.X) + 2
+    _px = a.fv_zones.right.allocate(10.0)
+    if _px is not None:
+        dwg.add(
+            Dimension(
+                (_witness_rx, FZ(a.bb.min.Z), 0),
+                (_witness_rx, FZ(a.bb.max.Z), 0),
+                "right",
+                _px - _witness_rx,
+                draft,
+                label=_fmt(a.z_size),
+            ),
+            "dim_height",
+        )
+    else:
+        _log.warning("dim_height skipped: fv_zones.right strip full")
 
     # Outer diameter — only for rotational (turned) parts, and from the
     # classified external OD cylinder, never a bore that happens to be the
@@ -1073,20 +1077,24 @@ def _auto_annotate(dwg, a):
             _fmt(a.cross_diams[0]),
         )
 
-    # Step heights — only where the step is tall enough to fit a label
-    if a.step_zs:
-        right_x0 = FX(a.bb.max.X) + 2 + a.DIM_PAD + 10
-        step_specs = [
-            (
-                (right_x0 + col * 14, FZ(a.bb.min.Z), 0),
-                (right_x0 + col * 14, FZ(z), 0),
+    # Step heights — only where the step is tall enough to fit a label;
+    # witness x shared with dim_height, positions allocated from fv_zones.right
+    for col, z in enumerate([z for z in a.step_zs[:3] if (z - a.bb.min.Z) * a.SCALE >= 20]):
+        _px = a.fv_zones.right.allocate(14.0)
+        if _px is None:
+            _log.warning("dim_step_%d skipped: fv_zones.right strip full", col)
+            break
+        dwg.add(
+            Dimension(
+                (_witness_rx, FZ(a.bb.min.Z), 0),
+                (_witness_rx, FZ(z), 0),
                 "right",
-                _fmt(z - a.bb.min.Z),
-            )
-            for col, z in enumerate([z for z in a.step_zs[:3] if (z - a.bb.min.Z) * a.SCALE >= 20])
-        ]
-        for col, dim in enumerate(place_dims(step_specs, draft)):
-            dwg.add(dim, f"dim_step_{col}")
+                _px - _witness_rx,
+                draft,
+                label=_fmt(z - a.bb.min.Z),
+            ),
+            f"dim_step_{col}",
+        )
 
     # Width (non-round / non-square parts only)
     if abs(a.x_size - a.y_size) > max(a.x_size, a.y_size) * 0.05:
