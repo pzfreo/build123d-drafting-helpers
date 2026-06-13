@@ -1618,6 +1618,56 @@ def _add_pitch_dim(dwg, a, view, j, pattern, to_page):
     )
 
 
+def _greedy_strip_ys(natural_ys, min_gap, y_min, y_max):
+    """Greedy Y-placement fallback: push each value down until the gap clears."""
+    result = []
+    prev = y_min - min_gap
+    for ny in natural_ys:
+        y = max(prev + min_gap, ny)
+        if y > y_max:
+            return None
+        result.append(y)
+        prev = y
+    return result
+
+
+def _solve_strip_ys(natural_ys, min_gap, y_min, y_max):
+    """Cassowary Y-placement for bore-callout leaders sharing one strip.
+
+    Returns solved Y positions (same length as *natural_ys*), or ``None`` when
+    the callouts don't fit within [y_min, y_max].  Falls back to the greedy
+    cursor when kiwisolver is unavailable.
+
+    *natural_ys* must be sorted ascending; each solved value is bounded to
+    [y_min, y_max] and adjacent values are at least *min_gap* apart.
+    """
+    if not natural_ys:
+        return []
+    n = len(natural_ys)
+    if (n - 1) * min_gap > y_max - y_min:
+        return None  # provably infeasible
+
+    try:
+        import kiwisolver as ki
+    except ImportError:
+        return _greedy_strip_ys(natural_ys, min_gap, y_min, y_max)
+
+    solver = ki.Solver()
+    ys = [ki.Variable(f"y{i}") for i in range(n)]
+    try:
+        for v in ys:
+            solver.addConstraint((v >= y_min) | "required")
+            solver.addConstraint((v <= y_max) | "required")
+        for i in range(n - 1):
+            solver.addConstraint((ys[i + 1] - ys[i] >= min_gap) | "required")
+        for v, ny in zip(ys, natural_ys):
+            solver.addConstraint((v == ny) | "strong")
+        solver.updateVariables()
+        return [v.value() for v in ys]
+    except ki.UnsatisfiableConstraint:
+        return None
+
+
 def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
     """Leader-attached HoleCallouts, one per distinct hole spec per view (#91).
 
@@ -1764,45 +1814,101 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
                 _add_furniture(dwg, a, view, i, pattern, to_page)
             continue
 
-        # plan / side: stacked to the right of the view. The ladder is
-        # ordered by the y of each group's leader target (its max-x rep) so
-        # shafts don't cross between rungs.
+        # plan / side: two-pass leader placement.
+        # Pass 1 — boundary assignment: each spec goes to the nearest strip
+        #   boundary (right or left) whose label fits within the page.
+        # Pass 2 — Y placement via Cassowary: leaders stay within the view's
+        #   Y extent, are at least min_gap apart, and stay near their natural
+        #   (hole-centre) Y position.
+        # Elbow sits exactly on the view boundary so the shaft never crosses
+        # the view outline.
         edge_right = plan_right if view == "plan" else side_right
-        specs.sort(key=lambda s: to_page(max(s[0], key=lambda h: to_page(h)[0]))[1])
-        prev_y = None
-        for i, (holes, callout, pattern) in enumerate(specs):
+        edge_left = plan_left if view == "plan" else None
+
+        right_strip = a.pv_zones.right if view == "plan" else a.sv_zones.right
+        # Elbow sits one arrow_length past the view boundary.  This is the
+        # minimum corridor needed to clear section-line extension lines, which
+        # conventionally reach arrow_length + gap past the view outline.  The
+        # shaft still crosses the view boundary, but by just 2.7 mm instead of
+        # the old 10.8 mm (0.6 × DIM_PAD).
+        elbow_dx = draft.arrow_length  # right: add; left: subtract
+
+        # Y bounds: elbows must stay within the view's projected Y extent.
+        if view == "plan":
+            y_min, y_max = a.PV_Y - a.pv_hh, a.PV_Y + a.pv_hh
+        else:
+            y_min, y_max = a.SV_Y - a.fv_hh, a.SV_Y + a.fv_hh
+
+        # --- Pass 1: boundary assignment ---
+        right_queue = []  # (holes, callout, pattern, natural_y, rep)
+        left_queue = []
+
+        for holes, callout, pattern in specs:
             w = callout.callout_width
-            rep = max(holes, key=lambda h: to_page(h)[0])
-            centre = to_page(rep)
-            elbow_y = centre[1] if prev_y is None else max(prev_y + min_gap, centre[1])
-            if elbow_y > a.PAGE_H - a.margin - draft.font_size:
-                _log.info("Hole callout ø%s skipped (no room above)", _fmt(holes[0].diameter))
-                continue
-            # the iso view caps the right-hand strip; use strip outer_limit
-            # (tightened to actual iso bounds in _auto_annotate) for consistency
-            right_strip = a.pv_zones.right if view == "plan" else a.sv_zones.right
-            limit = (
-                right_strip.outer_limit
-                if view == "plan" or elbow_y >= iso_y0 - draft.font_size
-                else a.PAGE_W - a.margin
-            )
-            elbow_x = edge_right + 0.6 * a.DIM_PAD
-            if elbow_x + gap + w <= limit:
-                side = "right"
-            elif view == "plan" and plan_left - 0.6 * a.DIM_PAD - gap - w >= a.margin:
-                # plan is the leftmost column, so its left strip is the margin
-                side = "left"
-                elbow_x = plan_left - 0.6 * a.DIM_PAD
-                rep = min(holes, key=lambda h: to_page(h)[0])
-                centre = to_page(rep)
-                elbow_y = centre[1] if prev_y is None else max(prev_y + min_gap, centre[1])
+            rep_r = max(holes, key=lambda h: to_page(h)[0])
+            centre_r = to_page(rep_r)
+            d_right = edge_right - centre_r[0]
+
+            if edge_left is not None:
+                rep_l = min(holes, key=lambda h: to_page(h)[0])
+                centre_l = to_page(rep_l)
+                d_left = centre_l[0] - edge_left
             else:
-                # the side view's left flank is the front view — no fallback
+                rep_l = centre_l = None
+                d_left = float("inf")
+
+            can_right = (edge_right + elbow_dx) + gap + w <= right_strip.outer_limit
+            can_left = edge_left is not None and (edge_left - elbow_dx) - gap - w >= a.margin
+
+            if not can_right and not can_left:
                 _log.info("Hole callout ø%s skipped (no room)", _fmt(holes[0].diameter))
                 continue
-            prev_y = elbow_y
-            elbow = (elbow_x, elbow_y)
-            _add(view, i, _rim_tip(centre, elbow, holes), elbow, side, callout)
+
+            if can_right and (not can_left or d_right <= d_left):
+                right_queue.append((holes, callout, pattern, centre_r[1], rep_r))
+            else:
+                left_queue.append((holes, callout, pattern, centre_l[1], rep_l))
+
+        # Sort each queue by natural Y so leaders don't cross.
+        right_queue.sort(key=lambda s: s[3])
+        left_queue.sort(key=lambda s: s[3])
+
+        # --- Pass 2: Y placement ---
+        right_ys = _solve_strip_ys([s[3] for s in right_queue], min_gap, y_min, y_max)
+        left_ys = _solve_strip_ys([s[3] for s in left_queue], min_gap, y_min, y_max)
+
+        if right_ys is None and right_queue:
+            _log.warning(
+                "plan/side right strip: %d bore callouts don't fit, skipping",
+                len(right_queue),
+            )
+            right_queue, right_ys = [], []
+        if left_ys is None and left_queue:
+            _log.warning(
+                "plan/side left strip: %d bore callouts don't fit, skipping",
+                len(left_queue),
+            )
+            left_queue, left_ys = [], []
+
+        for i, ((holes, callout, pattern, _, rep), elbow_y) in enumerate(
+            zip(right_queue, right_ys or [])
+        ):
+            centre = to_page(rep)
+            elbow = (edge_right + elbow_dx, elbow_y)
+            tip = _rim_tip(centre, elbow, holes)
+            # Safety clamp: arrowhead must sit inside the view boundary.
+            tip = (min(tip[0], edge_right - draft.arrow_length), tip[1])
+            _add(view, i, tip, elbow, "right", callout)
+            _add_furniture(dwg, a, view, i, pattern, to_page)
+
+        for i, ((holes, callout, pattern, _, rep), elbow_y) in enumerate(
+            zip(left_queue, left_ys or []), start=len(right_queue)
+        ):
+            centre = to_page(rep)
+            elbow = (edge_left - elbow_dx, elbow_y)
+            tip = _rim_tip(centre, elbow, holes)
+            tip = (max(tip[0], edge_left + draft.arrow_length), tip[1])
+            _add(view, i, tip, elbow, "left", callout)
             _add_furniture(dwg, a, view, i, pattern, to_page)
 
 
