@@ -434,7 +434,142 @@ def _est_pv_below_depth() -> float:
     return _STRIP_GAP + _SLOT_DIM_WIDTH
 
 
-def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w, n_steps: int = 0) -> bool:
+# ---------------------------------------------------------------------------
+# Two-pass layout — Pass 1: annotation strip depth measurement (#131)
+#
+# font_size = 3.0 mm is a fixed page-mm constant, so all annotation depths
+# are scale-independent and can be computed before choose_scale() is called.
+# ---------------------------------------------------------------------------
+
+
+def _hole_axis(h) -> str:
+    """Dominant axis letter (x/y/z) for a hole feature."""
+    return max(zip("xyz", h.axis), key=lambda t: abs(t[1]))[0]
+
+
+def _est_bore_callout_width(holes, font_size: float = 3.0) -> float:
+    """Estimate the maximum bore callout label width (page-mm) across all holes.
+
+    Groups holes by machining spec (same as _annotate_holes), then estimates
+    the HoleCallout token sequence width using a character-based formula.
+    Intentionally over-estimates by ~7-10% — safe for layout reservation.
+    Returns 0.0 when the hole list is empty.
+    """
+    if not holes:
+        return 0.0
+    groups: dict = {}
+    for h in holes:
+        groups.setdefault(_spec_key(h), []).append(h)
+
+    h_fs = font_size
+    gap = 0.45 * h_fs
+    sym_w = h_fs
+    pad = 2.0  # pad_around_text (fixed in Draft for standard drawings)
+    char_w = 0.6 * h_fs  # avg character width
+
+    max_w = 0.0
+    for group in groups.values():
+        rep = group[0]
+        count = len(group) if len(group) > 1 else None
+        through = rep.bottom == "through"
+        step = rep.cbore or rep.spotface
+
+        token_w: list[float] = []
+        if count:
+            token_w.append(len(f"{count}×") * char_w)
+        token_w.append(sym_w)  # ⌀ symbol
+        token_w.append(len(_fmt(rep.diameter)) * char_w)
+        if through:
+            token_w.append(len("THRU") * char_w)
+        elif rep.depth:
+            token_w.append(sym_w)  # depth symbol
+            token_w.append(len(_fmt(rep.depth)) * char_w)
+        if step:
+            token_w.append(sym_w)  # counterbore/spotface symbol
+            token_w.append(sym_w)  # ⌀
+            token_w.append(len(_fmt(step.diameter)) * char_w)
+            if step.depth:
+                token_w.append(sym_w)  # depth symbol
+                token_w.append(len(_fmt(step.depth)) * char_w)
+
+        n = len(token_w)
+        w = sum(token_w) + max(n - 1, 0) * gap + pad
+        max_w = max(max_w, w)
+
+    return max_w
+
+
+def _compute_locy_refs(holes, patterns, bb, max_refs: int = 4) -> list:
+    """Y-location reference list for Z-axis holes (used in two-pass strip sizing).
+
+    Mirrors _add_location_dims' representative-selection logic: bolt-circle
+    centre, array datum hole, then unpatterned singletons. Returns unique
+    (world_x, world_y, diameter) tuples, capped at max_refs by descending dia.
+    """
+    patt_z = {h for p in patterns for h in p.holes if _hole_axis(p.holes[0]) == "z"}
+    refs: list = []
+    for p in patterns:
+        if _hole_axis(p.holes[0]) != "z":
+            continue
+        if isinstance(p, BoltCircle):
+            refs.append((p.center[0], p.center[1], p.holes[0].diameter))
+        else:
+            near = min(
+                p.holes,
+                key=lambda h: (h.location[0] - bb.min.X) ** 2 + (h.location[1] - bb.min.Y) ** 2,
+            )
+            refs.append((near.location[0], near.location[1], near.diameter))
+    refs += [
+        (h.location[0], h.location[1], h.diameter)
+        for h in holes
+        if _hole_axis(h) == "z" and h not in patt_z
+    ]
+    unique: list = []
+    for r in refs:
+        if not any(abs(r[0] - u[0]) < 0.5 and abs(r[1] - u[1]) < 0.5 for u in unique):
+            unique.append(r)
+    if len(unique) > max_refs:
+        unique.sort(key=lambda r: r[2], reverse=True)
+        unique = unique[:max_refs]
+    return unique
+
+
+@dataclass
+class StripDepths:
+    """Annotation strip depths (page-mm) computed before view positions are fixed.
+
+    Drives the inter-view corridor widths in the two-pass layout (#131).
+    """
+
+    right: float    # horizontal corridor right of FV/PV → gap_fv_sv
+    left: float     # horizontal corridor left of FV/PV
+    sv_above: float  # vertical stack above SV (dim_locy tiers)
+    pv_below: float  # vertical slot below PV (dim_width)
+
+
+def _measure_strips(holes, patterns, n_steps: int, bb, font_size: float = 3.0) -> StripDepths:
+    """Compute annotation strip depths from hole geometry (Pass 1 of #131).
+
+    All annotation sizes are scale-independent because font_size is a fixed
+    page-mm constant, so there is no circularity with choose_scale().
+    """
+    bore_depth = _est_bore_callout_width(holes, font_size)
+    right = max(_est_right_strip_depth(n_steps), bore_depth)
+    left = max(_DIM_PAD, bore_depth)
+    locy_refs = _compute_locy_refs(holes, patterns, bb)
+    y_unique: list = []
+    for _rx, ry, _ in locy_refs:
+        if not any(abs(ry - u) < 0.5 for u in y_unique):
+            y_unique.append(ry)
+    # Exclude holes at the datum edge (within 0.5 mm world-space) — they are
+    # never dimensioned (the location would be 0).
+    n_tiers = sum(1 for ry in y_unique if abs(ry - bb.min.Y) > 0.5)
+    sv_above = n_tiers * font_size * 3.0
+    return StripDepths(right=right, left=left, sv_above=sv_above, pv_below=_est_pv_below_depth())
+
+
+def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w, n_steps: int = 0,
+          strips: StripDepths | None = None) -> bool:
     """True if the 4-view layout fits the page at this scale.
 
     The title block occupies only the bottom ``_TB_H`` mm of the sheet, so when
@@ -442,10 +577,11 @@ def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w, n_steps: int = 0)
     need to reserve title-block space (the iso view may extend over it).
     """
     bbox_max = max(x_size, y_size, z_size)
-    gap_fv_sv = max(_DIM_PAD, _est_right_strip_depth(n_steps))
+    gap_fv_sv = max(_DIM_PAD, strips.right if strips else _est_right_strip_depth(n_steps))
+    gap_left = max(_DIM_PAD, strips.left if strips else _DIM_PAD)
     w = (
         _MARGIN
-        + _DIM_PAD
+        + gap_left
         + x_size * scale
         + gap_fv_sv
         + y_size * scale
@@ -467,7 +603,8 @@ def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w, n_steps: int = 0)
 
 
 def choose_scale(
-    x_size: float, y_size: float, z_size: float, n_steps: int = 0, scale=None, page=None
+    x_size: float, y_size: float, z_size: float, n_steps: int = 0, scale=None, page=None,
+    strips: StripDepths | None = None,
 ) -> tuple:
     """Return (SCALE, PAGE_W, PAGE_H, TB_W) for a 4-view layout.
 
@@ -492,7 +629,8 @@ def choose_scale(
         raise ValueError(f"scale must be positive, got {scale!r}")
     if scale is not None and page is not None:
         pw, ph, tb = _parse_page(page)
-        if not _fits(x_size, y_size, z_size, float(scale), pw, ph, tb, n_steps=n_steps):
+        if not _fits(x_size, y_size, z_size, float(scale), pw, ph, tb, n_steps=n_steps,
+                     strips=strips):
             _log.warning("Requested scale %s on %s page may not fit the 4-view layout", scale, page)
         return float(scale), pw, ph, tb
     if page is not None:
@@ -503,7 +641,7 @@ def choose_scale(
     else:
         candidates = _LADDER
     for cand in candidates:
-        if _fits(x_size, y_size, z_size, *cand, n_steps=n_steps):
+        if _fits(x_size, y_size, z_size, *cand, n_steps=n_steps, strips=strips):
             return cand
     _log.warning(
         "No layout fits %.0f × %.0f × %.0f mm; falling back to %s",
@@ -587,21 +725,26 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     face_zs = analyse_face_levels(part)
     step_zs = [z for z in face_zs if z > bb.min.Z + 0.6 and z < bb.max.Z - 0.6]
 
+    # Pass 1 (two-pass layout, #131): measure annotation strip depths before
+    # view positions are fixed.  font_size=3.0 is a fixed page-mm constant so
+    # all annotation sizes are scale-independent — no circularity.
+    holes = find_holes(part, cyls=(z_cyls, cross_cyls))
+    patterns = find_hole_patterns(holes)
+
     # Conservative upper bound for page selection: count all candidate step
     # faces without the SCALE-dependent 20 mm gate (SCALE is not yet known).
-    # Passing an over-estimate is safe — choose_scale picks a slightly larger
-    # page than necessary in the rare case some faces fail the gate; it never
-    # picks a page that is too small for the actual wider corridor.
     n_steps_ub = len(step_zs[:3])
+    strips_ub = _measure_strips(holes, patterns, n_steps_ub, bb)
     SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(
-        x_size, y_size, z_size, n_steps=n_steps_ub, scale=scale, page=page
+        x_size, y_size, z_size, n_steps=n_steps_ub, scale=scale, page=page, strips=strips_ub
     )
     DIM_PAD = _DIM_PAD
     margin = _MARGIN
-    # Refine: apply the same 20 mm height gate _auto_annotate uses for dim_step
-    # so that bore floors and shallow chamfers don't inflate the corridor.
+    # Refine: apply the same 20 mm height gate _auto_annotate uses for dim_step.
     n_steps = len([z for z in step_zs[:3] if (z - bb.min.Z) * SCALE >= 20])
-    gap_fv_sv = max(DIM_PAD, _est_right_strip_depth(n_steps))
+    strips = _measure_strips(holes, patterns, n_steps, bb)
+    gap_fv_sv = max(DIM_PAD, strips.right)
+    gap_left = max(DIM_PAD, strips.left)
 
     fv_hw = x_size * SCALE / 2
     fv_hh = z_size * SCALE / 2
@@ -612,11 +755,12 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     y_offset = max(0.0, (PAGE_H - total_h) / 2)
 
     total_content_w = (
-        3 * DIM_PAD + gap_fv_sv + x_size * SCALE + y_size * SCALE + bbox_max * SCALE * 0.7
+        gap_left + gap_fv_sv + x_size * SCALE + y_size * SCALE + 2 * DIM_PAD
+        + bbox_max * SCALE * 0.7
     )
     x_offset = max(0.0, (PAGE_W - 2 * margin - TB_W - total_content_w) / 2)
 
-    FV_X = margin + x_offset + DIM_PAD + fv_hw
+    FV_X = margin + x_offset + gap_left + fv_hw
     FV_Y = y_offset + margin + DIM_PAD + fv_hh
     PV_X = FV_X
     PV_Y = FV_Y + fv_hh + DIM_PAD + pv_hh
@@ -659,9 +803,8 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
         right=Strip(pv_right_edge, iso_right_limit, direction=1),
         left=Strip(pv_left_edge, margin, direction=-1),
         above=Strip(pv_top_edge, PAGE_H - margin, direction=1),
-        # DIM_PAD gap between plan bottom and front top: 18 mm, enough for
-        # one width dimension (slot=8, gap=8 fits exactly)
-        below=Strip(pv_bottom_edge, fv_top_edge + 2, direction=-1),
+        # gap_fv_pv = DIM_PAD = 18 mm; pv_below needs 16 mm, leaving 2 mm slack.
+        below=Strip(pv_bottom_edge, fv_top_edge, direction=-1),
     )
     sv_bottom_edge = SV_Y - fv_hh  # same as fv_bottom_edge; side and front share Z height
     sv_zones = ViewZones(
@@ -700,7 +843,8 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
         cy=cy,
         cz=cz,
         bbox_max=bbox_max,
-        holes=find_holes(part, cyls=(z_cyls, cross_cyls)),
+        holes=holes,
+        patterns=patterns,
         z_diams=z_diams,
         cross_diams=cross_diams,
         cyls=(z_cyls, cross_cyls),
@@ -1157,9 +1301,8 @@ def _auto_annotate(dwg, a):
     # Hole callouts, locations, and sections — prismatic parts only; turned
     # parts keep dim_od/ldr_z
     if not a.is_rotational and a.holes:
-        patterns = find_hole_patterns(a.holes)
-        _annotate_holes(dwg, a, view_of_axis, _axis_letter, patterns)
-        _add_location_dims(dwg, a, _axis_letter, patterns)
+        _annotate_holes(dwg, a, view_of_axis, _axis_letter, a.patterns)
+        _add_location_dims(dwg, a, _axis_letter, a.patterns)
 
     if a.cross_diams and a.is_rotational:
         _log.info(
@@ -1722,48 +1865,6 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
         axis_letter(h) == "z" and (h.cbore or h.spotface or h.bottom != "through") for h in a.holes
     )
 
-    # Pre-compute the Y band that dim_locy annotations will occupy above the
-    # side view.  Mirror _add_location_dims' ref-selection logic exactly: use
-    # pattern representatives (bolt-circle centre, array datum) rather than raw
-    # hole positions.  Overestimating _n_y_tiers causes false positives — e.g.
-    # a BoltCircle at centre (0,0) with corners at y=±35 would inflate the
-    # estimate by 2 tiers if we counted raw corner Y values.
-    _sv_left = a.SV_X - a.sv_hw
-    _sv_top = a.SV_Y + a.fv_hh
-    _patt_z = {h for p in found_patterns for h in p.holes if axis_letter(p.holes[0]) == "z"}
-    _locy_refs: list = []
-    for _p in found_patterns:
-        if axis_letter(_p.holes[0]) != "z":
-            continue
-        if isinstance(_p, BoltCircle):
-            _locy_refs.append((_p.center[0], _p.center[1], _p.holes[0].diameter))
-        else:
-            _near = min(
-                _p.holes,
-                key=lambda _h: (
-                    (_h.location[0] - a.bb.min.X) ** 2 + (_h.location[1] - a.bb.min.Y) ** 2
-                ),
-            )
-            _locy_refs.append((_near.location[0], _near.location[1], _near.diameter))
-    _locy_refs += [
-        (h.location[0], h.location[1], h.diameter)
-        for h in a.holes
-        if axis_letter(h) == "z" and h not in _patt_z
-    ]
-    _uniq_locy: list = []
-    for _r in _locy_refs:
-        if not any(abs(_r[0] - _u[0]) < 0.5 and abs(_r[1] - _u[1]) < 0.5 for _u in _uniq_locy):
-            _uniq_locy.append(_r)
-    if len(_uniq_locy) > _MAX_LOCATION_REFS:
-        _uniq_locy.sort(key=lambda _r: _r[2], reverse=True)
-        _uniq_locy = _uniq_locy[:_MAX_LOCATION_REFS]
-    _y_locy: list = []
-    for _r in _uniq_locy:
-        if not any(abs(_r[1] - _u[1]) < 0.5 for _u in _y_locy):
-            _y_locy.append(_r)
-    _n_y_tiers = sum(1 for _, _ry, _ in _y_locy if abs(_ry - a.bb.min.Y) * a.SCALE >= 1.0)
-    _locy_top = _sv_top + _n_y_tiers * dwg.draft.font_size * 3.0
-
     # A pattern annotates only when it accounts for the whole spec group —
     # a 7th same-size hole off the circle would make "7× ... EQ SP ON BC"
     # a lie about six of them.
@@ -1920,15 +2021,6 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
             )
             can_right = (edge_right + elbow_dx) + gap + w <= right_limit
             can_left = edge_left is not None and (edge_left - elbow_dx) - gap - w >= a.margin
-
-            # dim_locy conflict check (plan view only): dim_locy annotations
-            # start at sv_left_edge and extend into the plan-view Y band when
-            # the part has many Y tiers.  A right-side label that would reach
-            # past sv_left_edge and land in that Y band collides with them.
-            if view == "plan" and can_right:
-                lx1 = edge_right + elbow_dx + gap + w
-                if lx1 > _sv_left and _sv_top <= centre_r[1] <= _locy_top:
-                    can_right = False
 
             if not can_right and not can_left:
                 _log.info("Hole callout ø%s skipped (no room)", _fmt(holes[0].diameter))
