@@ -298,26 +298,61 @@ class TestStripZones:
         assert all(d.dim_level_y > side_top for d in locy_dims)
         assert a.sv_zones.above.depth_used > 0
 
-    def test_dim_step_routed_through_fv_right_strip(self):
-        # Step dims must be placed via the strip and land right of dim_height.
-        # Each dim_step x must be strictly right of dim_height x.
+    def test_dim_step_clipped_in_phase1_narrow_corridor(self):
+        # Phase 1 reduces fv_zones.right to the 18 mm inter-view corridor.
+        # dim_height (gap=8 + slot=10 = 18 mm) fills it exactly; dim_step
+        # (slot=14 mm) can never fit.  This test documents that current
+        # behaviour: dim_step_N must NOT be generated until Phase 3 widens
+        # the corridor dynamically.  If dim_step_0 reappears without the
+        # corridor being widened, it would land inside the side view.
         from build123d import Box, Pos
 
         from build123d_drafting import build_drawing
 
         part = Box(40, 12, 40) - Pos(10, 0, 20) * Box(20, 12, 20)
         dwg = build_drawing(part)
-        step_dims = {n: v for n, v in dwg._named.items() if n.startswith("dim_step")}
-        if step_dims and "dim_height" in dwg._named:
-            h_ann = dwg._named["dim_height"]
-            for ann in step_dims.values():
-                if getattr(ann, "label_bbox", None) and getattr(h_ann, "label_bbox", None):
-                    # step dim label must be to the right of dim_height label
-                    assert ann.label_bbox[0] > h_ann.label_bbox[0] - 1
+        # dim_height must still be present
+        assert "dim_height" in dwg._named
+        # dim_step_N must be absent — the corridor is too narrow (Phase 1 intent)
+        step_dims = [n for n in dwg._named if n.startswith("dim_step")]
+        assert step_dims == [], (
+            f"dim_step annotations appeared before Phase 3 corridor widening: {step_dims}"
+        )
+
+    def test_fv_right_outer_limit_does_not_enter_side_view(self):
+        # Phase 1: fv_zones.right outer_limit must be <= the side view left edge.
+        # Previously it was iso_right_limit (far right of page), causing dim_step
+        # annotations to be placed inside the side view geometry.
+        # pv_zones.right is intentionally unrestricted — hole callouts for the
+        # plan view go to the right of the plan/side pair (different Y band) and
+        # need the full iso-bounded corridor.
+        from build123d import Box
+
+        from build123d_drafting import build_drawing
+
+        part = Box(80, 60, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        sv_left = a.SV_X - a.sv_hw
+        assert a.fv_zones.right.outer_limit <= sv_left + 0.5
+
+    def test_dim_height_still_placed_after_outer_limit_fix(self):
+        # Phase 1: dim_height must still be generated — it fits in the 18 mm
+        # corridor (gap=8 + slot=10 = 18 mm exactly).
+        from build123d import Box
+
+        from build123d_drafting import build_drawing
+
+        part = Box(60, 40, 30)
+        dwg = build_drawing(part)
+        assert "dim_height" in dwg._named
+        assert dwg._named["dim_height"].label == "30"
 
     def test_right_strip_outer_limits_tightened_to_iso(self):
-        # After _auto_annotate runs, pv/sv/fv right strip outer_limits must
-        # equal iso_x0 - 4 (the actual iso view left edge minus clearance).
+        # After Phase 1: fv.right is bounded by sv_left_edge (not iso_right_limit).
+        # pv.right stays iso-tightened (used by plan-view hole callouts, which are
+        # in a different Y band and don't overlap the side view).
+        # sv.right is still tightened to iso_x0 - 4.
         from build123d import Box, Cylinder
 
         from build123d_drafting import build_drawing
@@ -326,11 +361,15 @@ class TestStripZones:
         part = Box(80, 60, 20) - Cylinder(5, 20)
         dwg = build_drawing(part)
         a = dwg._analysis
+        sv_left = a.SV_X - a.sv_hw
         iso_x0, _, _, _ = _iso_bbox(dwg)
-        expected = iso_x0 - 4
-        assert a.fv_zones.right.outer_limit == pytest.approx(expected, abs=0.1)
-        assert a.pv_zones.right.outer_limit == pytest.approx(expected, abs=0.1)
-        assert a.sv_zones.right.outer_limit == pytest.approx(expected, abs=0.1)
+        iso_limit = iso_x0 - 4
+        # fv right must not extend past the side view left edge
+        assert a.fv_zones.right.outer_limit == pytest.approx(sv_left, abs=0.1)
+        # pv right stays iso-tightened (plan-view callouts go right of the side view)
+        assert a.pv_zones.right.outer_limit == pytest.approx(iso_limit, abs=0.1)
+        # sv right strip is still iso-tightened
+        assert a.sv_zones.right.outer_limit == pytest.approx(iso_limit, abs=0.1)
 
     def test_sv_zones_below_strip_is_active(self):
         # sv_zones.below must be a Strip (not None) after _analyse().

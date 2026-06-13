@@ -588,9 +588,11 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     pv_top_edge = PV_Y + pv_hh
     pv_bottom_edge = PV_Y - pv_hh  # = fv_top_edge + DIM_PAD
     sv_top_edge = SV_Y + fv_hh  # side view has the same Z height as front
+    # Outer limit for fv/pv right strips: must not enter the side view.
+    sv_left_edge = SV_X - sv_hw  # = fv_right_edge + DIM_PAD
 
     fv_zones = ViewZones(
-        right=Strip(fv_right_edge, iso_right_limit, direction=1),
+        right=Strip(fv_right_edge, sv_left_edge, direction=1),
         left=Strip(fv_left_edge, margin, direction=-1),
         above=Strip(fv_top_edge, pv_bottom_edge - 2, direction=1),
         below=Strip(fv_bottom_edge, margin, direction=-1),
