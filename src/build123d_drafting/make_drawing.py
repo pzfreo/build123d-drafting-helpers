@@ -516,7 +516,7 @@ class StripDepths:
     """
 
     right: float  # horizontal corridor right of FV/PV → gap_fv_sv
-    left: float   # horizontal corridor left of FV/PV
+    left: float  # horizontal corridor left of FV/PV
 
 
 def _measure_strips(holes, patterns, n_steps: int, bb, font_size: float = 3.0) -> StripDepths:
@@ -536,8 +536,17 @@ def _measure_strips(holes, patterns, n_steps: int, bb, font_size: float = 3.0) -
     return StripDepths(right=right, left=left)
 
 
-def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w, n_steps: int = 0,
-          strips: StripDepths | None = None) -> bool:
+def _fits(
+    x_size,
+    y_size,
+    z_size,
+    scale,
+    page_w,
+    page_h,
+    tb_w,
+    n_steps: int = 0,
+    strips: StripDepths | None = None,
+) -> bool:
     """True if the 4-view layout fits the page at this scale.
 
     The title block occupies only the bottom ``_TB_H`` mm of the sheet, so when
@@ -571,7 +580,12 @@ def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w, n_steps: int = 0,
 
 
 def choose_scale(
-    x_size: float, y_size: float, z_size: float, n_steps: int = 0, scale=None, page=None,
+    x_size: float,
+    y_size: float,
+    z_size: float,
+    n_steps: int = 0,
+    scale=None,
+    page=None,
     strips: StripDepths | None = None,
 ) -> tuple:
     """Return (SCALE, PAGE_W, PAGE_H, TB_W) for a 4-view layout.
@@ -597,8 +611,9 @@ def choose_scale(
         raise ValueError(f"scale must be positive, got {scale!r}")
     if scale is not None and page is not None:
         pw, ph, tb = _parse_page(page)
-        if not _fits(x_size, y_size, z_size, float(scale), pw, ph, tb, n_steps=n_steps,
-                     strips=strips):
+        if not _fits(
+            x_size, y_size, z_size, float(scale), pw, ph, tb, n_steps=n_steps, strips=strips
+        ):
             _log.warning("Requested scale %s on %s page may not fit the 4-view layout", scale, page)
         return float(scale), pw, ph, tb
     if page is not None:
@@ -723,7 +738,11 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     y_offset = max(0.0, (PAGE_H - total_h) / 2)
 
     total_content_w = (
-        gap_left + gap_fv_sv + x_size * SCALE + y_size * SCALE + 2 * DIM_PAD
+        gap_left
+        + gap_fv_sv
+        + x_size * SCALE
+        + y_size * SCALE
+        + 2 * DIM_PAD
         + bbox_max * SCALE * 0.7
     )
     x_offset = max(0.0, (PAGE_W - 2 * margin - TB_W - total_content_w) / 2)
