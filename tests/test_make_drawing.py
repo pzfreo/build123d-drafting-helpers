@@ -7,6 +7,7 @@ from build123d import Box, Compound, Cylinder, Edge, Pos, export_step
 
 from build123d_drafting import Drawing, Leader, ViewCoordinates, build_drawing, view_axes
 from build123d_drafting.make_drawing import (
+    _MIN_VIEW_MM,
     _export_shape,
     _fits,
     _fmt,
@@ -147,6 +148,34 @@ class TestChooseScaleOverrides:
     def test_nonpositive_scale_raises(self):
         with pytest.raises(ValueError, match="scale"):
             choose_scale(10, 10, 10, scale=0)
+
+
+class TestScaleMinimum:
+    """Scale too small → ValueError before OCCT degenerates (#129)."""
+
+    def test_tiny_scale_raises(self, tmp_path):
+        # 80 mm thin part at scale=0.1 → 8 mm projection < _MIN_VIEW_MM
+        part = Box(680, 860, 80)
+        with pytest.raises(ValueError, match="annotation geometry degenerates"):
+            make_drawing(part, out=str(tmp_path / "out"), scale=0.1)
+
+    def test_error_message_suggests_safe_scale(self, tmp_path):
+        part = Box(680, 860, 80)
+        with pytest.raises(ValueError) as exc:
+            make_drawing(part, out=str(tmp_path / "out"), scale=0.1)
+        msg = str(exc.value)
+        assert "scale" in msg.lower()
+        # Should mention the minimum safe scale (≥ 10/80 = 0.125)
+        import re
+        nums = re.findall(r"\d+\.?\d*", msg)
+        safe_scales = [float(n) for n in nums if 0.1 < float(n) < 1.0]
+        assert any(s >= _MIN_VIEW_MM / 80 for s in safe_scales)
+
+    def test_safe_scale_does_not_raise(self, tmp_path):
+        # 0.2 → 80*0.2 = 16 mm > _MIN_VIEW_MM
+        part = Box(680, 860, 80)
+        result = make_drawing(part, out=str(tmp_path / "out"), scale=0.2)
+        assert result is not None
 
 
 class TestStripZones:
