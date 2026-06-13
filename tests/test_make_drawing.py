@@ -315,8 +315,11 @@ class TestStripZones:
         assert "dim_height" in dwg._named
         step_dims = [n for n in dwg._named if n.startswith("dim_step")]
         assert len(step_dims) >= 1, "dim_step must appear after Phase 3 corridor widening"
-        # The FV→SV gap must equal the estimator value (not the fixed _DIM_PAD)
-        n = min(len(a.step_zs), 3)
+        # The FV→SV gap must equal the estimator value for the height-gated count.
+        # Use the same gate _analyse() applies: (z - bb.min.Z) * SCALE >= 20.
+        # a.step_zs is the raw (ungated) list; using len(a.step_zs) would give the
+        # wrong expected gap for parts with shallow step faces.
+        n = len([z for z in a.step_zs[:3] if (z - a.bb.min.Z) * a.SCALE >= 20])
         expected_gap = _est_right_strip_depth(n)
         sv_left = a.SV_X - a.sv_hw
         fv_right = a.FV_X + a.fv_hw

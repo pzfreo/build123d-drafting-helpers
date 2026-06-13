@@ -592,7 +592,7 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     # Passing an over-estimate is safe — choose_scale picks a slightly larger
     # page than necessary in the rare case some faces fail the gate; it never
     # picks a page that is too small for the actual wider corridor.
-    n_steps_ub = min(len(step_zs[:3]), 3)
+    n_steps_ub = len(step_zs[:3])
     SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(
         x_size, y_size, z_size, n_steps=n_steps_ub, scale=scale, page=page
     )
