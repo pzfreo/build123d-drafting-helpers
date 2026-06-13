@@ -357,17 +357,17 @@ class TestStripZones:
         assert dwg._named["dim_height"].label == "30"
 
     def test_right_strip_outer_limits_tightened_to_iso(self):
-        # After Phase 1: fv.right is bounded by sv_left_edge (not iso_right_limit).
-        # pv.right is iso-tightened; per-callout spatial checks in _annotate_holes
-        # dynamically block labels that would conflict with dim_locy* annotations
-        # that extend into the plan-view Y band (e.g. deep parts with many Y tiers).
-        # sv.right is still tightened to iso_x0 - 4.
-        from build123d import Box, Cylinder
+        # fv.right and pv.right are both bounded by sv_left_edge so bore callout
+        # labels cannot cross into the side view.  sv.right is tightened to the
+        # actual iso view left edge (iso_x0 - 4) by _auto_annotate().
+        # Use a plain box (no holes) so bore callout overhead doesn't push the
+        # iso view right and interfere with the sv tightening check.
+        from build123d import Box
 
         from build123d_drafting import build_drawing
         from build123d_drafting.make_drawing import _iso_bbox
 
-        part = Box(80, 60, 20) - Cylinder(5, 20)
+        part = Box(80, 60, 20)
         dwg = build_drawing(part)
         a = dwg._analysis
         sv_left = a.SV_X - a.sv_hw
@@ -375,9 +375,10 @@ class TestStripZones:
         iso_limit = iso_x0 - 4
         # fv right must not extend past the side view left edge
         assert a.fv_zones.right.outer_limit == pytest.approx(sv_left, abs=0.1)
-        # pv right stays iso-tightened (spatial check handles per-callout conflicts)
-        assert a.pv_zones.right.outer_limit == pytest.approx(iso_limit, abs=0.1)
-        # sv right strip is still iso-tightened
+        # pv right is also bounded by sv_left so bore callout labels cannot
+        # cross dim_locy extension lines in the side view corridor
+        assert a.pv_zones.right.outer_limit == pytest.approx(sv_left, abs=0.1)
+        # sv right strip is iso-tightened
         assert a.sv_zones.right.outer_limit == pytest.approx(iso_limit, abs=0.1)
 
     def test_sv_zones_below_strip_is_active(self):
@@ -589,7 +590,7 @@ class TestTwoPassLayout:
         from build123d import Box, Cylinder, Pos
 
         from build123d_drafting import build_drawing
-        from build123d_drafting.features import find_hole_patterns, find_holes
+        from build123d_drafting.features import find_holes
         from build123d_drafting.make_drawing import _DIM_PAD, _est_bore_callout_width
 
         # Four identical cylinders → "4× ⌀16 THRU" callout with a count prefix
@@ -652,13 +653,40 @@ class TestTwoPassLayout:
                     f"{name}: label right edge {lx1:.1f} mm exceeds sv_left {sv_left:.1f} mm"
                 )
 
+    def test_bolt_circle_suffix_widens_estimate(self):
+        # BoltCircle callouts carry "EQ SP ON ø… BC" suffix (~34 mm wide).
+        # _est_bore_callout_width must include it when patterns are provided.
+        from build123d import Box, Cylinder, Pos
+
+        from build123d_drafting.features import find_hole_patterns, find_holes
+        from build123d_drafting.make_drawing import _est_bore_callout_width
+
+        # Six ⌀8 holes at equal 60° spacing on R=35 → BoltCircle pattern
+        part = (
+            Box(100, 100, 20)
+            - Pos(35.0, 0.0, 0) * Cylinder(8, 20)
+            - Pos(17.5, 30.31, 0) * Cylinder(8, 20)
+            - Pos(-17.5, 30.31, 0) * Cylinder(8, 20)
+            - Pos(-35.0, 0.0, 0) * Cylinder(8, 20)
+            - Pos(-17.5, -30.31, 0) * Cylinder(8, 20)
+            - Pos(17.5, -30.31, 0) * Cylinder(8, 20)
+        )
+        holes = find_holes(part)
+        patterns = find_hole_patterns(holes)
+
+        width_without = _est_bore_callout_width(holes)
+        width_with = _est_bore_callout_width(holes, patterns=patterns)
+        assert width_with > width_without, (
+            f"BoltCircle suffix should widen estimate: {width_without:.1f} → {width_with:.1f} mm"
+        )
+
     def test_pv_below_strip_has_slack(self):
         # pv_zones.below outer_limit = fv_top_edge (not fv_top_edge + 2), giving
         # 18 mm available vs 16 mm needed for dim_width — no razor-fit (#130).
         from build123d import Box
 
         from build123d_drafting import build_drawing
-        from build123d_drafting.make_drawing import _DIM_PAD, _est_pv_below_depth
+        from build123d_drafting.make_drawing import _est_pv_below_depth
 
         part = Box(80, 40, 20)
         dwg = build_drawing(part)

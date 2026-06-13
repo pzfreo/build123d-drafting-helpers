@@ -442,17 +442,14 @@ def _est_pv_below_depth() -> float:
 # ---------------------------------------------------------------------------
 
 
-def _hole_axis(h) -> str:
-    """Dominant axis letter (x/y/z) for a hole feature."""
-    return max(zip("xyz", h.axis), key=lambda t: abs(t[1]))[0]
-
-
-def _est_bore_callout_width(holes, font_size: float = 3.0) -> float:
+def _est_bore_callout_width(holes, font_size: float = 3.0, patterns=None) -> float:
     """Estimate the maximum bore callout label width (page-mm) across all holes.
 
     Groups holes by machining spec (same as _annotate_holes), then estimates
     the HoleCallout token sequence width using a character-based formula.
-    Intentionally over-estimates by ~7-10% — safe for layout reservation.
+    Includes the BoltCircle suffix ("EQ SP ON ø… BC") when patterns are supplied.
+    Returns the label width only — elbow_dx and gap clearance are NOT included;
+    callers that need the full strip depth should add those overheads separately.
     Returns 0.0 when the hole list is empty.
     """
     if not holes:
@@ -461,6 +458,13 @@ def _est_bore_callout_width(holes, font_size: float = 3.0) -> float:
     for h in holes:
         groups.setdefault(_spec_key(h), []).append(h)
 
+    # Map spec_key → BoltCircle so BoltCircle groups get their suffix estimated.
+    bc_by_spec: dict = {}
+    if patterns:
+        for p in patterns:
+            if isinstance(p, BoltCircle):
+                bc_by_spec[_spec_key(p.holes[0])] = p
+
     h_fs = font_size
     gap = 0.45 * h_fs
     sym_w = h_fs
@@ -468,7 +472,7 @@ def _est_bore_callout_width(holes, font_size: float = 3.0) -> float:
     char_w = 0.6 * h_fs  # avg character width
 
     max_w = 0.0
-    for group in groups.values():
+    for spec_key, group in groups.items():
         rep = group[0]
         count = len(group) if len(group) > 1 else None
         through = rep.bottom == "through"
@@ -492,46 +496,16 @@ def _est_bore_callout_width(holes, font_size: float = 3.0) -> float:
                 token_w.append(sym_w)  # depth symbol
                 token_w.append(len(_fmt(step.depth)) * char_w)
 
+        # BoltCircle suffix: "EQ SP ON ø{bc_dia} BC"
+        bc = bc_by_spec.get(spec_key)
+        if bc is not None:
+            token_w.append(len(f"EQ SP ON ø{_fmt(bc.diameter)} BC") * char_w)
+
         n = len(token_w)
         w = sum(token_w) + max(n - 1, 0) * gap + pad
         max_w = max(max_w, w)
 
     return max_w
-
-
-def _compute_locy_refs(holes, patterns, bb, max_refs: int = 4) -> list:
-    """Y-location reference list for Z-axis holes (used in two-pass strip sizing).
-
-    Mirrors _add_location_dims' representative-selection logic: bolt-circle
-    centre, array datum hole, then unpatterned singletons. Returns unique
-    (world_x, world_y, diameter) tuples, capped at max_refs by descending dia.
-    """
-    patt_z = {h for p in patterns for h in p.holes if _hole_axis(p.holes[0]) == "z"}
-    refs: list = []
-    for p in patterns:
-        if _hole_axis(p.holes[0]) != "z":
-            continue
-        if isinstance(p, BoltCircle):
-            refs.append((p.center[0], p.center[1], p.holes[0].diameter))
-        else:
-            near = min(
-                p.holes,
-                key=lambda h: (h.location[0] - bb.min.X) ** 2 + (h.location[1] - bb.min.Y) ** 2,
-            )
-            refs.append((near.location[0], near.location[1], near.diameter))
-    refs += [
-        (h.location[0], h.location[1], h.diameter)
-        for h in holes
-        if _hole_axis(h) == "z" and h not in patt_z
-    ]
-    unique: list = []
-    for r in refs:
-        if not any(abs(r[0] - u[0]) < 0.5 and abs(r[1] - u[1]) < 0.5 for u in unique):
-            unique.append(r)
-    if len(unique) > max_refs:
-        unique.sort(key=lambda r: r[2], reverse=True)
-        unique = unique[:max_refs]
-    return unique
 
 
 @dataclass
@@ -541,10 +515,8 @@ class StripDepths:
     Drives the inter-view corridor widths in the two-pass layout (#131).
     """
 
-    right: float    # horizontal corridor right of FV/PV → gap_fv_sv
-    left: float     # horizontal corridor left of FV/PV
-    sv_above: float  # vertical stack above SV (dim_locy tiers)
-    pv_below: float  # vertical slot below PV (dim_width)
+    right: float  # horizontal corridor right of FV/PV → gap_fv_sv
+    left: float   # horizontal corridor left of FV/PV
 
 
 def _measure_strips(holes, patterns, n_steps: int, bb, font_size: float = 3.0) -> StripDepths:
@@ -553,19 +525,15 @@ def _measure_strips(holes, patterns, n_steps: int, bb, font_size: float = 3.0) -
     All annotation sizes are scale-independent because font_size is a fixed
     page-mm constant, so there is no circularity with choose_scale().
     """
-    bore_depth = _est_bore_callout_width(holes, font_size)
+    bore_depth = _est_bore_callout_width(holes, font_size, patterns=patterns)
+    # Add elbow clearance and leader-to-label gap so gap_fv_sv fully contains
+    # the composed leader: elbow_dx (= arrow_length ≈ 0.9×fs when a section
+    # line is present) + gap (= pad_around_text = 2.0 mm, always present).
+    if bore_depth > 0:
+        bore_depth += 2.0 + 0.9 * font_size
     right = max(_est_right_strip_depth(n_steps), bore_depth)
     left = max(_DIM_PAD, bore_depth)
-    locy_refs = _compute_locy_refs(holes, patterns, bb)
-    y_unique: list = []
-    for _rx, ry, _ in locy_refs:
-        if not any(abs(ry - u) < 0.5 for u in y_unique):
-            y_unique.append(ry)
-    # Exclude holes at the datum edge (within 0.5 mm world-space) — they are
-    # never dimensioned (the location would be 0).
-    n_tiers = sum(1 for ry in y_unique if abs(ry - bb.min.Y) > 0.5)
-    sv_above = n_tiers * font_size * 3.0
-    return StripDepths(right=right, left=left, sv_above=sv_above, pv_below=_est_pv_below_depth())
+    return StripDepths(right=right, left=left)
 
 
 def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w, n_steps: int = 0,
@@ -800,7 +768,12 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
         below=Strip(fv_bottom_edge, margin, direction=-1),
     )
     pv_zones = ViewZones(
-        right=Strip(pv_right_edge, iso_right_limit, direction=1),
+        # Outer limit = sv_left_edge (not iso_right_limit) so bore callouts in
+        # the plan view are bounded by the same hard wall as the FV right strip,
+        # preventing labels from crossing dim_locy extension lines in the side
+        # view.  gap_fv_sv is sized by _measure_strips to accommodate the widest
+        # callout, so well-estimated labels will always fit within this bound.
+        right=Strip(pv_right_edge, sv_left_edge, direction=1),
         left=Strip(pv_left_edge, margin, direction=-1),
         above=Strip(pv_top_edge, PAGE_H - margin, direction=1),
         # gap_fv_pv = DIM_PAD = 18 mm; pv_below needs 16 mm, leaving 2 mm slack.
