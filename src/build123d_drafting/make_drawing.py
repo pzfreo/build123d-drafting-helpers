@@ -577,9 +577,12 @@ def _fits(
     if w <= page_w:
         return True
     views_bottom = max(0.0, (page_h - h) / 2) + _MARGIN + _DIM_PAD
-    # When views clear the title block row, the iso can sit above it and the
-    # title-block column does not consume horizontal space for the view layout.
-    return w - _DIM_PAD - tb_w <= page_w and views_bottom >= _MARGIN + _TB_H
+    # When views clear the title block row, the iso sits above it — only the
+    # front+side column width matters, not the full layout width.
+    if views_bottom < _MARGIN + _TB_H:
+        return False
+    side_only_w = _MARGIN + gap_left + x_size * scale + gap_fv_sv + y_size * scale + _DIM_PAD + _MARGIN
+    return side_only_w <= page_w
 
 
 def choose_scale(
