@@ -1891,7 +1891,9 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
         left_ys = _solve_strip_ys([s[3] for s in left_queue], min_gap, y_min, y_max)
 
         if right_ys is None and right_queue:
-            right_ys = _greedy_strip_ys([s[3] for s in right_queue], min_gap, y_min, y_max, prefix=True)
+            right_ys = _greedy_strip_ys(
+                [s[3] for s in right_queue], min_gap, y_min, y_max, prefix=True
+            )
             n_drop = len(right_queue) - len(right_ys)
             if n_drop:
                 _log.warning(
@@ -1901,7 +1903,9 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
                 )
             right_queue = right_queue[: len(right_ys)]
         if left_ys is None and left_queue:
-            left_ys = _greedy_strip_ys([s[3] for s in left_queue], min_gap, y_min, y_max, prefix=True)
+            left_ys = _greedy_strip_ys(
+                [s[3] for s in left_queue], min_gap, y_min, y_max, prefix=True
+            )
             n_drop = len(left_queue) - len(left_ys)
             if n_drop:
                 _log.warning(
