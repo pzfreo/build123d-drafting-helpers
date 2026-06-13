@@ -1368,6 +1368,62 @@ class TestAutoHoleAnnotations:
         # the central bore still gets a centre mark in the plan view
         assert any(n.startswith("cm_plan") for n in dwg._named)
 
+    @pytest.mark.timeout(60)
+    def test_plan_bore_leaders_elbow_outside_view(self):
+        # Bore callout elbows must sit at or beyond the plan view right boundary
+        # (one arrow_length past it), not deep in the annotation corridor.
+        # Old code used 0.6 × DIM_PAD ≈ 10.8 mm; new code uses arrow_length ≈ 2.7 mm.
+        part = Box(40, 40, 20) - Pos(15, 0, 0) * Cylinder(3, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        plan_right = a.PV_X + (a.bb.max.X - a.cx) * a.SCALE
+        arrow_len = dwg.draft.arrow_length
+        old_corridor = 0.6 * a.DIM_PAD  # ≈ 10.8 mm — the old, oversized offset
+        hc_plan_names = [n for n in dwg._named if n.startswith("hc_plan")]
+        assert hc_plan_names, "Expected at least one plan-view bore callout"
+        for name in hc_plan_names:
+            ldr = dwg._named[name]
+            assert ldr.elbow[0] >= plan_right - 1e-6, (
+                f"{name}: elbow x={ldr.elbow[0]:.3f} is inside the view "
+                f"(plan_right={plan_right:.3f})"
+            )
+            assert ldr.elbow[0] < plan_right + old_corridor, (
+                f"{name}: elbow x={ldr.elbow[0]:.3f} is too far from view "
+                f"(should be < plan_right + 0.6×DIM_PAD = {plan_right + old_corridor:.3f})"
+            )
+            # Arrowhead must still sit inside the view.
+            assert ldr.tip[0] + arrow_len <= plan_right + 1e-6, (
+                f"{name}: arrowhead back at {ldr.tip[0] + arrow_len:.3f} "
+                f"exceeds plan_right={plan_right:.3f}"
+            )
+
+    @pytest.mark.timeout(60)
+    def test_solve_strip_ys_returns_feasible_positions(self):
+        from build123d_drafting.make_drawing import _solve_strip_ys
+
+        # Four natural positions, solver must spread them to respect min_gap=8.
+        result = _solve_strip_ys([10.0, 12.0, 14.0, 16.0], min_gap=8.0, y_min=0.0, y_max=100.0)
+        assert result is not None
+        assert len(result) == 4
+        for y in result:
+            assert 0.0 <= y <= 100.0
+        for a, b in zip(result, result[1:]):
+            assert b - a >= 8.0 - 1e-9
+
+    @pytest.mark.timeout(60)
+    def test_solve_strip_ys_infeasible_returns_none(self):
+        from build123d_drafting.make_drawing import _solve_strip_ys
+
+        # Three items need 2 × 8 = 16mm gap, but range is only 10mm.
+        result = _solve_strip_ys([5.0, 10.0, 15.0], min_gap=8.0, y_min=0.0, y_max=10.0)
+        assert result is None
+
+    @pytest.mark.timeout(60)
+    def test_solve_strip_ys_empty_input(self):
+        from build123d_drafting.make_drawing import _solve_strip_ys
+
+        assert _solve_strip_ys([], min_gap=8.0, y_min=0.0, y_max=100.0) == []
+
 
 class TestHolePatternAnnotations:
     """Bolt-circle and linear-array sheet furniture + count-aware lint (#92)."""
