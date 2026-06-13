@@ -298,22 +298,26 @@ class TestStripZones:
         assert all(d.dim_level_y > side_top for d in locy_dims)
         assert a.sv_zones.above.depth_used > 0
 
-    def test_dim_step_routed_through_fv_right_strip(self):
-        # Step dims must be placed via the strip and land right of dim_height.
-        # Each dim_step x must be strictly right of dim_height x.
+    def test_dim_step_clipped_in_phase1_narrow_corridor(self):
+        # Phase 1 reduces fv_zones.right to the 18 mm inter-view corridor.
+        # dim_height (gap=8 + slot=10 = 18 mm) fills it exactly; dim_step
+        # (slot=14 mm) can never fit.  This test documents that current
+        # behaviour: dim_step_N must NOT be generated until Phase 3 widens
+        # the corridor dynamically.  If dim_step_0 reappears without the
+        # corridor being widened, it would land inside the side view.
         from build123d import Box, Pos
 
         from build123d_drafting import build_drawing
 
         part = Box(40, 12, 40) - Pos(10, 0, 20) * Box(20, 12, 20)
         dwg = build_drawing(part)
-        step_dims = {n: v for n, v in dwg._named.items() if n.startswith("dim_step")}
-        if step_dims and "dim_height" in dwg._named:
-            h_ann = dwg._named["dim_height"]
-            for ann in step_dims.values():
-                if getattr(ann, "label_bbox", None) and getattr(h_ann, "label_bbox", None):
-                    # step dim label must be to the right of dim_height label
-                    assert ann.label_bbox[0] > h_ann.label_bbox[0] - 1
+        # dim_height must still be present
+        assert "dim_height" in dwg._named
+        # dim_step_N must be absent — the corridor is too narrow (Phase 1 intent)
+        step_dims = [n for n in dwg._named if n.startswith("dim_step")]
+        assert step_dims == [], (
+            f"dim_step annotations appeared before Phase 3 corridor widening: {step_dims}"
+        )
 
     def test_fv_right_outer_limit_does_not_enter_side_view(self):
         # Phase 1: fv_zones.right outer_limit must be <= the side view left edge.
