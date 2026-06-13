@@ -167,6 +167,7 @@ class TestScaleMinimum:
         assert "scale" in msg.lower()
         # Should mention the minimum safe scale (≥ 10/80 = 0.125)
         import re
+
         nums = re.findall(r"\d+\.?\d*", msg)
         safe_scales = [float(n) for n in nums if 0.1 < float(n) < 1.0]
         assert any(s >= _MIN_VIEW_MM / 80 for s in safe_scales)
