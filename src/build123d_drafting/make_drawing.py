@@ -1713,6 +1713,15 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
     tb_left = a.PAGE_W - a.TB_W - 11
     tb_top = 11 + _TB_H
 
+    # A section line will be placed when the part has z-axis holes with
+    # counterbores, spotfaces, or blind bottoms (_add_section_view trigger).
+    # When present, its extension lines overhang the plan view boundary by
+    # ~arrow_length, so plan-view elbow must sit that far outside to clear them.
+    # Room-check failures may still skip the section, but the offset is harmless.
+    will_have_section_line = any(
+        axis_letter(h) == "z" and (h.cbore or h.spotface or h.bottom != "through") for h in a.holes
+    )
+
     # A pattern annotates only when it accounts for the whole spec group —
     # a 7th same-size hole off the circle would make "7× ... EQ SP ON BC"
     # a lie about six of them.
@@ -1826,18 +1835,15 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
         # Pass 2 — Y placement via Cassowary: leaders stay within the view's
         #   Y extent, are at least min_gap apart, and stay near their natural
         #   (hole-centre) Y position.
-        # Elbow sits one arrow_length past the view boundary to clear the
-        # section-line extension lines (which overhang by ~arrow_length + gap).
         edge_right = plan_right if view == "plan" else side_right
         edge_left = plan_left if view == "plan" else None
 
         right_strip = a.pv_zones.right if view == "plan" else a.sv_zones.right
-        # Elbow sits one arrow_length past the view boundary.  This is the
-        # minimum corridor needed to clear section-line extension lines, which
-        # conventionally reach arrow_length + gap past the view outline.  The
-        # shaft still crosses the view boundary, but by just 2.7 mm instead of
-        # the old 10.8 mm (0.6 × DIM_PAD).
-        elbow_dx = draft.arrow_length  # right: add; left: subtract
+        # Elbow offset past the view boundary: only needed in the plan view when
+        # a section line will be placed (its extension lines overhang by
+        # ~arrow_length).  Side view and section-free plan views use 0 so the
+        # shaft terminates at the boundary instead of crossing it.
+        elbow_dx = draft.arrow_length if view == "plan" and will_have_section_line else 0.0
 
         # Y bounds: elbows must stay within the view's projected Y extent.
         if view == "plan":

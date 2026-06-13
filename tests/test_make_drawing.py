@@ -1319,6 +1319,22 @@ class TestAutoHoleAnnotations:
         assert [i.code for i in issues] == []
 
     @pytest.mark.timeout(60)
+    def test_bore_callout_elbow_at_boundary_without_section_line(self):
+        # When no section line is placed (no cbore/spotface/blind holes) the
+        # plan-view elbow must sit at the view boundary, not past it — the shaft
+        # must not cross the view outline (#127).
+        part = Box(80, 60, 10) - Pos(25, 15, 0) * Cylinder(4, 10)
+        dwg = build_drawing(part)
+        assert "section_line" not in dwg._named
+        hc = dwg._named.get("hc_plan0")
+        assert hc is not None
+        plan_right = dwg._analysis.PV_X + (
+            dwg._analysis.bb.max.X - dwg._analysis.cx
+        ) * dwg._analysis.SCALE
+        elbow_x = hc.elbow[0]
+        assert abs(elbow_x - plan_right) < 0.5  # elbow at boundary, not past it
+
+    @pytest.mark.timeout(60)
     def test_through_holes_group_across_wall_thicknesses(self):
         # The same drill through a 10mm and a 7.5mm wall is one "2× ø5 THRU"
         # callout — through specs group regardless of depth.
