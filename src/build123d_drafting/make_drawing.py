@@ -586,13 +586,13 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
 
     face_zs = analyse_face_levels(part)
     step_zs = [z for z in face_zs if z > bb.min.Z + 0.6 and z < bb.max.Z - 0.6]
-    n_steps = min(len(step_zs), 3)
 
-    SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(
-        x_size, y_size, z_size, n_steps=n_steps, scale=scale, page=page
-    )
+    SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(x_size, y_size, z_size, scale=scale, page=page)
     DIM_PAD = _DIM_PAD
     margin = _MARGIN
+    # Apply the same 20 mm height gate _auto_annotate uses for dim_step: a bore
+    # floor or shallow chamfer face must not inflate the corridor estimate.
+    n_steps = min(len([z for z in step_zs[:3] if (z - bb.min.Z) * SCALE >= 20]), 3)
     gap_fv_sv = max(DIM_PAD, _est_right_strip_depth(n_steps))
 
     fv_hw = x_size * SCALE / 2

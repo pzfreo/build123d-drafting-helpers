@@ -535,20 +535,23 @@ class TestDynamicCorridors:
         assert sv_left - fv_right == pytest.approx(_DIM_PAD, abs=0.1)
 
     def test_gap_fv_sv_widens_for_stepped_part(self):
-        # A part with one intermediate step face gets gap = _est_right_strip_depth(1) = 36 mm.
-        from build123d import Box, Location
+        # A part with one step ≥20 mm tall (so dim_step is actually placed) gets
+        # gap = _est_right_strip_depth(1) = 36 mm.  The ≥20 mm gate matches what
+        # _auto_annotate applies — bore floors or shallow faces don't count.
+        from build123d import Box, Pos
 
         from build123d_drafting import build_drawing
         from build123d_drafting.make_drawing import _est_right_strip_depth
 
-        # Carve the top-right quadrant from a 60×40×30 box to expose a step at Z=0.
-        cutout = Box(30, 40, 15).move(Location((15, 0, 7.5)))
-        part = Box(60, 40, 30) - cutout
+        # Box(60, 40, 50): Z -25..+25.  Carve top-right quadrant so the step
+        # floor is at Z=0, giving a 25 mm step height (≥20 mm threshold).
+        cutout = Pos(15, 0, 12.5) * Box(30, 40, 25)
+        part = Box(60, 40, 50) - cutout
 
         a = build_drawing(part)._analysis
-        n = min(len(a.step_zs), 3)
-        assert n >= 1, "expected at least one step face in stepped part"
-        expected_gap = _est_right_strip_depth(n)
+        assert len(a.step_zs) >= 1, "expected at least one step face"
+        # The 25 mm step height passes the dim_step ≥20 mm gate → n_steps=1 → gap=36 mm
+        expected_gap = _est_right_strip_depth(1)
         sv_left = a.SV_X - a.sv_hw
         fv_right = a.FV_X + a.fv_hw
         assert sv_left - fv_right == pytest.approx(expected_gap, abs=0.1)
