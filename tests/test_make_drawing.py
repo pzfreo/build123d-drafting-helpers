@@ -1368,6 +1368,23 @@ class TestAutoHoleAnnotations:
         # the central bore still gets a centre mark in the plan view
         assert any(n.startswith("cm_plan") for n in dwg._named)
 
+    @pytest.mark.timeout(60)
+    def test_plan_bore_leader_arrowhead_stays_inside_view_boundary(self):
+        # Hole near the right edge: rim sits within one arrow-length of
+        # plan_right, triggering the clamp that prevents the arrowhead
+        # from crossing the view boundary line.
+        part = Box(20, 20, 20) - Pos(9, 0, 0) * Cylinder(1, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        plan_right = a.PV_X + (a.bb.max.X - a.cx) * a.SCALE
+        arrow_len = dwg.draft.arrow_length
+        for name in [n for n in dwg._named if n.startswith("hc_plan")]:
+            ldr = dwg._named[name]
+            assert ldr.tip[0] + arrow_len <= plan_right + 1e-6, (
+                f"{name}: arrowhead crosses plan boundary "
+                f"(tip={ldr.tip[0]:.2f}, back={ldr.tip[0]+arrow_len:.2f}, boundary={plan_right:.2f})"
+            )
+
 
 class TestHolePatternAnnotations:
     """Bolt-circle and linear-array sheet furniture + count-aware lint (#92)."""

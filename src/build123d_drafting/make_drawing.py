@@ -1802,7 +1802,15 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
                 continue
             prev_y = elbow_y
             elbow = (elbow_x, elbow_y)
-            _add(view, i, _rim_tip(centre, elbow, holes), elbow, side, callout)
+            tip = _rim_tip(centre, elbow, holes)
+            # Clamp the tip so the arrowhead stays inside the view boundary.
+            # Without this, holes whose rim is within one arrow-length of the
+            # view edge produce an arrowhead that visually overlaps the edge line.
+            if side == "right":
+                tip = (min(tip[0], edge_right - draft.arrow_length), tip[1])
+            else:  # "left", plan view only
+                tip = (max(tip[0], plan_left + draft.arrow_length), tip[1])
+            _add(view, i, tip, elbow, side, callout)
             _add_furniture(dwg, a, view, i, pattern, to_page)
 
 
