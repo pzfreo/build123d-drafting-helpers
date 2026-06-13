@@ -81,6 +81,13 @@ class TestChooseScale:
         scale, pw, ph, tbw = choose_scale(80, 80, 80)
         assert int(pw) == 420
 
+    def test_ctc01_sized_part_gets_A2_not_A1(self):
+        # 800×450×150 mm (NIST CTC-01) — iso sits above the title block so tb_w
+        # is dropped from the width constraint.  A2 fits; A1 is no longer chosen (#103).
+        scale, pw, ph, tbw = choose_scale(800, 450, 150)
+        assert scale == pytest.approx(0.2)
+        assert int(pw) == 594  # A2 (594 mm), not A1 (841 mm)
+
     def test_large_part_gets_bigger_page(self):
         scale, pw, ph, tbw = choose_scale(300, 300, 300)
         assert pw > 420
