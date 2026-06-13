@@ -457,6 +457,8 @@ class TestDepthEstimators:
         # accept exactly n+1 allocations (dim_height + n dim_steps).
         from build123d_drafting.make_drawing import (
             Strip,
+            _SLOT_DIM_HEIGHT,
+            _SLOT_DIM_STEP,
             _STRIP_GAP,
             _est_right_strip_depth,
         )
@@ -464,21 +466,26 @@ class TestDepthEstimators:
         for n_steps in (0, 1, 3):
             est = _est_right_strip_depth(n_steps)
             s = Strip(anchor=0.0, outer_limit=est, direction=1, gap=_STRIP_GAP)
-            # dim_height (size 10)
-            assert s.allocate(10.0) is not None, f"dim_height must fit for n_steps={n_steps}"
-            # each dim_step (size 14)
+            assert s.allocate(_SLOT_DIM_HEIGHT) is not None, (
+                f"dim_height must fit for n_steps={n_steps}"
+            )
             for i in range(n_steps):
-                assert s.allocate(14.0) is not None, (
+                assert s.allocate(_SLOT_DIM_STEP) is not None, (
                     f"dim_step_{i} must fit for n_steps={n_steps}"
                 )
 
     def test_pv_below_depth_fits_in_exact_corridor(self):
-        # A Strip of _est_pv_below_depth() width must accept one 8mm allocation.
-        from build123d_drafting.make_drawing import Strip, _STRIP_GAP, _est_pv_below_depth
+        # A Strip of _est_pv_below_depth() width must accept one dim_width allocation.
+        from build123d_drafting.make_drawing import (
+            Strip,
+            _SLOT_DIM_WIDTH,
+            _STRIP_GAP,
+            _est_pv_below_depth,
+        )
 
         est = _est_pv_below_depth()
         s = Strip(anchor=100.0, outer_limit=100.0 - est, direction=-1, gap=_STRIP_GAP)
-        assert s.allocate(8.0) is not None, "dim_width must fit in pv_below corridor"
+        assert s.allocate(_SLOT_DIM_WIDTH) is not None, "dim_width must fit in pv_below corridor"
 
 
 # ---------------------------------------------------------------------------
