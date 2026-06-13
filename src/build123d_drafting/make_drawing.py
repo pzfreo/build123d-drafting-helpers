@@ -123,7 +123,8 @@ def dedup_diams(cyls, tol: float = 0.15) -> list:
 
 def _fmt(v: float) -> str:
     """Format a float as integer string if whole, otherwise 1 dp."""
-    return str(int(v)) if v == int(v) else f"{v:.1f}"
+    r = round(v)
+    return str(r) if abs(v - r) < 1e-6 else f"{v:.1f}"
 
 
 _DIAM_RE = re.compile(r"[øØ⌀]\s*(\d+(?:\.\d+)?)")
