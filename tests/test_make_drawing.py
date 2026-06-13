@@ -358,8 +358,9 @@ class TestStripZones:
 
     def test_right_strip_outer_limits_tightened_to_iso(self):
         # After Phase 1: fv.right is bounded by sv_left_edge (not iso_right_limit).
-        # pv.right stays iso-tightened (used by plan-view hole callouts, which are
-        # in a different Y band and don't overlap the side view).
+        # pv.right is iso-tightened; per-callout spatial checks in _annotate_holes
+        # dynamically block labels that would conflict with dim_locy* annotations
+        # that extend into the plan-view Y band (e.g. deep parts with many Y tiers).
         # sv.right is still tightened to iso_x0 - 4.
         from build123d import Box, Cylinder
 
@@ -374,7 +375,7 @@ class TestStripZones:
         iso_limit = iso_x0 - 4
         # fv right must not extend past the side view left edge
         assert a.fv_zones.right.outer_limit == pytest.approx(sv_left, abs=0.1)
-        # pv right stays iso-tightened (plan-view callouts go right of the side view)
+        # pv right stays iso-tightened (spatial check handles per-callout conflicts)
         assert a.pv_zones.right.outer_limit == pytest.approx(iso_limit, abs=0.1)
         # sv right strip is still iso-tightened
         assert a.sv_zones.right.outer_limit == pytest.approx(iso_limit, abs=0.1)
@@ -1317,6 +1318,22 @@ class TestAutoHoleAnnotations:
     def test_sheet_is_lint_clean(self, plate_drawing):
         issues = [i for i in plate_drawing.lint() if i.severity != "info"]
         assert [i.code for i in issues] == []
+
+    @pytest.mark.timeout(60)
+    def test_bore_callout_elbow_at_boundary_without_section_line(self):
+        # When no section line is placed (no cbore/spotface/blind holes) the
+        # plan-view elbow must sit at the view boundary, not past it — the shaft
+        # must not cross the view outline (#127).
+        part = Box(80, 60, 10) - Pos(25, 15, 0) * Cylinder(4, 10)
+        dwg = build_drawing(part)
+        assert "section_line" not in dwg._named
+        hc = dwg._named.get("hc_plan0")
+        assert hc is not None
+        plan_right = (
+            dwg._analysis.PV_X + (dwg._analysis.bb.max.X - dwg._analysis.cx) * dwg._analysis.SCALE
+        )
+        elbow_x = hc.elbow[0]
+        assert abs(elbow_x - plan_right) < 0.5  # elbow at boundary, not past it
 
     @pytest.mark.timeout(60)
     def test_through_holes_group_across_wall_thicknesses(self):

@@ -1713,6 +1713,57 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
     tb_left = a.PAGE_W - a.TB_W - 11
     tb_top = 11 + _TB_H
 
+    # A section line will be placed when the part has z-axis holes with
+    # counterbores, spotfaces, or blind bottoms (_add_section_view trigger).
+    # When present, its extension lines overhang the plan view boundary by
+    # ~arrow_length, so plan-view elbow must sit that far outside to clear them.
+    # Room-check failures may still skip the section, but the offset is harmless.
+    will_have_section_line = any(
+        axis_letter(h) == "z" and (h.cbore or h.spotface or h.bottom != "through") for h in a.holes
+    )
+
+    # Pre-compute the Y band that dim_locy annotations will occupy above the
+    # side view.  Mirror _add_location_dims' ref-selection logic exactly: use
+    # pattern representatives (bolt-circle centre, array datum) rather than raw
+    # hole positions.  Overestimating _n_y_tiers causes false positives — e.g.
+    # a BoltCircle at centre (0,0) with corners at y=±35 would inflate the
+    # estimate by 2 tiers if we counted raw corner Y values.
+    _sv_left = a.SV_X - a.sv_hw
+    _sv_top = a.SV_Y + a.fv_hh
+    _patt_z = {h for p in found_patterns for h in p.holes if axis_letter(p.holes[0]) == "z"}
+    _locy_refs: list = []
+    for _p in found_patterns:
+        if axis_letter(_p.holes[0]) != "z":
+            continue
+        if isinstance(_p, BoltCircle):
+            _locy_refs.append((_p.center[0], _p.center[1], _p.holes[0].diameter))
+        else:
+            _near = min(
+                _p.holes,
+                key=lambda _h: (
+                    (_h.location[0] - a.bb.min.X) ** 2 + (_h.location[1] - a.bb.min.Y) ** 2
+                ),
+            )
+            _locy_refs.append((_near.location[0], _near.location[1], _near.diameter))
+    _locy_refs += [
+        (h.location[0], h.location[1], h.diameter)
+        for h in a.holes
+        if axis_letter(h) == "z" and h not in _patt_z
+    ]
+    _uniq_locy: list = []
+    for _r in _locy_refs:
+        if not any(abs(_r[0] - _u[0]) < 0.5 and abs(_r[1] - _u[1]) < 0.5 for _u in _uniq_locy):
+            _uniq_locy.append(_r)
+    if len(_uniq_locy) > _MAX_LOCATION_REFS:
+        _uniq_locy.sort(key=lambda _r: _r[2], reverse=True)
+        _uniq_locy = _uniq_locy[:_MAX_LOCATION_REFS]
+    _y_locy: list = []
+    for _r in _uniq_locy:
+        if not any(abs(_r[1] - _u[1]) < 0.5 for _u in _y_locy):
+            _y_locy.append(_r)
+    _n_y_tiers = sum(1 for _, _ry, _ in _y_locy if abs(_ry - a.bb.min.Y) * a.SCALE >= 1.0)
+    _locy_top = _sv_top + _n_y_tiers * dwg.draft.font_size * 3.0
+
     # A pattern annotates only when it accounts for the whole spec group —
     # a 7th same-size hole off the circle would make "7× ... EQ SP ON BC"
     # a lie about six of them.
@@ -1826,18 +1877,15 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
         # Pass 2 — Y placement via Cassowary: leaders stay within the view's
         #   Y extent, are at least min_gap apart, and stay near their natural
         #   (hole-centre) Y position.
-        # Elbow sits one arrow_length past the view boundary to clear the
-        # section-line extension lines (which overhang by ~arrow_length + gap).
         edge_right = plan_right if view == "plan" else side_right
         edge_left = plan_left if view == "plan" else None
 
         right_strip = a.pv_zones.right if view == "plan" else a.sv_zones.right
-        # Elbow sits one arrow_length past the view boundary.  This is the
-        # minimum corridor needed to clear section-line extension lines, which
-        # conventionally reach arrow_length + gap past the view outline.  The
-        # shaft still crosses the view boundary, but by just 2.7 mm instead of
-        # the old 10.8 mm (0.6 × DIM_PAD).
-        elbow_dx = draft.arrow_length  # right: add; left: subtract
+        # Elbow offset past the view boundary: only needed in the plan view when
+        # a section line will be placed (its extension lines overhang by
+        # ~arrow_length).  Side view and section-free plan views use 0 so the
+        # shaft terminates at the boundary instead of crossing it.
+        elbow_dx = draft.arrow_length if view == "plan" and will_have_section_line else 0.0
 
         # Y bounds: elbows must stay within the view's projected Y extent.
         if view == "plan":
@@ -1872,6 +1920,15 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
             )
             can_right = (edge_right + elbow_dx) + gap + w <= right_limit
             can_left = edge_left is not None and (edge_left - elbow_dx) - gap - w >= a.margin
+
+            # dim_locy conflict check (plan view only): dim_locy annotations
+            # start at sv_left_edge and extend into the plan-view Y band when
+            # the part has many Y tiers.  A right-side label that would reach
+            # past sv_left_edge and land in that Y band collides with them.
+            if view == "plan" and can_right:
+                lx1 = edge_right + elbow_dx + gap + w
+                if lx1 > _sv_left and _sv_top <= centre_r[1] <= _locy_top:
+                    can_right = False
 
             if not can_right and not can_left:
                 _log.info("Hole callout ø%s skipped (no room)", _fmt(holes[0].diameter))
@@ -1926,11 +1983,12 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
             _add(view, i, tip, elbow, "right", callout)
             _add_furniture(dwg, a, view, i, pattern, to_page)
 
+        assert edge_left is not None or not left_queue  # populated only when edge_left is set
         for i, ((holes, callout, pattern, _, rep), elbow_y) in enumerate(
             zip(left_queue, left_ys, strict=True), start=len(right_queue)
         ):
             centre = to_page(rep)
-            elbow = (edge_left - elbow_dx, elbow_y)
+            elbow = (edge_left - elbow_dx, elbow_y)  # type: ignore[operator]
             tip = _rim_tip(centre, elbow, holes)
             tip = (max(tip[0], edge_left + draft.arrow_length), tip[1])
             _add(view, i, tip, elbow, "left", callout)
