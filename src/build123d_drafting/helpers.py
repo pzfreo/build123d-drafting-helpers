@@ -1534,10 +1534,7 @@ def lint_drawing(
 
         x_ext = part_bbox.max.X - part_bbox.min.X
         y_ext = part_bbox.max.Y - part_bbox.min.Y
-        x_approx_y = (
-            max(x_ext, y_ext) > 1e-6
-            and abs(x_ext - y_ext) / max(x_ext, y_ext) < 0.05
-        )
+        x_approx_y = max(x_ext, y_ext) > 1e-6 and abs(x_ext - y_ext) / max(x_ext, y_ext) < 0.05
         _check_extent("X", x_ext)
         if not x_approx_y:
             _check_extent("Y", y_ext)
