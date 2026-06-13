@@ -434,7 +434,7 @@ def _est_pv_below_depth() -> float:
     return _STRIP_GAP + _SLOT_DIM_WIDTH
 
 
-def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w) -> bool:
+def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w, n_steps: int = 0) -> bool:
     """True if the 4-view layout fits the page at this scale.
 
     The title block occupies only the bottom ``_TB_H`` mm of the sheet, so when
@@ -442,11 +442,12 @@ def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w) -> bool:
     need to reserve title-block space (the iso view may extend over it).
     """
     bbox_max = max(x_size, y_size, z_size)
+    gap_fv_sv = max(_DIM_PAD, _est_right_strip_depth(n_steps))
     w = (
         _MARGIN
         + _DIM_PAD
         + x_size * scale
-        + _DIM_PAD
+        + gap_fv_sv
         + y_size * scale
         + _DIM_PAD
         + bbox_max * scale * 0.7
@@ -465,7 +466,9 @@ def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w) -> bool:
     return w - _DIM_PAD - tb_w <= page_w and views_bottom >= _MARGIN + _TB_H
 
 
-def choose_scale(x_size: float, y_size: float, z_size: float, scale=None, page=None) -> tuple:
+def choose_scale(
+    x_size: float, y_size: float, z_size: float, n_steps: int = 0, scale=None, page=None
+) -> tuple:
     """Return (SCALE, PAGE_W, PAGE_H, TB_W) for a 4-view layout.
 
     Layout columns: [front(x×z)] [side(y×z)] [iso(~0.7*max)] [title block].
@@ -489,7 +492,7 @@ def choose_scale(x_size: float, y_size: float, z_size: float, scale=None, page=N
         raise ValueError(f"scale must be positive, got {scale!r}")
     if scale is not None and page is not None:
         pw, ph, tb = _parse_page(page)
-        if not _fits(x_size, y_size, z_size, float(scale), pw, ph, tb):
+        if not _fits(x_size, y_size, z_size, float(scale), pw, ph, tb, n_steps=n_steps):
             _log.warning("Requested scale %s on %s page may not fit the 4-view layout", scale, page)
         return float(scale), pw, ph, tb
     if page is not None:
@@ -500,7 +503,7 @@ def choose_scale(x_size: float, y_size: float, z_size: float, scale=None, page=N
     else:
         candidates = _LADDER
     for cand in candidates:
-        if _fits(x_size, y_size, z_size, *cand):
+        if _fits(x_size, y_size, z_size, *cand, n_steps=n_steps):
             return cand
     _log.warning(
         "No layout fits %.0f × %.0f × %.0f mm; falling back to %s",
@@ -581,9 +584,24 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     if z_diams and not is_rotational:
         _log.info("Part classified prismatic; skipping OD/centreline/bore annotations")
 
-    SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(x_size, y_size, z_size, scale=scale, page=page)
+    face_zs = analyse_face_levels(part)
+    step_zs = [z for z in face_zs if z > bb.min.Z + 0.6 and z < bb.max.Z - 0.6]
+
+    # Conservative upper bound for page selection: count all candidate step
+    # faces without the SCALE-dependent 20 mm gate (SCALE is not yet known).
+    # Passing an over-estimate is safe — choose_scale picks a slightly larger
+    # page than necessary in the rare case some faces fail the gate; it never
+    # picks a page that is too small for the actual wider corridor.
+    n_steps_ub = len(step_zs[:3])
+    SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(
+        x_size, y_size, z_size, n_steps=n_steps_ub, scale=scale, page=page
+    )
     DIM_PAD = _DIM_PAD
     margin = _MARGIN
+    # Refine: apply the same 20 mm height gate _auto_annotate uses for dim_step
+    # so that bore floors and shallow chamfers don't inflate the corridor.
+    n_steps = len([z for z in step_zs[:3] if (z - bb.min.Z) * SCALE >= 20])
+    gap_fv_sv = max(DIM_PAD, _est_right_strip_depth(n_steps))
 
     fv_hw = x_size * SCALE / 2
     fv_hh = z_size * SCALE / 2
@@ -593,14 +611,16 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     total_h = 2 * margin + 3 * DIM_PAD + z_size * SCALE + y_size * SCALE
     y_offset = max(0.0, (PAGE_H - total_h) / 2)
 
-    total_content_w = 4 * DIM_PAD + x_size * SCALE + y_size * SCALE + bbox_max * SCALE * 0.7
+    total_content_w = (
+        3 * DIM_PAD + gap_fv_sv + x_size * SCALE + y_size * SCALE + bbox_max * SCALE * 0.7
+    )
     x_offset = max(0.0, (PAGE_W - 2 * margin - TB_W - total_content_w) / 2)
 
     FV_X = margin + x_offset + DIM_PAD + fv_hw
     FV_Y = y_offset + margin + DIM_PAD + fv_hh
     PV_X = FV_X
     PV_Y = FV_Y + fv_hh + DIM_PAD + pv_hh
-    SV_X = FV_X + fv_hw + DIM_PAD + sv_hw
+    SV_X = FV_X + fv_hw + gap_fv_sv + sv_hw
     SV_Y = FV_Y
     sv_right = SV_X + sv_hw + DIM_PAD
     tb_top_y = margin + _TB_H
@@ -609,9 +629,6 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     right_avail = max(0.0, iso_right_limit - sv_right)
     ISO_X = sv_right + right_avail / 2
     ISO_Y = PV_Y
-
-    face_zs = analyse_face_levels(part)
-    step_zs = [z for z in face_zs if z > bb.min.Z + 0.6 and z < bb.max.Z - 0.6]
 
     # ------------------------------------------------------------------
     # Strip / zone construction.
@@ -630,7 +647,7 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     pv_bottom_edge = PV_Y - pv_hh  # = fv_top_edge + DIM_PAD
     sv_top_edge = SV_Y + fv_hh  # side view has the same Z height as front
     # Outer limit for fv/pv right strips: must not enter the side view.
-    sv_left_edge = SV_X - sv_hw  # = fv_right_edge + DIM_PAD
+    sv_left_edge = SV_X - sv_hw  # = fv_right_edge + gap_fv_sv
 
     fv_zones = ViewZones(
         right=Strip(fv_right_edge, sv_left_edge, direction=1),
@@ -1465,7 +1482,10 @@ def _add_section_view(dwg, a, axis_letter):
         _log.info("Section A–A skipped (would collide with the title block)")
         return
     if pos_x + half_w > right_limit:
-        _log.info("Section A–A skipped (no room right of the side view)")
+        _log.warning(
+            "Section A–A skipped (no room right of the side view; "
+            "a wider step-dimension corridor may have reduced the available space)"
+        )
         return
 
     big = 4 * a.bbox_max
