@@ -357,17 +357,17 @@ class TestStripZones:
         assert dwg._named["dim_height"].label == "30"
 
     def test_right_strip_outer_limits_tightened_to_iso(self):
-        # After Phase 1: fv.right is bounded by sv_left_edge (not iso_right_limit).
-        # pv.right is iso-tightened; per-callout spatial checks in _annotate_holes
-        # dynamically block labels that would conflict with dim_locy* annotations
-        # that extend into the plan-view Y band (e.g. deep parts with many Y tiers).
-        # sv.right is still tightened to iso_x0 - 4.
-        from build123d import Box, Cylinder
+        # fv.right and pv.right are both bounded by sv_left_edge so bore callout
+        # labels cannot cross into the side view.  sv.right is tightened to the
+        # actual iso view left edge (iso_x0 - 4) by _auto_annotate().
+        # Use a plain box (no holes) so bore callout overhead doesn't push the
+        # iso view right and interfere with the sv tightening check.
+        from build123d import Box
 
         from build123d_drafting import build_drawing
         from build123d_drafting.make_drawing import _iso_bbox
 
-        part = Box(80, 60, 20) - Cylinder(5, 20)
+        part = Box(80, 60, 20)
         dwg = build_drawing(part)
         a = dwg._analysis
         sv_left = a.SV_X - a.sv_hw
@@ -375,9 +375,10 @@ class TestStripZones:
         iso_limit = iso_x0 - 4
         # fv right must not extend past the side view left edge
         assert a.fv_zones.right.outer_limit == pytest.approx(sv_left, abs=0.1)
-        # pv right stays iso-tightened (spatial check handles per-callout conflicts)
-        assert a.pv_zones.right.outer_limit == pytest.approx(iso_limit, abs=0.1)
-        # sv right strip is still iso-tightened
+        # pv right is also bounded by sv_left so bore callout labels cannot
+        # cross dim_locy extension lines in the side view corridor
+        assert a.pv_zones.right.outer_limit == pytest.approx(sv_left, abs=0.1)
+        # sv right strip is iso-tightened
         assert a.sv_zones.right.outer_limit == pytest.approx(iso_limit, abs=0.1)
 
     def test_sv_zones_below_strip_is_active(self):
@@ -572,6 +573,130 @@ class TestDynamicCorridors:
         sv_left = a.SV_X - a.sv_hw
         fv_right = a.FV_X + a.fv_hw
         assert sv_left - fv_right == pytest.approx(expected_gap, abs=0.1)
+
+
+# ---------------------------------------------------------------------------
+# Two-pass layout (#131): bore callout width drives gap_fv_sv
+# ---------------------------------------------------------------------------
+
+
+class TestTwoPassLayout:
+    """Two-pass layout (#131): bore callout widths widen the FV→SV corridor."""
+
+    def test_bore_callout_widens_gap_fv_sv(self):
+        # A part with many small holes generates wide callout labels (e.g.
+        # "4× ⌀15.9 THRU") that need more than _DIM_PAD right of the plan view.
+        # The two-pass layout must size gap_fv_sv >= bore callout depth.
+        from build123d import Box, Cylinder, Pos
+
+        from build123d_drafting import build_drawing
+        from build123d_drafting.features import find_holes
+        from build123d_drafting.make_drawing import _DIM_PAD, _est_bore_callout_width
+
+        # Four identical cylinders → "4× ⌀16 THRU" callout with a count prefix
+        part = (
+            Box(100, 80, 20)
+            - Pos(30, 25, 0) * Cylinder(16, 20)
+            - Pos(-30, 25, 0) * Cylinder(16, 20)
+            - Pos(30, -25, 0) * Cylinder(16, 20)
+            - Pos(-30, -25, 0) * Cylinder(16, 20)
+        )
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        sv_left = a.SV_X - a.sv_hw
+        fv_right = a.FV_X + a.fv_hw
+        actual_gap = sv_left - fv_right
+
+        holes = find_holes(part)
+        bore_depth = _est_bore_callout_width(holes)
+        # bore callout width must exceed DIM_PAD for the test to be meaningful
+        assert bore_depth > _DIM_PAD, (
+            f"bore callout width {bore_depth:.1f} mm must exceed _DIM_PAD={_DIM_PAD} mm"
+        )
+        assert actual_gap >= bore_depth - 0.1, (
+            f"gap_fv_sv={actual_gap:.1f} mm must be >= bore_depth={bore_depth:.1f} mm"
+        )
+
+    def test_plain_box_gap_unchanged(self):
+        # A box with no holes: bore callout depth = 0 → gap_fv_sv stays _DIM_PAD.
+        from build123d import Box
+
+        from build123d_drafting import build_drawing
+        from build123d_drafting.make_drawing import _DIM_PAD
+
+        a = build_drawing(Box(60, 40, 20))._analysis
+        sv_left = a.SV_X - a.sv_hw
+        fv_right = a.FV_X + a.fv_hw
+        assert sv_left - fv_right == pytest.approx(_DIM_PAD, abs=0.1)
+
+    def test_bore_callout_fits_within_gap(self):
+        # Verify actual callout label does not reach sv_left.
+        # The Leader label_bbox right edge must stay left of sv_left.
+        from build123d import Box, Cylinder, Pos
+
+        from build123d_drafting import build_drawing
+
+        part = (
+            Box(100, 80, 20)
+            - Pos(30, 25, 0) * Cylinder(16, 20)
+            - Pos(-30, 25, 0) * Cylinder(16, 20)
+            - Pos(30, -25, 0) * Cylinder(16, 20)
+            - Pos(-30, -25, 0) * Cylinder(16, 20)
+        )
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        sv_left = a.SV_X - a.sv_hw
+        for name, ann in dwg._named.items():
+            if name.startswith("hc_plan") and getattr(ann, "label_bbox", None):
+                lx1 = ann.label_bbox[2]  # right edge of callout label
+                assert lx1 <= sv_left + 0.5, (
+                    f"{name}: label right edge {lx1:.1f} mm exceeds sv_left {sv_left:.1f} mm"
+                )
+
+    def test_bolt_circle_suffix_widens_estimate(self):
+        # BoltCircle callouts carry "EQ SP ON ø… BC" suffix (~34 mm wide).
+        # _est_bore_callout_width must include it when patterns are provided.
+        from build123d import Box, Cylinder, Pos
+
+        from build123d_drafting.features import find_hole_patterns, find_holes
+        from build123d_drafting.make_drawing import _est_bore_callout_width
+
+        # Six ⌀8 holes at equal 60° spacing on R=35 → BoltCircle pattern
+        part = (
+            Box(100, 100, 20)
+            - Pos(35.0, 0.0, 0) * Cylinder(8, 20)
+            - Pos(17.5, 30.31, 0) * Cylinder(8, 20)
+            - Pos(-17.5, 30.31, 0) * Cylinder(8, 20)
+            - Pos(-35.0, 0.0, 0) * Cylinder(8, 20)
+            - Pos(-17.5, -30.31, 0) * Cylinder(8, 20)
+            - Pos(17.5, -30.31, 0) * Cylinder(8, 20)
+        )
+        holes = find_holes(part)
+        patterns = find_hole_patterns(holes)
+
+        width_without = _est_bore_callout_width(holes)
+        width_with = _est_bore_callout_width(holes, patterns=patterns)
+        assert width_with > width_without, (
+            f"BoltCircle suffix should widen estimate: {width_without:.1f} → {width_with:.1f} mm"
+        )
+
+    def test_pv_below_strip_has_slack(self):
+        # pv_zones.below outer_limit = fv_top_edge (not fv_top_edge + 2), giving
+        # 18 mm available vs 16 mm needed for dim_width — no razor-fit (#130).
+        from build123d import Box
+
+        from build123d_drafting import build_drawing
+        from build123d_drafting.make_drawing import _est_pv_below_depth
+
+        part = Box(80, 40, 20)
+        dwg = build_drawing(part)
+        a = dwg._analysis
+        available = a.pv_zones.below.anchor - a.pv_zones.below.outer_limit
+        needed = _est_pv_below_depth()
+        assert available > needed, (
+            f"pv_zones.below available {available:.1f} mm must exceed needed {needed:.1f} mm"
+        )
+        assert "dim_width" in dwg._named, "dim_width must not be skipped"
 
 
 # ---------------------------------------------------------------------------
