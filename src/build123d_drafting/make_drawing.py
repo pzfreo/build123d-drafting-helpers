@@ -1983,11 +1983,12 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
             _add(view, i, tip, elbow, "right", callout)
             _add_furniture(dwg, a, view, i, pattern, to_page)
 
+        assert edge_left is not None or not left_queue  # populated only when edge_left is set
         for i, ((holes, callout, pattern, _, rep), elbow_y) in enumerate(
             zip(left_queue, left_ys, strict=True), start=len(right_queue)
         ):
             centre = to_page(rep)
-            elbow = (edge_left - elbow_dx, elbow_y)
+            elbow = (edge_left - elbow_dx, elbow_y)  # type: ignore[operator]
             tip = _rim_tip(centre, elbow, holes)
             tip = (max(tip[0], edge_left + draft.arrow_length), tip[1])
             _add(view, i, tip, elbow, "left", callout)
