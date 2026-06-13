@@ -28,12 +28,14 @@ from build123d import (
     Box,
     Color,
     Compound,
+    Edge,
     ExportDXF,
     ExportSVG,
     LineType,
     Location,
     Pos,
     Shape,
+    Vector,
     import_step,
 )
 from OCP.BRepAdaptor import BRepAdaptor_Surface
@@ -1664,8 +1666,33 @@ def _add_section_view(dwg, a, axis_letter):
                 ext_x1 = max(ext_x1, cb.max.X)
     x0, x1 = ext_x0 - 4, ext_x1 + 4
     dwg.add(Centerline((x0, y_page, 0), (x1, y_page, 0)), "section_line")
-    # letters sit above the line's ends — callout leaders to the cut row's
-    # holes run along the same y, and the letters must stay clear of them
+
+    # Cutting-plane end indicators: perpendicular wings with open arrowheads
+    # pointing in the viewing direction (−Y = toward the front/section view).
+    # Per ISO 128-44: thick lines at cut ends, arrows show look direction.
+    arrow_sz = dwg.draft.arrow_length
+    wing_h = 2.5 * arrow_sz  # perpendicular stub length
+    for x_end, side in ((x0, "left"), (x1, "right")):
+        tip_y = y_page - wing_h
+        dwg.add(
+            Compound(children=[Edge.make_line(Vector(x_end, y_page, 0), Vector(x_end, tip_y, 0))]),
+            f"section_wing_{side}",
+        )
+        # Two barbs forming an open arrowhead at the tip, opening upward
+        barbs = []
+        for da in (math.radians(25), math.radians(-25)):
+            angle = -math.pi / 2 + da  # base direction = −Y (downward)
+            barbs.append(
+                Edge.make_line(
+                    Vector(x_end, tip_y, 0),
+                    Vector(
+                        x_end + arrow_sz * math.cos(angle), tip_y + arrow_sz * math.sin(angle), 0
+                    ),
+                )
+            )
+        dwg.add(Compound(children=barbs), f"section_arrow_{side}")
+
+    # 'A' letters sit above the line ends, clear of any callout leaders
     lift = dwg.draft.font_size * 1.4
     dwg.add(Note("A", (x0 - 3, y_page + lift), dwg.draft), "section_a_left")
     dwg.add(Note("A", (x1 + 3, y_page + lift), dwg.draft), "section_a_right")
