@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## v0.8.0 — 2026-06-13
+
+Two-pass Cassowary bore-callout layout (#123, PR #124): replaces the old
+greedy single-pass ladder with a boundary-assignment pass (nearest left/right
+strip per hole group) followed by a Cassowary constraint-solver Y-placement
+pass. Leaders stay within the view's projected Y extent, are at least
+`min_gap` apart, and land near their natural (hole-centre) Y position.
+Adds `kiwisolver>=1.4,<2` as a runtime dependency.
+
+### Changed
+
+- **Bore-callout elbow offset** reduced from `0.6 × DIM_PAD` (~10.8 mm) to
+  `draft.arrow_length` (~2.7 mm). Elbows sit just past the view boundary to
+  clear section-line extension lines; shafts no longer cut deeply across the
+  view outline.
+- **Overflow handling**: when the solver cannot fit all callouts in the
+  available Y range it now places the longest feasible prefix (greedy
+  fallback) rather than dropping the entire strip.
+- **Side-view right limit** correctly uses `PAGE_W − margin` for callouts
+  below the iso view, restoring the pre-refactor behaviour on drawings where
+  `iso_above_tb=False`.
+
+### Added
+
+- `kiwisolver>=1.4,<2` runtime dependency (Cassowary constraint solver).
+- Internal helpers `_solve_strip_ys` and `_greedy_strip_ys` (with
+  `prefix=False` / `prefix=True` modes).
+
 ## v0.7.0 — 2026-06-12
 
 The zero-LLM prismatic-drawing roadmap (#91–#95; PRs #97, #98, #99): a

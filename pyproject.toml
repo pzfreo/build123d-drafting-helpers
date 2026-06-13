@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "build123d-drafting-helpers"
-version = "0.7.0"
+version = "0.8.0"
 description = "Third-party drawing-annotation helpers for build123d — native BaseSketchObject dimensions, leaders, GD&T frames"
 readme = "README.md"
 license = { file = "LICENSE" }
