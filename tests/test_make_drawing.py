@@ -177,6 +177,12 @@ class TestScaleMinimum:
         result = make_drawing(part, out=str(tmp_path / "out"), scale=0.2)
         assert result is not None
 
+    def test_auto_scale_thin_part_does_not_raise(self, tmp_path):
+        # Auto-selected scale for a thin plate must not trigger the SIGABRT guard.
+        part = Box(80, 50, 8)
+        result = make_drawing(part, out=str(tmp_path / "out"))
+        assert result is not None
+
 
 class TestStripZones:
     """Unit tests for the Strip / ViewZones layout primitives (issue #105)."""
