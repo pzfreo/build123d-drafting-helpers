@@ -1500,6 +1500,50 @@ def lint_drawing(
     if view_shapes is not None:
         _lint_view_shapes(view_shapes, items, issues, page_bbox=page_bbox)
 
+    # Principal envelope completeness check: verify each bbox extent appears
+    # as a dimension label.  Only runs when part_bbox is supplied.
+    if part_bbox is not None:
+        covered: set[float] = set()
+        for item in items:
+            if getattr(item, "measured_length", None) is not None:
+                lbl = getattr(item, "label", "") or ""
+                nums = re.findall(r"\d+\.?\d*", lbl.split("±")[0].split("+")[0].lstrip("ø⌀Rr"))
+                rep = re.match(r"\s*(\d+)\s*[×x]\s*(\d+\.?\d*)\s*$", lbl)
+                if nums:
+                    try:
+                        covered.add(
+                            int(rep.group(1)) * float(rep.group(2)) if rep else float(nums[0])
+                        )
+                    except ValueError:
+                        pass
+
+        def _check_extent(axis: str, page_extent: float) -> None:
+            world_ext = page_extent / drawing_scale
+            tol = max(0.5, world_ext * 0.001)
+            if not any(abs(v - world_ext) <= tol for v in covered):
+                issues.append(
+                    LintIssue(
+                        severity="warning",
+                        message=(
+                            f"no dimension found for {axis} extent ({world_ext:.4g} mm)"
+                            " — add dim_width, dim_depth, or equivalent"
+                        ),
+                        code="missing_principal_dimension",
+                    )
+                )
+
+        x_ext = part_bbox.max.X - part_bbox.min.X
+        y_ext = part_bbox.max.Y - part_bbox.min.Y
+        x_approx_y = (
+            max(x_ext, y_ext) > 1e-6
+            and abs(x_ext - y_ext) / max(x_ext, y_ext) < 0.05
+        )
+        _check_extent("X", x_ext)
+        if not x_approx_y:
+            _check_extent("Y", y_ext)
+        if hasattr(part_bbox.min, "Z") and hasattr(part_bbox.max, "Z"):
+            _check_extent("Z", part_bbox.max.Z - part_bbox.min.Z)
+
     return issues
 
 
