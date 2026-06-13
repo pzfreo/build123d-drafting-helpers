@@ -456,10 +456,10 @@ class TestDepthEstimators:
         # A Strip whose available width equals _est_right_strip_depth(n) must
         # accept exactly n+1 allocations (dim_height + n dim_steps).
         from build123d_drafting.make_drawing import (
-            Strip,
             _SLOT_DIM_HEIGHT,
             _SLOT_DIM_STEP,
             _STRIP_GAP,
+            Strip,
             _est_right_strip_depth,
         )
 
@@ -477,9 +477,9 @@ class TestDepthEstimators:
     def test_pv_below_depth_fits_in_exact_corridor(self):
         # A Strip of _est_pv_below_depth() width must accept one dim_width allocation.
         from build123d_drafting.make_drawing import (
-            Strip,
             _SLOT_DIM_WIDTH,
             _STRIP_GAP,
+            Strip,
             _est_pv_below_depth,
         )
 
