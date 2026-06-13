@@ -616,6 +616,102 @@ class TestLintDrawing:
 
 
 # ---------------------------------------------------------------------------
+# Principal envelope completeness check (issue #106)
+# ---------------------------------------------------------------------------
+
+
+class TestMissingPrincipalDimension:
+    class _BBox2D:
+        """Minimal 2D part_bbox stub (page coordinates at drawing_scale=1)."""
+
+        class _pt:
+            pass
+
+        def __init__(self, x_ext, y_ext):
+            self.min = self._pt()
+            self.max = self._pt()
+            self.min.X, self.max.X = 0.0, float(x_ext)
+            self.min.Y, self.max.Y = 0.0, float(y_ext)
+
+    class _BBox3D(_BBox2D):
+        """3D variant that also carries a Z extent."""
+
+        def __init__(self, x_ext, y_ext, z_ext):
+            super().__init__(x_ext, y_ext)
+            self.min.Z, self.max.Z = 0.0, float(z_ext)
+
+    def _dim(self, label, draft):
+        from build123d_drafting import Dimension
+
+        return Dimension((0, 0, 0), (10, 0, 0), "above", 5, draft, label=label)
+
+    def test_no_dims_both_extents_flagged(self, draft):
+        bbox = self._BBox2D(160, 90)  # 160×90 mm in page space (drawing_scale=1)
+        issues = lint_drawing([], part_bbox=bbox)
+        codes = [i.code for i in issues]
+        assert codes.count("missing_principal_dimension") == 2
+
+    def test_x_dim_present_only_y_flagged(self, draft):
+        bbox = self._BBox2D(160, 90)
+        dim_x = self._dim("160", draft)
+        issues = lint_drawing([dim_x], part_bbox=bbox)
+        missing = [i for i in issues if i.code == "missing_principal_dimension"]
+        assert len(missing) == 1
+        assert "Y" in missing[0].message
+
+    def test_both_dims_present_no_warning(self, draft):
+        bbox = self._BBox2D(160, 90)
+        dim_x = self._dim("160", draft)
+        dim_y = self._dim("90", draft)
+        issues = [
+            i
+            for i in lint_drawing([dim_x, dim_y], part_bbox=bbox)
+            if i.code == "missing_principal_dimension"
+        ]
+        assert issues == []
+
+    def test_square_part_only_one_required(self, draft):
+        # X ≈ Y within 5 % — only one needs to be present
+        bbox = self._BBox2D(100, 102)
+        dim_x = self._dim("100", draft)
+        issues = [
+            i
+            for i in lint_drawing([dim_x], part_bbox=bbox)
+            if i.code == "missing_principal_dimension"
+        ]
+        assert issues == []
+
+    def test_z_extent_checked_when_available(self, draft):
+        bbox = self._BBox3D(160, 90, 30)
+        dim_x = self._dim("160", draft)
+        dim_y = self._dim("90", draft)
+        issues = [
+            i
+            for i in lint_drawing([dim_x, dim_y], part_bbox=bbox)
+            if i.code == "missing_principal_dimension"
+        ]
+        assert len(issues) == 1
+        assert "Z" in issues[0].message
+
+    def test_drawing_scale_applied(self, draft):
+        # part_bbox in page coords at 0.2 scale → world extents are ×5
+        bbox = self._BBox2D(160, 90)  # world: 800×450 mm
+        dim = self._dim("800", draft)  # label in world-mm
+        issues = [
+            i
+            for i in lint_drawing([dim], part_bbox=bbox, drawing_scale=0.2)
+            if i.code == "missing_principal_dimension"
+        ]
+        # X covered; Y (450) not covered
+        assert len(issues) == 1
+        assert "Y" in issues[0].message
+
+    def test_no_part_bbox_no_check(self, draft):
+        issues = [i for i in lint_drawing([]) if i.code == "missing_principal_dimension"]
+        assert issues == []
+
+
+# ---------------------------------------------------------------------------
 # drawing_scale (issue #147): N:1 drawings without false label_vs_measured
 # ---------------------------------------------------------------------------
 
