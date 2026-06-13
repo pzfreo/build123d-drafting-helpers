@@ -298,26 +298,31 @@ class TestStripZones:
         assert all(d.dim_level_y > side_top for d in locy_dims)
         assert a.sv_zones.above.depth_used > 0
 
-    def test_dim_step_clipped_in_phase1_narrow_corridor(self):
-        # Phase 1 reduces fv_zones.right to the 18 mm inter-view corridor.
-        # dim_height (gap=8 + slot=10 = 18 mm) fills it exactly; dim_step
-        # (slot=14 mm) can never fit.  This test documents that current
-        # behaviour: dim_step_N must NOT be generated until Phase 3 widens
-        # the corridor dynamically.  If dim_step_0 reappears without the
-        # corridor being widened, it would land inside the side view.
+    def test_dim_step_placed_after_phase3_corridor_widening(self):
+        # Phase 3 widens fv_zones.right dynamically for stepped parts.
+        # A part with one step face gets gap_fv_sv = 36 mm (vs 18 mm fixed),
+        # which is enough for dim_height (10 mm) + spacing (4 mm) + dim_step (14 mm).
+        # Both annotations must now appear without overlapping the side view.
         from build123d import Box, Pos
 
         from build123d_drafting import build_drawing
+        from build123d_drafting.make_drawing import _est_right_strip_depth
 
         part = Box(40, 12, 40) - Pos(10, 0, 20) * Box(20, 12, 20)
         dwg = build_drawing(part)
-        # dim_height must still be present
+        a = dwg._analysis
+        # dim_height and at least one dim_step must be generated
         assert "dim_height" in dwg._named
-        # dim_step_N must be absent — the corridor is too narrow (Phase 1 intent)
         step_dims = [n for n in dwg._named if n.startswith("dim_step")]
-        assert step_dims == [], (
-            f"dim_step annotations appeared before Phase 3 corridor widening: {step_dims}"
-        )
+        assert len(step_dims) >= 1, "dim_step must appear after Phase 3 corridor widening"
+        # The FV→SV gap must equal the estimator value (not the fixed _DIM_PAD)
+        n = min(len(a.step_zs), 3)
+        expected_gap = _est_right_strip_depth(n)
+        sv_left = a.SV_X - a.sv_hw
+        fv_right = a.FV_X + a.fv_hw
+        assert sv_left - fv_right == pytest.approx(expected_gap, abs=0.1)
+        # Annotations must not enter the side view geometry
+        assert sv_left - fv_right > 0
 
     def test_fv_right_outer_limit_does_not_enter_side_view(self):
         # Phase 1: fv_zones.right outer_limit must be <= the side view left edge.
@@ -486,6 +491,67 @@ class TestDepthEstimators:
         est = _est_pv_below_depth()
         s = Strip(anchor=100.0, outer_limit=100.0 - est, direction=-1, gap=_STRIP_GAP)
         assert s.allocate(_SLOT_DIM_WIDTH) is not None, "dim_width must fit in pv_below corridor"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 (#118): dynamic FV→SV corridor
+# ---------------------------------------------------------------------------
+
+
+class TestDynamicCorridors:
+    """Phase 3 (#118): SV_X and _fits() use the depth estimator for the FV→SV gap."""
+
+    def test_fits_widens_required_space_for_stepped_part(self):
+        # x=5, y=100, z=100 at 1:1 on A3 (420×297, tb=150):
+        #   n_steps=0 (gap=18): w=417 ≤ 420 → direct fit
+        #   n_steps=3 (gap=72): w=471 > 420; views_bottom=39.5 < 45 so
+        #     the iso-over-title-block fallback cannot apply → False
+        from build123d_drafting.make_drawing import _fits
+
+        assert _fits(5.0, 100.0, 100.0, 1.0, 420.0, 297.0, 150.0, n_steps=0)
+        assert not _fits(5.0, 100.0, 100.0, 1.0, 420.0, 297.0, 150.0, n_steps=3)
+
+    def test_fits_zero_steps_same_as_default(self):
+        # n_steps=0 must produce the same result as the old signature (no kwarg).
+        from build123d_drafting.make_drawing import _fits
+
+        page_w, page_h, tb = 297.0, 210.0, 120.0
+        scale, x_size, y_size, z_size = 1.0, 20.0, 20.0, 20.0
+        assert _fits(x_size, y_size, z_size, scale, page_w, page_h, tb, n_steps=0) == _fits(
+            x_size, y_size, z_size, scale, page_w, page_h, tb
+        )
+
+    def test_gap_fv_sv_equals_dim_pad_for_flat_part(self):
+        # A plain box (no step faces) → sv_left - fv_right == _DIM_PAD.
+        from build123d import Box
+
+        from build123d_drafting import build_drawing
+        from build123d_drafting.make_drawing import _DIM_PAD
+
+        a = build_drawing(Box(60, 40, 20))._analysis
+        assert len(a.step_zs) == 0
+        sv_left = a.SV_X - a.sv_hw
+        fv_right = a.FV_X + a.fv_hw
+        assert sv_left - fv_right == pytest.approx(_DIM_PAD, abs=0.1)
+
+    def test_gap_fv_sv_widens_for_stepped_part(self):
+        # A part with one intermediate step face gets gap = _est_right_strip_depth(1) = 36 mm.
+        from build123d import Box, Location
+
+        from build123d_drafting import build_drawing
+        from build123d_drafting.make_drawing import _est_right_strip_depth
+
+        # Carve the top-right quadrant from a 60×40×30 box to expose a step at Z=0.
+        cutout = Box(30, 40, 15).move(Location((15, 0, 7.5)))
+        part = Box(60, 40, 30) - cutout
+
+        a = build_drawing(part)._analysis
+        n = min(len(a.step_zs), 3)
+        assert n >= 1, "expected at least one step face in stepped part"
+        expected_gap = _est_right_strip_depth(n)
+        sv_left = a.SV_X - a.sv_hw
+        fv_right = a.FV_X + a.fv_hw
+        assert sv_left - fv_right == pytest.approx(expected_gap, abs=0.1)
 
 
 # ---------------------------------------------------------------------------
