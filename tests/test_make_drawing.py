@@ -534,6 +534,19 @@ class TestDynamicCorridors:
         fv_right = a.FV_X + a.fv_hw
         assert sv_left - fv_right == pytest.approx(_DIM_PAD, abs=0.1)
 
+    def test_choose_scale_picks_larger_page_for_deep_step_corridor(self):
+        # With n_steps=0, x=5 y=z=100 fits A3 at 1:1 (420 mm wide).
+        # With n_steps=3, gap_fv_sv jumps to 72 mm — A3 no longer fits and
+        # choose_scale must return A2.  This verifies that the conservative
+        # n_steps_ub path in _analyse() ensures the page is never too small.
+        from build123d_drafting.make_drawing import choose_scale
+
+        _, page_w_flat, _, _ = choose_scale(5.0, 100.0, 100.0, n_steps=0)
+        _, page_w_deep, _, _ = choose_scale(5.0, 100.0, 100.0, n_steps=3)
+        assert page_w_deep > page_w_flat, (
+            "n_steps=3 corridor must force a larger page than n_steps=0"
+        )
+
     def test_gap_fv_sv_widens_for_stepped_part(self):
         # A part with one step ≥20 mm tall (so dim_step is actually placed) gets
         # gap = _est_right_strip_depth(1) = 36 mm.  The ≥20 mm gate matches what

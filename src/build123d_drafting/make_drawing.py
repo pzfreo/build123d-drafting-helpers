@@ -587,12 +587,20 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     face_zs = analyse_face_levels(part)
     step_zs = [z for z in face_zs if z > bb.min.Z + 0.6 and z < bb.max.Z - 0.6]
 
-    SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(x_size, y_size, z_size, scale=scale, page=page)
+    # Conservative upper bound for page selection: count all candidate step
+    # faces without the SCALE-dependent 20 mm gate (SCALE is not yet known).
+    # Passing an over-estimate is safe — choose_scale picks a slightly larger
+    # page than necessary in the rare case some faces fail the gate; it never
+    # picks a page that is too small for the actual wider corridor.
+    n_steps_ub = min(len(step_zs[:3]), 3)
+    SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(
+        x_size, y_size, z_size, n_steps=n_steps_ub, scale=scale, page=page
+    )
     DIM_PAD = _DIM_PAD
     margin = _MARGIN
-    # Apply the same 20 mm height gate _auto_annotate uses for dim_step: a bore
-    # floor or shallow chamfer face must not inflate the corridor estimate.
-    n_steps = min(len([z for z in step_zs[:3] if (z - bb.min.Z) * SCALE >= 20]), 3)
+    # Refine: apply the same 20 mm height gate _auto_annotate uses for dim_step
+    # so that bore floors and shallow chamfers don't inflate the corridor.
+    n_steps = len([z for z in step_zs[:3] if (z - bb.min.Z) * SCALE >= 20])
     gap_fv_sv = max(DIM_PAD, _est_right_strip_depth(n_steps))
 
     fv_hw = x_size * SCALE / 2
@@ -1474,7 +1482,10 @@ def _add_section_view(dwg, a, axis_letter):
         _log.info("Section A–A skipped (would collide with the title block)")
         return
     if pos_x + half_w > right_limit:
-        _log.info("Section A–A skipped (no room right of the side view)")
+        _log.warning(
+            "Section A–A skipped (no room right of the side view; "
+            "a wider step-dimension corridor may have reduced the available space)"
+        )
         return
 
     big = 4 * a.bbox_max
