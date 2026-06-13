@@ -75,6 +75,10 @@ _TB_W = 150.0
 _MARGIN = 10.0
 _DIM_PAD = 18.0
 _TB_H = 35.0
+# Minimum acceptable projected view dimension (page-mm).  Below this, annotation
+# geometry (leader wires, centre marks, bore callout elbows) can degenerate and
+# cause OCCT Standard_DomainError / SIGABRT (#129).
+_MIN_VIEW_MM = 10.0
 
 _PAGE_SIZES = {
     "A4": (297.0, 210.0),
@@ -724,6 +728,22 @@ def _analyse(step_file, title, number, tolerance, drawn_by, out, scale=None, pag
     SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(
         x_size, y_size, z_size, n_steps=n_steps_ub, scale=scale, page=page, strips=strips_ub
     )
+    if scale is not None:
+        auto_scale, _, _, _ = choose_scale(
+            x_size, y_size, z_size, n_steps=n_steps_ub, scale=None, page=page, strips=strips_ub
+        )
+        if SCALE < auto_scale:
+            min_dim = min(x_size, y_size, z_size)
+            min_view = min_dim * SCALE
+            if min_view < _MIN_VIEW_MM:
+                safe = _MIN_VIEW_MM / min_dim
+                raise ValueError(
+                    f"scale {SCALE!r} projects the smallest part dimension "
+                    f"({min_dim:.0f} mm) to {min_view:.1f} mm — "
+                    f"annotation geometry degenerates below {_MIN_VIEW_MM:.0f} mm "
+                    f"(OCCT Standard_DomainError / SIGABRT). "
+                    f"Use scale ≥ {safe:.3g} or omit --scale for automatic selection."
+                )
     DIM_PAD = _DIM_PAD
     margin = _MARGIN
     # Refine: apply the same 20 mm height gate _auto_annotate uses for dim_step.
