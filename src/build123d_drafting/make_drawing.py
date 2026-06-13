@@ -393,6 +393,47 @@ def _parse_page(page) -> tuple:
     return pw, ph, _tb_width(pw)
 
 
+_STRIP_GAP = 8.0
+_STRIP_SPACING = 4.0
+
+# Slot sizes for the annotations that allocate from fv/pv/sv strips.
+# Shared between the depth estimators below and the allocate() call-sites in
+# _auto_annotate() so that a slot-size change is automatically reflected in
+# the estimator-driven corridor widths.
+_SLOT_DIM_HEIGHT = 10.0  # fv_zones.right: overall height dimension
+_SLOT_DIM_STEP = 14.0  # fv_zones.right: step-height dimension
+_SLOT_DIM_WIDTH = 8.0  # pv_zones.below: overall width dimension
+_SLOT_DIM_DEPTH = 8.0  # sv_zones.below: overall depth dimension
+
+# ---------------------------------------------------------------------------
+# Annotation depth estimators (Phase 2 of #118)
+#
+# These pure functions estimate the strip depth (mm) required for each
+# inter-view boundary BEFORE view positions are fixed.  They are intentionally
+# conservative (may over-estimate slightly).  Used by _analyse() (Phase 3) to
+# set minimum corridor widths, and by _fits() (Phase 3) for consistent sheet
+# selection.
+# ---------------------------------------------------------------------------
+
+
+def _est_right_strip_depth(n_steps: int) -> float:
+    """Depth needed to the right of the front view.
+
+    Always includes dim_height (1 slot).  Up to *n_steps* dim_step slots
+    (capped at 3) follow if any step levels are present.  Returns the minimum
+    corridor width (from view edge to outer_limit) that makes all those
+    allocations succeed.
+    """
+    n = 1 + min(max(n_steps, 0), 3)  # dim_height + up to 3 step dims
+    # gap + dim_height + (n-1) step slots each preceded by one spacing
+    return _STRIP_GAP + _SLOT_DIM_HEIGHT + (n - 1) * (_STRIP_SPACING + _SLOT_DIM_STEP)
+
+
+def _est_pv_below_depth() -> float:
+    """Depth needed below the plan view: dim_width (always one slot)."""
+    return _STRIP_GAP + _SLOT_DIM_WIDTH
+
+
 def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w) -> bool:
     """True if the 4-view layout fits the page at this scale.
 
@@ -1007,7 +1048,7 @@ def _auto_annotate(dwg, a):
     # subsequent dim witnesses from the previous dim's line, so extension
     # lines are adjacent rather than coincident.
     _right_ladder = FX(a.bb.max.X) + 2
-    _px = a.fv_zones.right.allocate(10.0)
+    _px = a.fv_zones.right.allocate(_SLOT_DIM_HEIGHT)
     if _px is not None:
         dwg.add(
             Dimension(
@@ -1113,7 +1154,7 @@ def _auto_annotate(dwg, a):
     # each step witnesses from the previous dim's line (_right_ladder) so
     # extension lines are adjacent rather than coincident
     for col, z in enumerate([z for z in a.step_zs[:3] if (z - a.bb.min.Z) * a.SCALE >= 20]):
-        _px = a.fv_zones.right.allocate(14.0)
+        _px = a.fv_zones.right.allocate(_SLOT_DIM_STEP)
         if _px is None:
             _log.warning("dim_step_%d skipped: fv_zones.right strip full", col)
             break
@@ -1133,7 +1174,7 @@ def _auto_annotate(dwg, a):
     # Width (non-round / non-square parts only) — routed through pv_zones.below
     if abs(a.x_size - a.y_size) > max(a.x_size, a.y_size) * 0.05:
         _below_witness = PY(a.bb.min.Y) - 2
-        _py = a.pv_zones.below.allocate(8.0)
+        _py = a.pv_zones.below.allocate(_SLOT_DIM_WIDTH)
         if _py is not None:
             dwg.add(
                 Dimension(
@@ -1152,7 +1193,7 @@ def _auto_annotate(dwg, a):
     # Depth (Y envelope) — same guard as dim_width; routed through sv_zones.below
     if abs(a.x_size - a.y_size) > max(a.x_size, a.y_size) * 0.05:
         _below_witness_d = SZ(a.bb.min.Z) - 2
-        _pd = a.sv_zones.below.allocate(8.0)
+        _pd = a.sv_zones.below.allocate(_SLOT_DIM_DEPTH)
         if _pd is not None:
             dwg.add(
                 Dimension(

@@ -410,6 +410,85 @@ class TestStripZones:
 
 
 # ---------------------------------------------------------------------------
+# Phase 2 annotation depth estimators (#118)
+# ---------------------------------------------------------------------------
+
+
+class TestDepthEstimators:
+    """Pure-function tests for _est_right_strip_depth / _est_pv_below_depth."""
+
+    def test_right_depth_no_steps_equals_dim_pad(self):
+        from build123d_drafting.make_drawing import _DIM_PAD, _est_right_strip_depth
+
+        # 0 steps → dim_height only → gap(8) + slot(10) = 18 = _DIM_PAD
+        assert _est_right_strip_depth(0) == pytest.approx(_DIM_PAD, abs=0.01)
+
+    def test_right_depth_one_step(self):
+        from build123d_drafting.make_drawing import _est_right_strip_depth
+
+        # dim_height (10) + spacing (4) + 1×dim_step (14) = 8 + 10 + 4 + 14 = 36
+        assert _est_right_strip_depth(1) == pytest.approx(36.0, abs=0.01)
+
+    def test_right_depth_three_steps(self):
+        from build123d_drafting.make_drawing import _est_right_strip_depth
+
+        # dim_height (10) + 3×dim_step (14 each) + 3×spacing (4 each) = 8+10+4+14+4+14+4+14 = 72
+        assert _est_right_strip_depth(3) == pytest.approx(72.0, abs=0.01)
+
+    def test_right_depth_capped_at_three_steps(self):
+        from build123d_drafting.make_drawing import _est_right_strip_depth
+
+        # n_steps is capped at 3 in the estimator
+        assert _est_right_strip_depth(3) == _est_right_strip_depth(10)
+
+    def test_right_depth_increases_with_steps(self):
+        from build123d_drafting.make_drawing import _est_right_strip_depth
+
+        assert _est_right_strip_depth(0) < _est_right_strip_depth(1) < _est_right_strip_depth(3)
+
+    def test_pv_below_depth(self):
+        from build123d_drafting.make_drawing import _est_pv_below_depth
+
+        # gap(8) + dim_width slot(8) = 16
+        assert _est_pv_below_depth() == pytest.approx(16.0, abs=0.01)
+
+    def test_right_depth_fits_in_exact_corridor(self):
+        # A Strip whose available width equals _est_right_strip_depth(n) must
+        # accept exactly n+1 allocations (dim_height + n dim_steps).
+        from build123d_drafting.make_drawing import (
+            _SLOT_DIM_HEIGHT,
+            _SLOT_DIM_STEP,
+            _STRIP_GAP,
+            Strip,
+            _est_right_strip_depth,
+        )
+
+        for n_steps in (0, 1, 3):
+            est = _est_right_strip_depth(n_steps)
+            s = Strip(anchor=0.0, outer_limit=est, direction=1, gap=_STRIP_GAP)
+            assert s.allocate(_SLOT_DIM_HEIGHT) is not None, (
+                f"dim_height must fit for n_steps={n_steps}"
+            )
+            for i in range(n_steps):
+                assert s.allocate(_SLOT_DIM_STEP) is not None, (
+                    f"dim_step_{i} must fit for n_steps={n_steps}"
+                )
+
+    def test_pv_below_depth_fits_in_exact_corridor(self):
+        # A Strip of _est_pv_below_depth() width must accept one dim_width allocation.
+        from build123d_drafting.make_drawing import (
+            _SLOT_DIM_WIDTH,
+            _STRIP_GAP,
+            Strip,
+            _est_pv_below_depth,
+        )
+
+        est = _est_pv_below_depth()
+        s = Strip(anchor=100.0, outer_limit=100.0 - est, direction=-1, gap=_STRIP_GAP)
+        assert s.allocate(_SLOT_DIM_WIDTH) is not None, "dim_width must fit in pv_below corridor"
+
+
+# ---------------------------------------------------------------------------
 # Integration test — requires build123d + OCP (slow)
 # ---------------------------------------------------------------------------
 
