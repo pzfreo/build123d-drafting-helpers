@@ -1328,9 +1328,9 @@ class TestAutoHoleAnnotations:
         assert "section_line" not in dwg._named
         hc = dwg._named.get("hc_plan0")
         assert hc is not None
-        plan_right = dwg._analysis.PV_X + (
-            dwg._analysis.bb.max.X - dwg._analysis.cx
-        ) * dwg._analysis.SCALE
+        plan_right = (
+            dwg._analysis.PV_X + (dwg._analysis.bb.max.X - dwg._analysis.cx) * dwg._analysis.SCALE
+        )
         elbow_x = hc.elbow[0]
         assert abs(elbow_x - plan_right) < 0.5  # elbow at boundary, not past it
 
