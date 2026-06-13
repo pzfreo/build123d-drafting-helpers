@@ -393,6 +393,39 @@ def _parse_page(page) -> tuple:
     return pw, ph, _tb_width(pw)
 
 
+_STRIP_GAP = Strip.__dataclass_fields__["gap"].default  # 8.0
+_STRIP_SPACING = Strip.__dataclass_fields__["spacing"].default  # 4.0
+
+# ---------------------------------------------------------------------------
+# Annotation depth estimators (Phase 2 of #118)
+#
+# These pure functions estimate the strip depth (mm) required for each
+# inter-view boundary BEFORE view positions are fixed.  They are intentionally
+# conservative (may over-estimate slightly).  Used by _analyse() (Phase 3) to
+# set minimum corridor widths, and by _fits() (Phase 3) for consistent sheet
+# selection.
+# ---------------------------------------------------------------------------
+
+
+def _est_right_strip_depth(n_steps: int) -> float:
+    """Depth needed to the right of the front view.
+
+    Always includes dim_height (1 slot of 10 mm).
+    Up to *n_steps* dim_step slots (14 mm each) follow if any step levels exist.
+    """
+    n = 1 + min(n_steps, 3)  # dim_height + at most 3 step dims
+    first_slot = 10.0
+    step_slot = 14.0
+    if n == 1:
+        return _STRIP_GAP + first_slot
+    return _STRIP_GAP + first_slot + _STRIP_SPACING + (n - 1) * step_slot + (n - 2) * _STRIP_SPACING
+
+
+def _est_pv_below_depth() -> float:
+    """Depth needed below the plan view: dim_width (always 1 slot of 8 mm)."""
+    return _STRIP_GAP + 8.0
+
+
 def _fits(x_size, y_size, z_size, scale, page_w, page_h, tb_w) -> bool:
     """True if the 4-view layout fits the page at this scale.
 
