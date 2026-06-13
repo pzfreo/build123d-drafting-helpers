@@ -1631,6 +1631,19 @@ def _greedy_strip_ys(natural_ys, min_gap, y_min, y_max):
     return result
 
 
+def _greedy_strip_ys_prefix(natural_ys, min_gap, y_min, y_max):
+    """Greedy Y-placement returning the longest feasible prefix (never None)."""
+    result = []
+    prev = y_min - min_gap
+    for ny in natural_ys:
+        y = max(prev + min_gap, ny)
+        if y > y_max:
+            break
+        result.append(y)
+        prev = y
+    return result
+
+
 def _solve_strip_ys(natural_ys, min_gap, y_min, y_max):
     """Cassowary Y-placement for bore-callout leaders sharing one strip.
 
@@ -1660,7 +1673,7 @@ def _solve_strip_ys(natural_ys, min_gap, y_min, y_max):
             solver.addConstraint((v <= y_max) | "required")
         for i in range(n - 1):
             solver.addConstraint((ys[i + 1] - ys[i] >= min_gap) | "required")
-        for v, ny in zip(ys, natural_ys):
+        for v, ny in zip(ys, natural_ys, strict=True):
             solver.addConstraint((v == ny) | "strong")
         solver.updateVariables()
         return [v.value() for v in ys]
@@ -1820,8 +1833,8 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
         # Pass 2 — Y placement via Cassowary: leaders stay within the view's
         #   Y extent, are at least min_gap apart, and stay near their natural
         #   (hole-centre) Y position.
-        # Elbow sits exactly on the view boundary so the shaft never crosses
-        # the view outline.
+        # Elbow sits one arrow_length past the view boundary to clear the
+        # section-line extension lines (which overhang by ~arrow_length + gap).
         edge_right = plan_right if view == "plan" else side_right
         edge_left = plan_left if view == "plan" else None
 
@@ -1857,7 +1870,14 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
                 rep_l = centre_l = None
                 d_left = float("inf")
 
-            can_right = (edge_right + elbow_dx) + gap + w <= right_strip.outer_limit
+            # Side callouts below the iso view (always the case in practice) may
+            # reach the full page width; plan callouts are constrained by the iso.
+            right_limit = (
+                right_strip.outer_limit
+                if view == "plan" or centre_r[1] >= iso_y0 - draft.font_size
+                else a.PAGE_W - a.margin
+            )
+            can_right = (edge_right + elbow_dx) + gap + w <= right_limit
             can_left = edge_left is not None and (edge_left - elbow_dx) - gap - w >= a.margin
 
             if not can_right and not can_left:
@@ -1878,20 +1898,28 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
         left_ys = _solve_strip_ys([s[3] for s in left_queue], min_gap, y_min, y_max)
 
         if right_ys is None and right_queue:
-            _log.warning(
-                "plan/side right strip: %d bore callouts don't fit, skipping",
-                len(right_queue),
-            )
-            right_queue, right_ys = [], []
+            right_ys = _greedy_strip_ys_prefix([s[3] for s in right_queue], min_gap, y_min, y_max)
+            n_drop = len(right_queue) - len(right_ys)
+            if n_drop:
+                _log.warning(
+                    "plan/side right strip: %d of %d bore callouts skipped (strip full)",
+                    n_drop,
+                    len(right_queue),
+                )
+            right_queue = right_queue[: len(right_ys)]
         if left_ys is None and left_queue:
-            _log.warning(
-                "plan/side left strip: %d bore callouts don't fit, skipping",
-                len(left_queue),
-            )
-            left_queue, left_ys = [], []
+            left_ys = _greedy_strip_ys_prefix([s[3] for s in left_queue], min_gap, y_min, y_max)
+            n_drop = len(left_queue) - len(left_ys)
+            if n_drop:
+                _log.warning(
+                    "plan/side left strip: %d of %d bore callouts skipped (strip full)",
+                    n_drop,
+                    len(left_queue),
+                )
+            left_queue = left_queue[: len(left_ys)]
 
         for i, ((holes, callout, pattern, _, rep), elbow_y) in enumerate(
-            zip(right_queue, right_ys or [])
+            zip(right_queue, right_ys, strict=True)
         ):
             centre = to_page(rep)
             elbow = (edge_right + elbow_dx, elbow_y)
@@ -1902,7 +1930,7 @@ def _annotate_holes(dwg, a, view_of_axis, axis_letter, found_patterns):
             _add_furniture(dwg, a, view, i, pattern, to_page)
 
         for i, ((holes, callout, pattern, _, rep), elbow_y) in enumerate(
-            zip(left_queue, left_ys or []), start=len(right_queue)
+            zip(left_queue, left_ys, strict=True), start=len(right_queue)
         ):
             centre = to_page(rep)
             elbow = (edge_left - elbow_dx, elbow_y)
