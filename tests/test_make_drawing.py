@@ -358,8 +358,9 @@ class TestStripZones:
 
     def test_right_strip_outer_limits_tightened_to_iso(self):
         # After Phase 1: fv.right is bounded by sv_left_edge (not iso_right_limit).
-        # pv.right stays iso-tightened (used by plan-view hole callouts, which are
-        # in a different Y band and don't overlap the side view).
+        # pv.right is iso-tightened; per-callout spatial checks in _annotate_holes
+        # dynamically block labels that would conflict with dim_locy* annotations
+        # that extend into the plan-view Y band (e.g. deep parts with many Y tiers).
         # sv.right is still tightened to iso_x0 - 4.
         from build123d import Box, Cylinder
 
@@ -374,7 +375,7 @@ class TestStripZones:
         iso_limit = iso_x0 - 4
         # fv right must not extend past the side view left edge
         assert a.fv_zones.right.outer_limit == pytest.approx(sv_left, abs=0.1)
-        # pv right stays iso-tightened (plan-view callouts go right of the side view)
+        # pv right stays iso-tightened (spatial check handles per-callout conflicts)
         assert a.pv_zones.right.outer_limit == pytest.approx(iso_limit, abs=0.1)
         # sv right strip is still iso-tightened
         assert a.sv_zones.right.outer_limit == pytest.approx(iso_limit, abs=0.1)
