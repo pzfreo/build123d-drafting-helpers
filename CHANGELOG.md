@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## v0.9.0 — 2026-06-13
+
+Two-pass layout sizing (#131) and ISO 128-44 section arrows (#134):
+bore callout widths are now estimated from hole geometry before view
+positions are fixed, eliminating overflow of callout labels into adjacent
+views and extension lines. Section A–A cutting-plane indicators now carry
+proper ISO 128-44 wing stubs and open arrowheads.
+
+### Added
+
+- **Two-pass layout** (#131, PR #131): `_measure_strips()` estimates bore
+  callout widths and step-dimension depth before `choose_scale()` fixes
+  the inter-view corridors. Introduces `StripDepths` dataclass and
+  `_est_bore_callout_width()`. Eliminates the hard-coded 18 mm floor that
+  caused labels to overflow on wide callouts (e.g. "4× ⌀15.9 THRU" = 23.4 mm
+  on CTC-03). Also fixes the razor-fit pv_below strip (#130) and supersedes
+  the old ad-hoc corridor widening (#103).
+- **ISO 128-44 section end arrows** (#134, PR #134): perpendicular wing stubs
+  and open 2-barb arrowheads at both ends of the SECTION A–A cutting-plane
+  indicator on the plan view, pointing in the direction of view.
+
+### Fixed
+
+- **Bore callout shafts** (#127): leaders no longer cross the view boundary
+  when no section line is present; elbow offset is zero in that case.
+- **Plan-view callout / dim_locy collision**: bore callout labels that would
+  overlap with dim_locy extension lines are reassigned to the left strip.
+- **BoltCircle suffix in width estimate**: "EQ SP ON øD BC" suffix (~34 mm)
+  is now included in `_est_bore_callout_width`, preventing underestimated
+  gaps for bolt-circle parts.
+- **`_fmt()` float noise** (#133, PR #133): near-integer floats from
+  STEP-imported bounding boxes (e.g. `800.0000000000001`) now round to
+  `"800"` instead of `"800.0"`.
+- **PMI presentation geometry**: non-solid annotation curves from AP242 STEP
+  files are stripped at load time, eliminating phantom lines in all drawing
+  views. Closes #135 (initial drop; full PMI annotation support is future work).
+
 ## v0.8.0 — 2026-06-13
 
 Two-pass Cassowary bore-callout layout (#123, PR #124): replaces the old
