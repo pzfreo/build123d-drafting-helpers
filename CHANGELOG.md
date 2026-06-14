@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## v0.9.1 — 2026-06-14
+
+ISO 128-50 section hatching and ISO 128-44 solid filled arrows (#100, #125, PR #139):
+
+### Added
+
+- **ISO 128-50 section hatching** (#125): 45° hatch lines are drawn on the
+  exposed cut face of Section A–A views using the even-odd fill rule.  Outer
+  and inner wires (holes) are both included so holes correctly appear un-hatched.
+  Hatching is excluded from the `view_annotation_overlap` lint check via the
+  `is_section_hatch` marker.
+- **ISO 128-44 solid filled arrows** (#100): cutting-plane end indicators now
+  use build123d `Arrow` with `HeadType.STRAIGHT` (solid filled head) instead of
+  open barbs, matching the ISO 128-44 standard.
+
+### Fixed
+
+- **Even-odd hatch vertex bug**: hatch lines passing exactly through a polygon
+  corner vertex previously produced an odd-length intersection list, silently
+  dropping the final interior span.  Switched to a half-open intersection
+  interval `[0, 1)` so each shared vertex is counted once.
+
 ## v0.9.0 — 2026-06-13
 
 Two-pass layout sizing (#131) and ISO 128-44 section arrows (#134):
