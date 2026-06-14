@@ -1630,7 +1630,7 @@ def _section_hatch_edges(face, SX, SZ, spacing):
             if abs(denom) < 1e-9:
                 continue
             t = (c - (y1 - x1)) / denom
-            if -1e-6 <= t <= 1 + 1e-6:
+            if -1e-6 <= t < 1 - 1e-6:  # half-open: each shared vertex counted once
                 hits.append(x1 + t * (x2 - x1))
         hits.sort()
         for i in range(0, len(hits) - 1, 2):
