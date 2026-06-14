@@ -1773,18 +1773,32 @@ class TestLocationDimsAndSection:
 
     @pytest.mark.timeout(120)
     def test_section_end_arrows_present(self, plate_drawing):
-        # ISO 128-44: cutting-plane ends must have wings + open arrowheads
+        # ISO 128-44: cutting-plane ends must have wings + solid filled arrowheads
         for side in ("left", "right"):
             wing = plate_drawing._named[f"section_wing_{side}"]
             arrow = plate_drawing._named[f"section_arrow_{side}"]
-            # wing is a single-edge Compound (the perpendicular stub)
+            # wing is a single-edge Compound (the perpendicular stub stroke)
             assert len(wing.edges()) == 1
-            # arrow has two barb edges forming an open arrowhead
-            assert len(arrow.edges()) == 2
+            # arrow is a filled solid (Arrow produces faces, not open barbs)
+            assert len(list(arrow.faces())) >= 1
         # wings are below the section line (tip_y < line y)
         sl_y = plate_drawing._named["section_line"].bounding_box().min.Y
         wl_y = plate_drawing._named["section_wing_left"].bounding_box().min.Y
         assert wl_y < sl_y
+
+    @pytest.mark.timeout(120)
+    def test_section_hatch_present_and_45_degrees(self, plate_drawing):
+        # ISO 128-50: 45° hatching on the cut face
+        assert "section_hatch" in plate_drawing._named
+        hatch = plate_drawing._named["section_hatch"]
+        edges = list(hatch.edges())
+        assert len(edges) > 0
+        # Each hatch edge should be at approximately 45° (slope ≈ 1)
+        for e in edges:
+            p0, p1 = e.position_at(0), e.position_at(1)
+            dx, dy = p1.X - p0.X, p1.Y - p0.Y
+            if abs(dx) > 0.01:
+                assert abs(dy / dx - 1.0) < 0.05  # slope ≈ 1 → 45°
 
     @pytest.mark.timeout(120)
     def test_sheet_is_lint_clean(self, plate_drawing):

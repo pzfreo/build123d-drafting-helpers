@@ -1635,6 +1635,8 @@ def _lint_view_shapes(view_shapes, ann_items, issues, page_bbox=None) -> None:
                 continue  # a centreline must cross the feature it marks
             if getattr(ann, "is_datum_target", False):
                 continue  # a datum target sits on the part face by definition
+            if getattr(ann, "is_section_hatch", False):
+                continue  # hatching is intentionally inside the section view
             try:
                 label_box = getattr(ann, "label_bbox", None)
                 ab = label_box if label_box is not None else _bbox2d(ann)

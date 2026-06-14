@@ -25,14 +25,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from build123d import (
+    Arrow,
     Box,
     Color,
     Compound,
     Edge,
     ExportDXF,
     ExportSVG,
+    GeomType,
+    HeadType,
     LineType,
     Location,
+    Mode,
     Pos,
     Shape,
     Vector,
@@ -1587,9 +1591,58 @@ def _add_location_dims(dwg, a, axis_letter, patterns):
         )
 
 
+def _section_hatch_edges(face, SX, SZ, spacing):
+    """Return 45° ISO 128-50 hatch Edge objects for one cut face in page coords.
+
+    Uses the even-odd rule: all boundary wires (outer + inner) are traversed;
+    intersections of each hatch line with the boundary are sorted and filled in
+    alternating spans.  Curved edges are tessellated to straight segments so
+    circular hole outlines clip correctly.
+    """
+    segs = []
+    for wire in [face.outer_wire()] + list(face.inner_wires()):
+        for edge in wire.edges():
+            if edge.geom_type == GeomType.LINE:
+                pts = [edge.position_at(0), edge.position_at(1)]
+            else:
+                n = max(8, int(edge.length / spacing) + 1)
+                pts = [edge.position_at(i / n) for i in range(n + 1)]
+            ppts = [(SX(v.X), SZ(v.Z)) for v in pts]
+            for j in range(len(ppts) - 1):
+                segs.append((ppts[j], ppts[j + 1]))
+
+    if not segs:
+        return []
+
+    all_xs = [p[0] for s in segs for p in s]
+    all_ys = [p[1] for s in segs for p in s]
+    # 45° lines satisfy y − x = c; step by spacing (perpendicular to lines)
+    step = spacing
+    c_min = min(all_ys) - max(all_xs) - step
+    c_max = max(all_ys) - min(all_xs) + step
+
+    result = []
+    c = c_min + step
+    while c < c_max:
+        hits = []
+        for (x1, y1), (x2, y2) in segs:
+            denom = (y2 - y1) - (x2 - x1)
+            if abs(denom) < 1e-9:
+                continue
+            t = (c - (y1 - x1)) / denom
+            if -1e-6 <= t <= 1 + 1e-6:
+                hits.append(x1 + t * (x2 - x1))
+        hits.sort()
+        for i in range(0, len(hits) - 1, 2):
+            xa, xb = hits[i], hits[i + 1]
+            if xb - xa > 0.2:
+                result.append(Edge.make_line(Vector(xa, xa + c, 0), Vector(xb, xb + c, 0)))
+        c += step
+    return result
+
+
 def _add_section_view(dwg, a, axis_letter):
-    """Full section A–A when blind or stepped holes hide their structure
-    (#94, conservative core).
+    """Full section A–A when blind or stepped holes hide their structure (#94).
 
     Trigger: any Z-axis hole with a counterbore/spotface or a non-through
     bottom — its internal profile is hidden-line-only in every standard
@@ -1597,9 +1650,9 @@ def _add_section_view(dwg, a, axis_letter):
     axes, parallel to the front view; material on the viewer's side is
     removed so the cut face shows the hole profiles as visible line-work.
     The section is placed right of the side view when there is room
-    (skipped with a log otherwise), captioned, and marked with a cutting-
-    plane centreline and 'A' letters on the plan view. Hatching and proper
-    section arrows are staged for a follow-up.
+    (skipped with a log otherwise), captioned, marked with ISO 128-44
+    cutting-plane arrows and 'A' letters on the plan view, and filled with
+    ISO 128-50 45° hatching on the cut face.
     """
     cands = [
         h
@@ -1687,35 +1740,48 @@ def _add_section_view(dwg, a, axis_letter):
     x0, x1 = ext_x0 - 4, ext_x1 + 4
     dwg.add(Centerline((x0, y_page, 0), (x1, y_page, 0)), "section_line")
 
-    # Cutting-plane end indicators: perpendicular wings with open arrowheads
-    # pointing in the viewing direction (−Y = toward the front/section view).
-    # Per ISO 128-44: thick lines at cut ends, arrows show look direction.
+    # ISO 128-44: cutting-plane end indicators — thick wing stubs with solid
+    # filled arrowheads at the tips pointing in the viewing direction (−Y).
     arrow_sz = dwg.draft.arrow_length
     wing_h = 2.5 * arrow_sz  # perpendicular stub length
     for x_end, side in ((x0, "left"), (x1, "right")):
         tip_y = y_page - wing_h
+        shaft = Edge.make_line(Vector(x_end, y_page, 0), Vector(x_end, tip_y, 0))
+        filled = Arrow(
+            arrow_size=arrow_sz,
+            shaft_path=shaft,
+            shaft_width=dwg.draft.line_width,
+            head_at_start=False,
+            head_type=HeadType.STRAIGHT,
+            mode=Mode.PRIVATE,
+        )
+        dwg.add(Compound(children=list(filled.faces())), f"section_arrow_{side}")
         dwg.add(
             Compound(children=[Edge.make_line(Vector(x_end, y_page, 0), Vector(x_end, tip_y, 0))]),
             f"section_wing_{side}",
         )
-        # Two barbs forming an open arrowhead at the tip, opening upward
-        barbs = []
-        for da in (math.radians(25), math.radians(-25)):
-            angle = -math.pi / 2 + da  # base direction = −Y (downward)
-            barbs.append(
-                Edge.make_line(
-                    Vector(x_end, tip_y, 0),
-                    Vector(
-                        x_end + arrow_sz * math.cos(angle), tip_y + arrow_sz * math.sin(angle), 0
-                    ),
-                )
-            )
-        dwg.add(Compound(children=barbs), f"section_arrow_{side}")
 
     # 'A' letters sit above the line ends, clear of any callout leaders
     lift = dwg.draft.font_size * 1.4
     dwg.add(Note("A", (x0 - 3, y_page + lift), dwg.draft), "section_a_left")
     dwg.add(Note("A", (x1 + 3, y_page + lift), dwg.draft), "section_a_right")
+
+    # ISO 128-50: 45° hatching on the cut face, in page coordinates
+    def SX(wx):
+        return pos_x + (wx - a.cx) * a.SCALE
+
+    def SZ(wz):
+        return a.FV_Y + (wz - a.cz) * a.SCALE
+
+    hatch_spacing = dwg.draft.font_size * 1.5
+    cut_faces = [f for f in keep_behind.faces() if f.normal_at().Y < -0.9]
+    hatch_edges = []
+    for cf in cut_faces:
+        hatch_edges.extend(_section_hatch_edges(cf, SX, SZ, hatch_spacing))
+    if hatch_edges:
+        hatch = Compound(children=hatch_edges)
+        hatch.is_section_hatch = True  # exempt from view_annotation_overlap lint
+        dwg.add(hatch, "section_hatch")
 
 
 def _add_furniture(dwg, a, view, j, pattern, to_page):
