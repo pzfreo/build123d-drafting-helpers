@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## v0.10.0 — 2026-06-14
+
+Automated drawing engine moved to the [draftwright](https://github.com/pzfreo/draftwright) package.
+
+### Removed
+
+- **`make_drawing`, `build_drawing`, `Drawing`, `choose_scale`, `generate_script`,
+  `lint_feature_coverage`, `dedup_diams`, `fix_svg_page_size`, `analyse_face_levels`**
+  — the full automated drawing engine is now in the `draftwright` package (AGPL-3.0).
+  These names are no longer exported from `build123d_drafting`.
+- **`kiwisolver`** runtime dependency removed (used only by the engine).
+- **`make-drawing` CLI** entry point removed (use `draftwright` CLI instead).
+
+### Migration
+
+```python
+# Before (0.9.x)
+from build123d_drafting import make_drawing, build_drawing, choose_scale
+
+# After (0.10+)
+from draftwright import make_drawing, build_drawing, choose_scale
+```
+
+Install: `pip install draftwright`
+
 ## v0.9.1 — 2026-06-14
 
 ISO 128-50 section hatching and ISO 128-44 solid filled arrows (#100, #125, PR #139):
