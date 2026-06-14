@@ -50,8 +50,8 @@ Requires `build123d >= 0.9.0` and Python ≥ 3.10.
 ## Automated drawing generation
 
 For a fully automatic STEP → SVG + DXF pipeline, see
-**[draftwright](https://github.com/pzfreo/draftwright)** — a separate AGPL-licensed
-package that uses these primitives as its annotation layer:
+**[draftwright](https://github.com/pzfreo/draftwright)** — a separate package that
+uses these primitives as its annotation layer:
 
 ```python
 from draftwright import make_drawing
@@ -465,8 +465,8 @@ uv run pytest tests/
 Alpha. API may change. Developed alongside [build123d-mcp](https://github.com/pzfreo/build123d-mcp), which integrates these helpers into its LLM-facing drawing workflow.
 
 The automated drawing engine (`make_drawing`, `build_drawing`, `Drawing`) was spun out
-into **[draftwright](https://github.com/pzfreo/draftwright)** (AGPL-3.0). This package
-remains Apache 2.0 and focuses on annotation primitives and feature recognition.
+into **[draftwright](https://github.com/pzfreo/draftwright)**. This package focuses on
+annotation primitives and feature recognition.
 
 ## Documentation
 
