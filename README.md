@@ -49,144 +49,14 @@ Requires `build123d >= 0.9.0` and Python ≥ 3.10.
 
 ## Automated drawing generation
 
-For a fully automatic STEP → SVG + DXF pipeline with no drawing code required, use
-`make_drawing()` or the bundled `make-drawing` CLI. It analyses the part geometry,
-chooses a scale and page size, projects four views, and annotates automatically:
-hole callouts with count grouping ("4× ø10 THRU", counterbore/depth symbols) from
-the recognised hole features, bolt-circle callouts with pitch-circle centrelines
-("6× ø8 THRU EQ SP ON ø60 BC"), linear-array pitch dimensions ("4× 20"), baseline
-X/Y hole-location dimensions from a default datum corner (the part's minimum-X/Y
-corner — re-anchor in a manual pass if the functional datum differs), an automatic
-SECTION A–A when blind or counterbored holes are hidden-line-only (cut through the
-densest row of qualifying holes, with a cutting-plane centreline and letters on
-the plan view; hatching staged for a follow-up), centre marks, envelope
-dimensions, centrelines, and a title block.
-
-### CLI
-
-```
-make-drawing part.step
-make-drawing part.step --title "BRACKET" --number DWG-042 --drawn-by "Paul"
-make-drawing part.step --out drawings/bracket   # explicit output prefix
-make-drawing part.step --tolerance "ISO 2768-f"
-```
-
-All options:
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--title` | stem of STEP file | Part title in the title block |
-| `--number` | `DWG-001` | Drawing number |
-| `--tolerance` | `ISO 2768-m` | General tolerance field |
-| `--drawn-by` | _(empty)_ | Designer name |
-| `--out` | STEP file stem | Output path prefix (`.svg` and `.dxf` appended) |
-| `--scale` | auto | Drawing-scale override, e.g. `5` for 5:1 or `0.5` for 1:2 |
-| `--page` | auto | Page-size override: `A4`…`A0` or `WIDTHxHEIGHT` in mm |
-| `--script` | — | Write an editable `.py` script instead of SVG+DXF (see below) |
-
-### Python API
-
-`make_drawing()` accepts either a STEP file path or an in-memory build123d object
-(`Part`, `Solid`, `Compound`, …) as its first argument:
+For a fully automatic STEP → SVG + DXF pipeline, see
+**[draftwright](https://github.com/pzfreo/draftwright)** — a separate AGPL-licensed
+package that uses these primitives as its annotation layer:
 
 ```python
-from build123d import Box
-from build123d_drafting import make_drawing
-
-# From a STEP file
-svg_path, dxf_path = make_drawing(
-    "part.step",
-    title="BRACKET",
-    number="DWG-042",
-    drawn_by="Paul",
-)
-
-# Directly from a build123d object — no STEP file needed
-part = Box(40, 30, 10)
-svg_path, dxf_path = make_drawing(part, out="bracket", title="BRACKET")
+from draftwright import make_drawing
+make_drawing(part, out="drawing", title="My Part", number="DWG-001")
 ```
-
-Scale and page size are chosen automatically; pass `scale=` and/or `page=` to
-override when the heuristic can't know the answer (workshop printer, company
-sheet standard):
-
-```python
-svg_path, dxf_path = make_drawing(part, out="bracket", scale=5, page="A3")
-```
-
-`page` accepts an ISO name (`"A4"`…`"A0"`), a `"WIDTHxHEIGHT"` string in mm, or a
-`(width, height)` tuple. Give only one of the two and the other is chosen to fit.
-Both overrides also work on `build_drawing()` (below).
-
-When a build123d object is passed without `out=`, the files default to
-`drawing.svg` / `drawing.dxf` in the current directory. (The `--script` /
-`generate_script()` workflow is STEP-only — the generated script reloads geometry
-from disk, so it cannot embed a live object.)
-
-### Customising a drawing — the `Drawing` builder
-
-`make_drawing()` is a one-shot wrapper. To edit a drawing *before* it is written —
-add or remove dimensions, add a section or auxiliary view — call `build_drawing()`,
-which returns a live `Drawing` with the standard four views and automatic
-annotations already in place but **not yet exported**:
-
-```python
-from build123d_drafting import build_drawing, Leader
-
-dwg = build_drawing(part, out="bracket", title="BRACKET", number="DWG-042")
-
-# dwg.views        {"front", "plan", "side", "iso"} → (visible, hidden) compounds
-# dwg.annotations  mutable list of annotation objects
-# dwg.draft / dwg.scale / dwg.page_w / dwg.page_h
-# dwg.at(view, x, y, z)  → page point (px, py, 0) mapped from world coordinates
-
-dwg.add(Leader(tip=dwg.at("front", 10, 0, 5), elbow=(8, 40, 0),
-               label="ø4 BORE", draft=dwg.draft), "ldr_bore")
-dwg.remove("dim_od")                       # drop an automatic dimension by name
-
-svg_path, dxf_path = dwg.export("bracket")
-```
-
-`make_drawing(...)` is exactly `build_drawing(...).export()`.
-
-Add a section or auxiliary view with `add_view()` — supply a (pre-cut) shape, a
-camera in scaled space (compose it from `dwg.look_at` and `dwg.dist`), an up
-vector, and a page position; it returns that view's coordinate helper:
-
-```python
-look = dwg.look_at
-bottom = (look[0], look[1], look[2] - dwg.dist)
-vc = dwg.add_view("bottom", part, bottom, (0, 1, 0), (260.0, 60.0))
-```
-
-### Editable script
-
-`--script` (or `generate_script()`) writes a `.py` file that calls `build_drawing()`
-with all parameters wired up, an editable customisation block, and an `export()` call
-at the end. Run it as-is for the standard drawing, or open it and add annotations in
-the customisation block — they run before export, so they land in the output:
-
-```
-make-drawing part.step --script
-python part.py          # produces part.svg + part.dxf
-```
-
-### Scale selection
-
-`choose_scale(x_size, y_size, z_size, scale=None, page=None)` returns
-`(SCALE, PAGE_W, PAGE_H, TB_W)` — the same thresholds used by `make_drawing()`,
-including ISO 5455 enlargement scales (10:1, 5:1) for small parts. Call it directly
-when writing your own drawing script to stay consistent with the automated pipeline:
-
-```python
-from build123d_drafting import choose_scale
-
-SCALE, PAGE_W, PAGE_H, TB_W = choose_scale(x_size, y_size, z_size)
-```
-
-`scale=` pins the scale (the page is chosen as the smallest sheet that fits);
-`page=` pins the sheet (the scale is chosen as the largest that fits); with both
-given they are returned as-is.
 
 ---
 
@@ -397,27 +267,6 @@ frame, so a too-long title block is caught the same way as a stray dimension.
 
 ---
 
-### `lint_feature_coverage(part, annotations, tol=0.15)`
-
-Coarse **completeness** check (the checks above are hygiene checks): builds a feature
-inventory from the part's hole/boss diameters — cylinder patches totalling at least
-half a turn around their axis, so fillets don't count but a keyway-split bore does —
-and diffs it against every `ø` value mentioned in the annotations' labels, plus the
-structured `covers_diameters` metadata on `HoleCallout`. Radius callouts are not
-counted (an "R5 TYP" fillet note must not mask an undimensioned ø10 bore). Each
-uncovered diameter yields a `feature_not_dimensioned` warning. Title blocks are
-skipped (a part name like "BRACKET R8" is not a callout). Size coverage only — location
-coverage needs feature recognition and is future work.
-
-Counts are checked too: the part's holes give a required count per diameter, and
-structured callouts declare how many holes they dimension (the `n×` prefix). A
-shortfall yields `feature_count_mismatch`; diameters covered by free-text ø-labels
-are exempt (text carries no count semantics).
-
-`Drawing.lint()` (and therefore `export()`) runs this automatically when the drawing
-knows its source part, which `build_drawing` / `make_drawing` always provide.
-
----
 
 ### `find_holes(part)` and `find_bosses(part)`
 
@@ -614,6 +463,10 @@ uv run pytest tests/
 ## Status
 
 Alpha. API may change. Developed alongside [build123d-mcp](https://github.com/pzfreo/build123d-mcp), which integrates these helpers into its LLM-facing drawing workflow.
+
+The automated drawing engine (`make_drawing`, `build_drawing`, `Drawing`) was spun out
+into **[draftwright](https://github.com/pzfreo/draftwright)** (AGPL-3.0). This package
+remains Apache 2.0 and focuses on annotation primitives and feature recognition.
 
 ## Documentation
 
