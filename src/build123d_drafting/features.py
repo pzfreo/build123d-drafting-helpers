@@ -70,7 +70,17 @@ def analyse_cylinders(part):
     """
     z_cyls: list[dict] = []
     cross_cyls: list[dict] = []
-    for face in part.faces():
+    # Attribute each face to its owning solid so coaxial bores in *different*
+    # bodies of a multi-solid assembly are not grouped into one hole — which
+    # would measure a depth across the gap between the bodies (#68). A single
+    # solid yields one group, i.e. the historical single-body behaviour.
+    solids = part.solids()
+    faces_by_solid = (
+        [(i, f) for i, s in enumerate(solids) for f in s.faces()]
+        if solids
+        else [(0, f) for f in part.faces()]
+    )
+    for solid_idx, face in faces_by_solid:
         surf = BRepAdaptor_Surface(face.wrapped)
         if surf.GetType() != GeomAbs_Cylinder:
             continue
@@ -91,6 +101,7 @@ def analyse_cylinders(part):
         rec = dict(
             diameter=round(r * 2, 2),
             axis=ax,
+            solid_idx=solid_idx,
             u_extent=surf.LastUParameter() - surf.FirstUParameter(),
             axis_xyz=(ap.X(), ap.Y(), ap.Z()),
             dir_xyz=dir_xyz,
@@ -109,13 +120,16 @@ def analyse_cylinders(part):
 
 
 def _line_key(c):
-    """Coaxial-stack key: axis letter plus the axis point projected onto the
-    plane perpendicular to the axis direction (so it is position-independent
-    along the axis, and exact for slanted axes too)."""
+    """Coaxial-stack key: the owning solid plus the axis letter and the axis
+    point projected onto the plane perpendicular to the axis direction (so it is
+    position-independent along the axis, and exact for slanted axes too). The
+    solid component keeps coaxial bores in different bodies of an assembly from
+    grouping into one hole (#68)."""
     px, py, pz = c["axis_xyz"]
     dx, dy, dz = c["dir_xyz"]
     t = px * dx + py * dy + pz * dz
     return (
+        c.get("solid_idx", 0),
         c["axis"],
         round(px - t * dx, 3),
         round(py - t * dy, 3),
