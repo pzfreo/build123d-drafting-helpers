@@ -8,6 +8,7 @@ from build123d import (
     Axis,
     Box,
     Circle,
+    Compound,
     Cone,
     Cylinder,
     GeomType,
@@ -126,10 +127,40 @@ class TestFindHoles:
 
     @pytest.mark.timeout(60)
     def test_keyway_split_bore_is_one_hole(self):
-        part = Box(60, 40, 10) - Cylinder(5, 12) - Box(60, 6, 12)
+        # Two opposed keyway notches split the bore wall into two arc patches
+        # (a single solid). The angular patches must still recombine into one
+        # ⌀10 hole. (The earlier full-width slot bisected the block into two
+        # separate solids — two half-bores, not a keyed hole; coaxial bores in
+        # *different* solids are now kept apart, see test_features for #68.)
+        part = (
+            Box(60, 40, 10)
+            - Cylinder(5, 12)
+            - Pos(0, 5, 0) * Box(2, 4, 12)
+            - Pos(0, -5, 0) * Box(2, 4, 12)
+        )
+        assert len(part.solids()) == 1
         (hole,) = find_holes(part)
         assert hole.diameter == pytest.approx(10.0)
         assert hole.bottom == "through"
+
+    @pytest.mark.timeout(60)
+    def test_coaxial_bores_in_separate_solids_are_distinct_holes(self):
+        # #68: two collinear bores in different bodies of an assembly must not
+        # merge into one hole — that measured a depth across the gap between the
+        # bodies (e.g. ⌀9.8 ↓111.4 where each bore is only 12 deep). Here a thin
+        # plate's through-bore abuts a block's blind bore on the same axis.
+        plate = Pos(-1, 0, 0) * (Box(2, 40, 12) - Cylinder(4.9, 40, rotation=(0, 90, 0)))
+        block = Pos(60.5, 0, 0) * (
+            Box(119, 40, 12) - Pos(-59.5, 0, 0) * Cylinder(4.9, 24, rotation=(0, 90, 0))
+        )
+        whole = Compound(children=[plate, block])
+        holes = find_holes(whole)
+        # The plate's through-bore (≈2 deep) and the block's blind bore (12 deep)
+        # stay separate; no hole spans the inter-body gap.
+        assert len(holes) == 2
+        depths = sorted(h.depth for h in holes)
+        assert depths == pytest.approx([2.0, 12.0])
+        assert {h.bottom for h in holes} == {"through", "flat"}
 
     @pytest.mark.timeout(60)
     def test_corner_fillets_are_not_holes(self):
