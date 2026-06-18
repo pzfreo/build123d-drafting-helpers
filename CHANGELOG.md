@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## v0.10.1 — 2026-06-18
+
+### Fixed
+
+- **Coaxial bores in separate solids are kept distinct (#68).** `find_holes`
+  grouped cylinder patches purely by axis line, so two collinear bores in
+  different bodies of a multi-solid assembly merged into one hole — measuring a
+  depth across the gap between the bodies (e.g. ⌀9.8 ↓111.4 where each bore is
+  only ~12 deep). `analyse_cylinders` now tags each cylinder record with its
+  owning solid and `_line_key` includes it, so cross-body coaxial bores no
+  longer combine. Single-solid parts are unchanged; a bore split into arcs
+  *within* one solid (a keyway) still recombines.
+
 ## v0.10.0 — 2026-06-14
 
 Automated drawing engine moved to the [draftwright](https://github.com/pzfreo/draftwright) package.
