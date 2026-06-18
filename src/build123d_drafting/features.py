@@ -64,7 +64,9 @@ def analyse_cylinders(part):
     axis_xyz (a point on the cylinder axis), external (True when the face
     is outward-facing — a boss/OD; False for a bore), dir_xyz (unit axis
     direction with its dominant component positive), s_lo/s_hi (the patch's
-    axial extent as coordinates along dir_xyz), and face (the source face).
+    axial extent as coordinates along dir_xyz), solid_idx (index of the owning
+    solid, keeping coaxial bores in different bodies distinct — see #68), and
+    face (the source face).
     z_cyls: cylinders whose axis is approximately Z.
     cross_cyls: cylinders whose axis is approximately X or Y.
     """
