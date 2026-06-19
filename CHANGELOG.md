@@ -16,6 +16,24 @@
   basis; the orthographic path is byte-for-byte unchanged, and an ISO/oblique
   mapping built from a bare `view_axes()` result now raises from `pp()` instead
   of returning a wrong point.
+- **Count-prefixed diameter labels no longer misparse in lint (#148).** The
+  label number-extraction read the *count* from `4× ⌀8.5`-style labels (4.0)
+  instead of the diameter (8.5), producing spurious `label_vs_measured` warnings
+  and wrong principal-envelope coverage. Extraction is now a single
+  `_label_value()` helper shared by both lint sites: `N× ⌀d` is read as the
+  diameter `d`, while a bare `N× v` pitch label is still a span of `N·v`.
+- **`SurfaceFinish` metadata docstring corrected (#147).** It advertised
+  `.position`; the attribute is `.mark_position` (the name avoids shadowing
+  build123d's inherited `.position` property).
+- **`SafeDimension.label` is cleared when it falls back to a bare edge.**
+  Previously it reported a label the geometry didn't render.
+
+### Changed
+
+- Internal cleanup (#150): deduplicated the label parser, the Liang–Barsky
+  segment clip, and the half-circle arc split (`_circle_arcs`); removed dead
+  code (`features._log`, a `Leader` text-width probe); tidied repeated point
+  projection and `math.hypot` usage in `features`. No behavioural change.
 
 ## v0.10.1 — 2026-06-18
 

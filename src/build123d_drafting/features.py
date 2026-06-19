@@ -23,7 +23,6 @@ This module also hosts the low-level cylinder analysis that
 ``make_drawing`` builds on (``analyse_cylinders``, ``_full_cyls``).
 """
 
-import logging
 import math
 from dataclasses import dataclass
 
@@ -36,8 +35,6 @@ from OCP.GeomAbs import (
     GeomAbs_Torus,
 )
 from OCP.TopAbs import TopAbs_Orientation
-
-_log = logging.getLogger(__name__)
 
 # Cylinder patches around one axis spanning half a turn or less in total are
 # not holes or bosses: quarter-turn patches are edge blends (fillets/rounds)
@@ -617,7 +614,7 @@ def _plane_uv(axis):
     ux = ay * ref[2] - az * ref[1]
     uy = az * ref[0] - ax * ref[2]
     uz = ax * ref[1] - ay * ref[0]
-    n = math.hypot(ux, math.hypot(uy, uz))
+    n = math.hypot(ux, uy, uz)
     u = (ux / n, uy / n, uz / n)
     v = (
         ay * u[2] - az * u[1],
@@ -662,18 +659,20 @@ def _as_linear_array(holes, pts):
     line_tol = _pattern_tol(span / (n - 1))
     if any(abs((p[0] - first[0]) * -uy + (p[1] - first[1]) * ux) > line_tol for p in pts):
         return None
-    ts = sorted((p[0] - first[0]) * ux + (p[1] - first[1]) * uy for p in pts)
+    # project each point onto the first→last axis once (used both for the pitch
+    # check, sorted, and to order the members below)
+    proj = [(p[0] - first[0]) * ux + (p[1] - first[1]) * uy for p in pts]
+    ts = sorted(proj)
     pitches = [ts[i + 1] - ts[i] for i in range(n - 1)]
     pitch = span / (n - 1)
     if max(abs(p - pitch) for p in pitches) > _pattern_tol(pitch):
         return None
     # order members along the array, in world coordinates
-    ts_unsorted = [(p[0] - first[0]) * ux + (p[1] - first[1]) * uy for p in pts]
-    ordered = sorted(zip(ts_unsorted, holes, strict=True), key=lambda t: t[0])
+    ordered = sorted(zip(proj, holes, strict=True), key=lambda t: t[0])
     w0 = ordered[0][1].location
     w1 = ordered[-1][1].location
     d = tuple(b - a for a, b in zip(w0, w1, strict=True))
-    norm = math.hypot(d[0], math.hypot(d[1], d[2]))
+    norm = math.hypot(d[0], d[1], d[2])
     return LinearArray(
         holes=tuple(h for _, h in ordered),
         pitch=round(pitch, 2),
