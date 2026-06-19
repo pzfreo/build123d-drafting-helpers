@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`ViewCoordinates.pp()` now projects ISO/oblique views correctly (#145).**
+  `view_axes()` collapses each world axis onto a single page direction with a
+  ±1 sign, which is exact for orthographic views but discards the foreshortening
+  and the orthogonal component on ISO/oblique views. `pp()` summed those
+  collapsed signs, so it silently returned un-foreshortened (wrong) points for
+  ISO views while its docstring claimed it "works for all views including ISO".
+  `pp()` now uses the true world-space `(page_x, page_y)` projection basis — the
+  same camera axes build123d's `project_to_viewport` uses. Construct via the new
+  `ViewCoordinates.from_viewport(...)` (or pass `page_basis=`) to carry that
+  basis; the orthographic path is byte-for-byte unchanged, and an ISO/oblique
+  mapping built from a bare `view_axes()` result now raises from `pp()` instead
+  of returning a wrong point.
+
 ## v0.10.1 — 2026-06-18
 
 ### Fixed

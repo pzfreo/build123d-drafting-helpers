@@ -21,6 +21,7 @@ from build123d_drafting import (
     SurfaceFinish,
     TextBlock,
     TitleBlock,
+    ViewCoordinates,
     annotate,
     clear_page,
     draft_preset,
@@ -447,6 +448,87 @@ class TestViewAxes:
 
     def test_returns_all_three_world_axes(self):
         assert set(view_axes((0, 0, 100)).keys()) == {"world_X", "world_Y", "world_Z"}
+
+
+# ---------------------------------------------------------------------------
+# ViewCoordinates.pp
+# ---------------------------------------------------------------------------
+
+
+def _norm(v):
+    m = math.sqrt(sum(c * c for c in v))
+    return tuple(c / m for c in v)
+
+
+def _sub(a, b):
+    return tuple(ai - bi for ai, bi in zip(a, b))
+
+
+def _dot(a, b):
+    return sum(ai * bi for ai, bi in zip(a, b))
+
+
+class TestViewCoordinatesPP:
+    # ---- orthographic: pp() must agree with the px()/py() shortcuts ----
+    def test_pp_matches_px_py_on_front_view(self):
+        axes = view_axes((0, -100, 0), (0, 0, 1), (0, 0, 0))
+        vc = ViewCoordinates(axes, view_x=50.0, view_y=60.0, cx=1.0, cy=2.0, cz=3.0, scale=2.0)
+        assert vc.px_axis == "world_X" and vc.py_axis == "world_Z"
+        px, py = vc.pp(7.0, 9.0, 11.0)
+        assert px == pytest.approx(vc.px(7.0))
+        assert py == pytest.approx(vc.py(11.0))
+
+    def test_pp_centroid_maps_to_view_centre(self):
+        vc = ViewCoordinates(
+            view_axes((0, -100, 0), (0, 0, 1), (0, 0, 0)),
+            view_x=50.0,
+            view_y=60.0,
+            cx=1.0,
+            cy=2.0,
+            cz=3.0,
+            scale=2.0,
+        )
+        assert vc.pp(1.0, 2.0, 3.0) == pytest.approx((50.0, 60.0))
+
+    # ---- ISO: bare view_axes() mapping has no basis -> pp() refuses ----
+    def test_pp_raises_on_iso_without_basis(self):
+        axes = view_axes((100, -100, 100), (0, 0, 1), (0, 0, 0))
+        vc = ViewCoordinates(axes, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+        assert vc.px_axis is None or vc.py_axis is None  # multiple axes per page dir
+        with pytest.raises(ValueError, match="from_viewport"):
+            vc.pp(10.0, 0.0, 0.0)
+
+    # ---- ISO via from_viewport: a true orthographic projection ----
+    def test_iso_depth_along_view_dir_does_not_move_page_point(self):
+        origin, up, look = (100.0, -100.0, 100.0), (0.0, 0.0, 1.0), (0.0, 0.0, 0.0)
+        vc = ViewCoordinates.from_viewport(origin, up, look, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+        view_dir = _norm(_sub(look, origin))
+        base = vc.pp(5.0, 6.0, 7.0)
+        # sliding the point along the viewing direction projects to the same spot
+        shifted = vc.pp(5.0 + 40 * view_dir[0], 6.0 + 40 * view_dir[1], 7.0 + 40 * view_dir[2])
+        assert shifted == pytest.approx(base)
+
+    def test_iso_preserves_in_plane_distance(self):
+        origin, up, look = (100.0, -100.0, 100.0), (0.0, 0.0, 1.0), (0.0, 0.0, 0.0)
+        scale = 3.0
+        vc = ViewCoordinates.from_viewport(origin, up, look, 0.0, 0.0, 0.0, 0.0, 0.0, scale)
+        view_dir = _norm(_sub(look, origin))
+        p1, p2 = (2.0, -4.0, 6.0), (9.0, 1.0, -3.0)
+        d = _sub(p2, p1)
+        perp = _sub(d, tuple(_dot(d, view_dir) * c for c in view_dir))
+        expected = scale * math.sqrt(_dot(perp, perp))
+        a, b = vc.pp(*p1), vc.pp(*p2)
+        assert math.dist(a, b) == pytest.approx(expected)
+
+    def test_iso_foreshortens_a_world_axis(self):
+        # a unit step along world_X must move the page point by < scale (it is
+        # tilted away from the page), and must affect *both* page coordinates.
+        origin, up, look = (100.0, -100.0, 100.0), (0.0, 0.0, 1.0), (0.0, 0.0, 0.0)
+        vc = ViewCoordinates.from_viewport(origin, up, look, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+        x0, x1 = vc.pp(0.0, 0.0, 0.0), vc.pp(1.0, 0.0, 0.0)
+        assert math.dist(x0, x1) < 1.0
+        assert x1[0] != pytest.approx(x0[0])
+        assert x1[1] != pytest.approx(x0[1])
 
 
 # ---------------------------------------------------------------------------
