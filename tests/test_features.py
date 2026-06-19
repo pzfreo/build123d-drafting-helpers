@@ -26,6 +26,7 @@ from build123d_drafting import (
     BossFeature,
     CounterBore,
     HoleFeature,
+    analyse_cylinders,
     find_bosses,
     find_holes,
 )
@@ -483,6 +484,14 @@ class TestFindBosses:
         part = Box(60, 60, 20) - Cylinder(5, 20)
         assert find_bosses(part) == []
         assert len(find_holes(part)) == 1
+
+    @pytest.mark.timeout(60)
+    def test_precomputed_cyls_matches_self_scan(self):
+        # Passing a precomputed analyse_cylinders() result must give the same
+        # bosses as letting find_bosses scan the solid itself (#149).
+        part = Box(60, 60, 10) + Pos(0, 0, 9) * Cylinder(12, 8)
+        cyls = analyse_cylinders(part)
+        assert find_bosses(part, cyls=cyls) == find_bosses(part)
 
 
 class TestFindHolePatterns:

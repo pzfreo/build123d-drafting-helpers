@@ -520,12 +520,17 @@ def find_holes(part, cyls=None) -> list:
     return holes
 
 
-def find_bosses(part) -> list:
+def find_bosses(part, cyls=None) -> list:
     """Recognise external cylindrical bosses on *part* (one
     :class:`BossFeature` per coaxial external cylinder segment, including a
     turned part's OD — callers wanting only local bosses can filter on
-    diameter against the part envelope)."""
-    z_cyls, cross_cyls = analyse_cylinders(part)
+    diameter against the part envelope).
+
+    Pass *cyls* — a precomputed ``analyse_cylinders(part)`` result — to avoid
+    re-scanning the solid (mirrors ``find_holes``'s parameter, so a caller
+    computing both holes and bosses can share one analysis).
+    """
+    z_cyls, cross_cyls = cyls if cyls is not None else analyse_cylinders(part)
     external = [c for c in _full_cyls(z_cyls) + _full_cyls(cross_cyls) if c["external"]]
     if not external:
         return []
