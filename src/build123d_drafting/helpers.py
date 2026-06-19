@@ -1175,11 +1175,11 @@ class ViewCoordinates:
         # mapping, which is exact only when one world axis feeds each page
         # direction (orthographic). Left None for an ISO/oblique mapping with no
         # basis, so pp() can refuse rather than return an un-foreshortened point.
+        self._page_x_vec: tuple[float, ...] | None
+        self._page_y_vec: tuple[float, ...] | None
         if page_basis is not None:
-            self._page_x_vec, self._page_y_vec = (
-                tuple(float(c) for c in page_basis[0]),
-                tuple(float(c) for c in page_basis[1]),
-            )
+            self._page_x_vec = tuple(float(c) for c in page_basis[0])
+            self._page_y_vec = tuple(float(c) for c in page_basis[1])
         elif len(px_axes) == 1 and len(py_axes) == 1:
             unit = {
                 "world_X": (1.0, 0.0, 0.0),
