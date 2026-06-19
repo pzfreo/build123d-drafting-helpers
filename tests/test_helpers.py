@@ -2262,3 +2262,28 @@ class TestLabelValue:
         # Regression for #148: "4× ⌀8.5" used to extract 4 (the count).
         assert _label_value("4× ⌀8.5") != 4.0
         assert _label_value("4× ⌀8.5") == 8.5
+
+
+# ---------------------------------------------------------------------------
+# _strokes_and_text — dropped strokes are logged, not silently swallowed (#150)
+# ---------------------------------------------------------------------------
+
+
+class TestStrokeLogging:
+    def test_failed_stroke_is_logged(self, monkeypatch, caplog):
+        import logging
+
+        from build123d import Edge, Vector
+
+        from build123d_drafting import helpers
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("trace failed")
+
+        monkeypatch.setattr(helpers, "trace", _boom)
+        edge = Edge.make_line(Vector(0, 0, 0), Vector(10, 0, 0))
+        with caplog.at_level(logging.WARNING, logger="build123d_drafting.helpers"):
+            sk, seg = helpers._strokes_and_text([edge], [], 0.15)
+        # the stroke is dropped (trace failed) but its loss is surfaced
+        assert any("dropped a stroke" in r.message for r in caplog.records)
+        assert seg  # segment metadata is still produced

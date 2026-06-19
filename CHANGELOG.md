@@ -34,6 +34,15 @@
   segment clip, and the half-circle arc split (`_circle_arcs`); removed dead
   code (`features._log`, a `Leader` text-width probe); tidied repeated point
   projection and `math.hypot` usage in `features`. No behavioural change.
+- Further cleanup (#150): `FeatureControlFrame` and `CompositeFeatureControlFrame`
+  now share their cell geometry through `_gdt_tol_cell` / `_gdt_datum_cell` /
+  `_gdt_text` helpers instead of near-duplicated bodies (identical output);
+  `find_holes` / `find_bosses` memoise end classification within a call
+  (`_end_partners` / `_classify_end`), so coaxial-stack recombination no longer
+  rescans every face's edges repeatedly. No behavioural change.
+- A stroke that fails to `trace()` in `_strokes_and_text` is now logged at
+  warning level (with the offending edge) instead of being silently dropped
+  (#150).
 
 ## v0.10.1 — 2026-06-18
 

@@ -31,6 +31,7 @@ text) is rendered as thin filled *faces* — there is a single ink layer, no
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from dataclasses import dataclass
@@ -55,6 +56,8 @@ from build123d import (
 )
 from build123d.objects_sketch import BaseSketchObject
 from build123d.operations_generic import sweep
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -134,7 +137,10 @@ def _strokes_and_text(strokes, text_faces, line_width):
         try:
             faces += trace([e], line_width=line_width).faces()
         except Exception:
-            pass
+            # A stroke that fails to trace is dropped (the rest still render),
+            # but the output is meant to be complete geometry — surface it
+            # rather than vanishing silently.
+            _log.warning("dropped a stroke that failed to trace (%r)", e, exc_info=True)
     faces += list(text_faces)
     return Sketch(children=faces), seg
 
@@ -2382,6 +2388,87 @@ def _characteristic_edges(name: str, h: float) -> list[Edge]:
     raise ValueError(f"Unknown characteristic '{name}'. Supported: {', '.join(_GDT_GLYPHS)}")
 
 
+def _gdt_text(draft: Draft, txt: str, fs: float):
+    """Centred PRIVATE Text in the draft font — the GD&T frames' text builder."""
+    return Text(
+        txt=txt,
+        font_size=fs,
+        font=draft.font,
+        align=(Align.CENTER, Align.CENTER),
+        mode=Mode.PRIVATE,
+    )
+
+
+def _gdt_metrics(draft: Draft) -> tuple[float, float, float, float]:
+    """Shared GD&T frame metrics: (font height, cell pad, ⌀-prefix radius, modifier radius)."""
+    h = draft.font_size
+    return h, 0.6 * h, 0.42 * h, 0.62 * h
+
+
+def _gdt_tol_cell_width(draft: Draft, tol_str: str, diameter, modifier) -> float:
+    """Width of a tolerance-value cell (value + optional ⌀ prefix + optional modifier)."""
+    h, pad, r_pre, mr = _gdt_metrics(draft)
+    w = pad + _gdt_text(draft, tol_str, h).bounding_box().size.X + pad
+    if diameter:
+        w += 2 * r_pre + pad
+    if modifier:
+        w += 2 * mr + pad
+    return w
+
+
+def _gdt_tol_cell(draft: Draft, tol_str: str, x_left: float, cy: float, diameter, modifier):
+    """Strokes + text for one tolerance cell, laid out left→right from *x_left*."""
+    h, pad, r_pre, mr = _gdt_metrics(draft)
+    strokes: list[Edge] = []
+    text_faces: list = []
+    x = x_left + pad
+    if diameter:
+        dia_cx = x + r_pre
+        strokes += [
+            e.moved(Location(Vector(dia_cx, cy, 0))) for e in Edge.make_circle(r_pre).edges()
+        ]
+        strokes.append(
+            Edge.make_line(
+                Vector(dia_cx + 0.9 * r_pre, cy - 0.9 * r_pre, 0),
+                Vector(dia_cx - 0.9 * r_pre, cy + 0.9 * r_pre, 0),
+            )
+        )
+        x = dia_cx + r_pre + pad
+    val_w = _gdt_text(draft, tol_str, h).bounding_box().size.X
+    val_cx = x + val_w / 2
+    text_faces.append(_gdt_text(draft, tol_str, h).moved(Location(Vector(val_cx, cy, 0))))
+    x = val_cx + val_w / 2 + pad
+    if modifier:
+        m = modifier.upper()
+        if m not in _MODIFIER_LETTER:
+            raise ValueError(f"Unknown modifier '{modifier}'. Use M, L, or P.")
+        mod_cx = x + mr
+        strokes += [e.moved(Location(Vector(mod_cx, cy, 0))) for e in Edge.make_circle(mr).edges()]
+        text_faces.append(
+            _gdt_text(draft, _MODIFIER_LETTER[m], h * 0.8).moved(Location(Vector(mod_cx, cy, 0)))
+        )
+    return strokes, text_faces
+
+
+def _gdt_datum_cell(draft: Draft, letter: str, cx: float, cy: float, dm):
+    """Strokes + text for one datum-reference letter (+ optional material modifier)."""
+    h = draft.font_size
+    strokes: list[Edge] = []
+    text_faces: list = []
+    if dm:
+        text_faces.append(_gdt_text(draft, letter, h).moved(Location(Vector(cx - 0.35 * h, cy, 0))))
+        mod_cx = cx + 0.5 * h
+        strokes += [
+            e.moved(Location(Vector(mod_cx, cy, 0))) for e in Edge.make_circle(0.55 * h).edges()
+        ]
+        text_faces.append(
+            _gdt_text(draft, dm.upper(), h * 0.7).moved(Location(Vector(mod_cx, cy, 0)))
+        )
+    else:
+        text_faces.append(_gdt_text(draft, letter, h).moved(Location(Vector(cx, cy, 0))))
+    return strokes, text_faces
+
+
 class FeatureControlFrame(_Annotation):
     """ISO 1101 feature control frame, e.g. ``| ⌖ | ⌀0.5 Ⓜ | A | B | C |``.
 
@@ -2414,7 +2501,6 @@ class FeatureControlFrame(_Annotation):
 
         h = draft.font_size
         H = 2.0 * h
-        pad = 0.6 * h
         datum_modifiers = datum_modifiers or {}
 
         if isinstance(tolerance, str):
@@ -2423,24 +2509,8 @@ class FeatureControlFrame(_Annotation):
             prec = draft.decimal_precision
             tol_str = f"{round(tolerance, prec):.{prec}f}"
 
-        def _text(txt, fs):
-            return Text(
-                txt=txt,
-                font_size=fs,
-                font=draft.font,
-                align=(Align.CENTER, Align.CENTER),
-                mode=Mode.PRIVATE,
-            )
-
         w_sym = H
-        r_pre = 0.42 * h
-        mr = 0.62 * h
-        val_w = _text(tol_str, h).bounding_box().size.X
-        w_tol = pad + val_w + pad
-        if diameter:
-            w_tol += 2 * r_pre + pad
-        if modifier:
-            w_tol += 2 * mr + pad
+        w_tol = _gdt_tol_cell_width(draft, tol_str, diameter, modifier)
         w_dat = H
 
         widths = [w_sym, w_tol] + [w_dat] * len(datums)
@@ -2465,49 +2535,15 @@ class FeatureControlFrame(_Annotation):
         for e in _characteristic_edges(name, h):
             strokes.append(e.moved(sym_loc))
 
-        x_cursor = xs[1] + pad
-        if diameter:
-            dia_cx = x_cursor + r_pre
-            strokes += [
-                e.moved(Location(Vector(dia_cx, cy, 0))) for e in Edge.make_circle(r_pre).edges()
-            ]
-            strokes.append(
-                Edge.make_line(
-                    Vector(dia_cx + 0.9 * r_pre, cy - 0.9 * r_pre, 0),
-                    Vector(dia_cx - 0.9 * r_pre, cy + 0.9 * r_pre, 0),
-                )
-            )
-            x_cursor = dia_cx + r_pre + pad
-
-        val_cx = x_cursor + val_w / 2
-        text_faces.append(_text(tol_str, h).moved(Location(Vector(val_cx, cy, 0))))
-        x_cursor = val_cx + val_w / 2 + pad
-
-        if modifier:
-            m = modifier.upper()
-            if m not in _MODIFIER_LETTER:
-                raise ValueError(f"Unknown modifier '{modifier}'. Use M, L, or P.")
-            mod_cx = x_cursor + mr
-            strokes += [
-                e.moved(Location(Vector(mod_cx, cy, 0))) for e in Edge.make_circle(mr).edges()
-            ]
-            text_faces.append(
-                _text(_MODIFIER_LETTER[m], h * 0.8).moved(Location(Vector(mod_cx, cy, 0)))
-            )
+        ts, tf = _gdt_tol_cell(draft, tol_str, xs[1], cy, diameter, modifier)
+        strokes += ts
+        text_faces += tf
 
         for i, letter in enumerate(datums):
             cx = (xs[2 + i] + xs[3 + i]) / 2
-            dm = datum_modifiers.get(letter)
-            if dm:
-                text_faces.append(_text(letter, h).moved(Location(Vector(cx - 0.35 * h, cy, 0))))
-                mod_cx = cx + 0.5 * h
-                strokes += [
-                    e.moved(Location(Vector(mod_cx, cy, 0)))
-                    for e in Edge.make_circle(0.55 * h).edges()
-                ]
-                text_faces.append(_text(dm.upper(), h * 0.7).moved(Location(Vector(mod_cx, cy, 0))))
-            else:
-                text_faces.append(_text(letter, h).moved(Location(Vector(cx, cy, 0))))
+            ds, dt = _gdt_datum_cell(draft, letter, cx, cy, datum_modifiers.get(letter))
+            strokes += ds
+            text_faces += dt
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
         super().__init__(
@@ -2714,32 +2750,16 @@ class CompositeFeatureControlFrame(_Annotation):
 
         h = draft.font_size
         H = 2.0 * h
-        pad = 0.6 * h
-        r_pre = 0.42 * h
-        mr = 0.62 * h
         prec = draft.decimal_precision
-
-        def _text(txt, fs):
-            return Text(
-                txt=txt,
-                font_size=fs,
-                font=draft.font,
-                align=(Align.CENTER, Align.CENTER),
-                mode=Mode.PRIVATE,
-            )
 
         def _tol_str(t):
             return t if isinstance(t, str) else f"{round(t, prec):.{prec}f}"
 
         tol_strs = [_tol_str(r["tolerance"]) for r in rows]
-        tol_w = 0.0
-        for r, ts in zip(rows, tol_strs, strict=True):
-            w = pad + _text(ts, h).bounding_box().size.X + pad
-            if r.get("diameter"):
-                w += 2 * r_pre + pad
-            if r.get("modifier"):
-                w += 2 * mr + pad
-            tol_w = max(tol_w, w)
+        tol_w = max(
+            _gdt_tol_cell_width(draft, ts, r.get("diameter"), r.get("modifier"))
+            for r, ts in zip(rows, tol_strs, strict=True)
+        )
         w_sym = H
         max_datums = max(len(r.get("datums", ())) for r in rows)
         x2 = w_sym + tol_w
@@ -2766,36 +2786,11 @@ class CompositeFeatureControlFrame(_Annotation):
             top, bot = total_h - i * H, total_h - (i + 1) * H
             strokes.append(Edge.make_line(Vector(x2, bot, 0), Vector(x2, top, 0)))
 
-            x_cursor = w_sym + pad
-            if r.get("diameter"):
-                dia_cx = x_cursor + r_pre
-                strokes += [
-                    e.moved(Location(Vector(dia_cx, cy, 0)))
-                    for e in Edge.make_circle(r_pre).edges()
-                ]
-                strokes.append(
-                    Edge.make_line(
-                        Vector(dia_cx + 0.9 * r_pre, cy - 0.9 * r_pre, 0),
-                        Vector(dia_cx - 0.9 * r_pre, cy + 0.9 * r_pre, 0),
-                    )
-                )
-                x_cursor = dia_cx + r_pre + pad
-            val_w = _text(tol_strs[i], h).bounding_box().size.X
-            val_cx = x_cursor + val_w / 2
-            text_faces.append(_text(tol_strs[i], h).moved(Location(Vector(val_cx, cy, 0))))
-            x_cursor = val_cx + val_w / 2 + pad
-            mod = r.get("modifier")
-            if mod:
-                m = mod.upper()
-                if m not in _MODIFIER_LETTER:
-                    raise ValueError(f"Unknown modifier '{mod}'. Use M, L, or P.")
-                mod_cx = x_cursor + mr
-                strokes += [
-                    e.moved(Location(Vector(mod_cx, cy, 0))) for e in Edge.make_circle(mr).edges()
-                ]
-                text_faces.append(
-                    _text(_MODIFIER_LETTER[m], h * 0.8).moved(Location(Vector(mod_cx, cy, 0)))
-                )
+            ts, tf = _gdt_tol_cell(
+                draft, tol_strs[i], w_sym, cy, r.get("diameter"), r.get("modifier")
+            )
+            strokes += ts
+            text_faces += tf
 
             datums = r.get("datums", ())
             dmods = r.get("datum_modifiers", {}) or {}
@@ -2804,21 +2799,9 @@ class CompositeFeatureControlFrame(_Annotation):
                 xr = x2 + (j + 1) * H
                 if xr < total_w - 1e-6:
                     strokes.append(Edge.make_line(Vector(xr, bot, 0), Vector(xr, top, 0)))
-                dm = dmods.get(letter)
-                if dm:
-                    text_faces.append(
-                        _text(letter, h).moved(Location(Vector(cx - 0.35 * h, cy, 0)))
-                    )
-                    mcx = cx + 0.5 * h
-                    strokes += [
-                        e.moved(Location(Vector(mcx, cy, 0)))
-                        for e in Edge.make_circle(0.55 * h).edges()
-                    ]
-                    text_faces.append(
-                        _text(dm.upper(), h * 0.7).moved(Location(Vector(mcx, cy, 0)))
-                    )
-                else:
-                    text_faces.append(_text(letter, h).moved(Location(Vector(cx, cy, 0))))
+                ds, dt = _gdt_datum_cell(draft, letter, cx, cy, dmods.get(letter))
+                strokes += ds
+                text_faces += dt
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
         super().__init__(
