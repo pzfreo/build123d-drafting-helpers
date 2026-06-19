@@ -1048,12 +1048,19 @@ def _norm3(v):
     return (v[0] / mag, v[1] / mag, v[2] / mag) if mag > 1e-10 else (0.0, 0.0, 0.0)
 
 
-def view_axes(
+def _view_basis(
     viewport_origin: tuple,
     viewport_up: tuple = (0.0, 1.0, 0.0),
     look_at: tuple = (0.0, 0.0, 0.0),
-) -> dict[str, tuple[str, float]]:
-    """Return the world→page axis mapping for a project_to_viewport call."""
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """Return the ``(page_x, page_y)`` world-space unit basis of the viewport.
+
+    These are the camera's horizontal and vertical axes — build123d's
+    ``project_to_viewport`` expresses projected coordinates in exactly this
+    basis (its camera X axis is ``view_dir × page_y``, which equals ``page_x``
+    below). A world point ``P`` projects to page offset
+    ``(dot(P − C, page_x), dot(P − C, page_y))`` for a part centroid ``C``.
+    """
     vo = tuple(float(x) for x in viewport_origin)
     la = tuple(float(x) for x in look_at)
     vu = tuple(float(x) for x in viewport_up)
@@ -1061,6 +1068,24 @@ def view_axes(
     view_dir = _norm3(_sub3(la, vo))
     page_y = _norm3(_sub3(vu, _scale3(_dot3(vu, view_dir), view_dir)))
     page_x = _cross3(view_dir, page_y)
+    return page_x, page_y
+
+
+def view_axes(
+    viewport_origin: tuple,
+    viewport_up: tuple = (0.0, 1.0, 0.0),
+    look_at: tuple = (0.0, 0.0, 0.0),
+) -> dict[str, tuple[str, float]]:
+    """Return the world→page axis mapping for a project_to_viewport call.
+
+    Each world axis is collapsed onto a single dominant page direction with a
+    ±1 sign — exact for orthographic views, but **lossy for ISO/oblique views**
+    (the foreshortening magnitude and the orthogonal component are discarded).
+    For a projection that is correct on ISO/oblique views, build a
+    :class:`ViewCoordinates` via :meth:`ViewCoordinates.from_viewport`, which
+    keeps the full :func:`_view_basis` and uses it in ``pp()``.
+    """
+    page_x, page_y = _view_basis(viewport_origin, viewport_up, look_at)
 
     result: dict[str, tuple[str, float]] = {}
     for name, world_v in [
@@ -1086,9 +1111,17 @@ class ViewCoordinates:
     Wraps the ``view_axes()`` result with the view page-centre, part
     centroid, and scale.
 
-    **General method** — works for all views including ISO/oblique::
+    **General method** — projects any world point to the page::
 
         pp(world_x, world_y, world_z) -> (page_x, page_y)
+
+    ``pp()`` is correct for **all** views — including ISO/oblique — *when the
+    instance carries the full projection basis*. Build it with
+    :meth:`from_viewport` (recommended) to get that basis, or pass
+    ``page_basis=`` explicitly. When constructed from a bare ``view_axes()``
+    mapping alone, the basis can be reconstructed only for orthographic views;
+    on an ISO/oblique mapping ``pp()`` raises rather than return a silently
+    wrong (un-foreshortened) point.
 
     **Orthographic-only scalar methods** — valid only when exactly one world
     axis projects to each page direction (front, plan, side views)::
@@ -1102,13 +1135,19 @@ class ViewCoordinates:
                  where multiple world axes project to page_X.
         py_axis: same for ``py()``.
 
-    Example (front view)::
+    Example (front view, orthographic)::
 
         axes = view_axes((cxs, cys - DIST, czs), (0, 0, 1), (cxs, cys, czs))
         vc = ViewCoordinates(axes, FV_X, FV_Y, cx, cy, cz, SCALE)
         # vc.px_axis == 'world_X', vc.py_axis == 'world_Z'
-        page_pt = vc.pp(bb.max.X, bb.max.Y, bb.max.Z)  # always correct
+        page_pt = vc.pp(bb.max.X, bb.max.Y, bb.max.Z)
         page_x = vc.px(bb.max.X)  # orthographic shortcut
+
+    Example (ISO, foreshortened correctly)::
+
+        vc = ViewCoordinates.from_viewport(
+            (1, -1, 1), (0, 0, 1), (cx, cy, cz), ISO_X, ISO_Y, cx, cy, cz, SCALE)
+        page_pt = vc.pp(bb.max.X, bb.max.Y, bb.max.Z)  # true ISO projection
     """
 
     def __init__(
@@ -1120,6 +1159,7 @@ class ViewCoordinates:
         cy: float,
         cz: float,
         scale: float,
+        page_basis: tuple | None = None,
     ) -> None:
         self._axes = axes
         self._centers: dict[str, float] = {"world_X": cx, "world_Y": cy, "world_Z": cz}
@@ -1129,6 +1169,28 @@ class ViewCoordinates:
 
         px_axes = [(w, s) for w, (p, s) in axes.items() if p == "page_X"]
         py_axes = [(w, s) for w, (p, s) in axes.items() if p == "page_Y"]
+
+        # Full projection basis for pp(). Use the explicit basis when given
+        # (correct for ISO/oblique); otherwise reconstruct it from the collapsed
+        # mapping, which is exact only when one world axis feeds each page
+        # direction (orthographic). Left None for an ISO/oblique mapping with no
+        # basis, so pp() can refuse rather than return an un-foreshortened point.
+        if page_basis is not None:
+            self._page_x_vec, self._page_y_vec = (
+                tuple(float(c) for c in page_basis[0]),
+                tuple(float(c) for c in page_basis[1]),
+            )
+        elif len(px_axes) == 1 and len(py_axes) == 1:
+            unit = {
+                "world_X": (1.0, 0.0, 0.0),
+                "world_Y": (0.0, 1.0, 0.0),
+                "world_Z": (0.0, 0.0, 1.0),
+            }
+            (wx, sx), (wy, sy) = px_axes[0], py_axes[0]
+            self._page_x_vec = _scale3(sx, unit[wx])
+            self._page_y_vec = _scale3(sy, unit[wy])
+        else:
+            self._page_x_vec = self._page_y_vec = None
 
         if len(px_axes) == 1:
             w, s = px_axes[0]
@@ -1150,19 +1212,56 @@ class ViewCoordinates:
             self._py_sign = 1.0
             self.py_axis = None
 
+    @classmethod
+    def from_viewport(
+        cls,
+        viewport_origin: tuple,
+        viewport_up: tuple,
+        look_at: tuple,
+        view_x: float,
+        view_y: float,
+        cx: float,
+        cy: float,
+        cz: float,
+        scale: float,
+    ) -> ViewCoordinates:
+        """Build from the raw viewport, retaining the full projection basis.
+
+        Unlike ``ViewCoordinates(view_axes(...), ...)``, this keeps the
+        world-space ``(page_x, page_y)`` basis, so ``pp()`` is correct for
+        ISO/oblique views as well as orthographic ones. ``viewport_origin``,
+        ``viewport_up`` and ``look_at`` are the same arguments passed to
+        build123d's ``project_to_viewport``.
+        """
+        basis = _view_basis(viewport_origin, viewport_up, look_at)
+        axes = view_axes(viewport_origin, viewport_up, look_at)
+        return cls(axes, view_x, view_y, cx, cy, cz, scale, page_basis=basis)
+
     def pp(self, world_x: float, world_y: float, world_z: float) -> tuple[float, float]:
-        """Map a world point to (page_x, page_y). Works for all views including ISO."""
-        vals = {"world_X": world_x, "world_Y": world_y, "world_Z": world_z}
-        page_x = self._view_x + sum(
-            (vals[w] - self._centers[w]) * s * self._scale
-            for w, (p, s) in self._axes.items()
-            if p == "page_X"
+        """Map a world point to ``(page_x, page_y)``.
+
+        Correct for all views — including ISO/oblique — when the instance
+        carries the projection basis (see :meth:`from_viewport`). For an
+        ISO/oblique mapping built without a basis the projection is unknown, so
+        this raises rather than return an un-foreshortened point.
+
+        Raises:
+            ValueError: ISO/oblique view constructed without a projection basis.
+        """
+        if self._page_x_vec is None:
+            raise ValueError(
+                "pp() needs the projection basis for ISO/oblique views, but this "
+                "ViewCoordinates was built from a collapsed view_axes() mapping "
+                "with no basis. Construct it via ViewCoordinates.from_viewport(...) "
+                "(or pass page_basis=) so the foreshortening is known."
+            )
+        dx = (
+            world_x - self._centers["world_X"],
+            world_y - self._centers["world_Y"],
+            world_z - self._centers["world_Z"],
         )
-        page_y = self._view_y + sum(
-            (vals[w] - self._centers[w]) * s * self._scale
-            for w, (p, s) in self._axes.items()
-            if p == "page_Y"
-        )
+        page_x = self._view_x + _dot3(dx, self._page_x_vec) * self._scale
+        page_y = self._view_y + _dot3(dx, self._page_y_vec) * self._scale
         return page_x, page_y
 
     def px(self, world_val: float) -> float:
