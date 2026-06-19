@@ -35,7 +35,7 @@ from build123d_drafting import (
     set_page,
     view_axes,
 )
-from build123d_drafting.helpers import _GDT_GLYPHS
+from build123d_drafting.helpers import _GDT_GLYPHS, _label_value
 
 
 @pytest.fixture
@@ -2233,3 +2233,32 @@ class TestTextBlock:
         b = TextBlock(["HOLE TABLE", "A1 ø5 (10,10)"], (150, 100), draft)
         issues = lint_drawing([a, b])
         assert issues == []
+
+
+# ---------------------------------------------------------------------------
+# _label_value — lint number extraction (#148)
+# ---------------------------------------------------------------------------
+
+
+class TestLabelValue:
+    @pytest.mark.parametrize(
+        "label,expected",
+        [
+            ("12.5", 12.5),
+            ("⌀8.5", 8.5),
+            ("R3", 3.0),
+            ("7.5 ±0.1", 7.5),
+            ("4× 20", 80.0),  # bare pitch repetition -> span of 4 pitches
+            ("4× ⌀8.5", 8.5),  # counted diameter -> the diameter, not the count (#148)
+            ("4× ⌀8.5 THRU", 8.5),  # suffix after the value must not break parsing
+            ("THRU", None),
+            ("", None),
+        ],
+    )
+    def test_label_value(self, label, expected):
+        assert _label_value(label) == expected
+
+    def test_count_prefixed_diameter_is_not_read_as_the_count(self):
+        # Regression for #148: "4× ⌀8.5" used to extract 4 (the count).
+        assert _label_value("4× ⌀8.5") != 4.0
+        assert _label_value("4× ⌀8.5") == 8.5

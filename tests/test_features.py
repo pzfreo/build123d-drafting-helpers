@@ -619,3 +619,16 @@ class TestFindHolePatterns:
             ang = math.radians(72 * i)
             part = part - Pos(r * math.cos(ang), r * math.sin(ang), 0) * Cylinder(4, 10)
         assert find_hole_patterns(find_holes(part)) == []
+
+
+class TestEdgeFaceMap:
+    @pytest.mark.timeout(60)
+    def test_shared_edges_map_to_multiple_faces(self):
+        # The bottom-classification chain depends on a topologically-shared edge
+        # hashing/comparing equal across the faces meeting at it. A solid box has
+        # edges shared by two faces; if Edge hashing ever regressed, each edge
+        # would map to a single face and this would fail. (#150)
+        from build123d_drafting.features import _edge_face_map
+
+        counts = [len(faces) for faces in _edge_face_map(Box(10, 10, 10)).values()]
+        assert counts and max(counts) >= 2

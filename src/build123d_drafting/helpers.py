@@ -82,6 +82,21 @@ def _segments(edges):
     return out
 
 
+def _circle_arcs(radius, center):
+    """A full circle as two half-arc Edges centred at *center* (a Vector).
+
+    ``trace()`` builds a clean thin ring from two half-arcs, but a single closed
+    circle yields a degenerate seam edge; splitting into semicircles avoids it
+    while keeping the same ring geometry.
+    """
+    loc = Location(center)
+    return [
+        arc.moved(loc)
+        for a0, a1 in ((0, 180), (180, 360))
+        for arc in Edge.make_circle(radius, start_angle=a0, end_angle=a1).edges()
+    ]
+
+
 def _split_circles(edges):
     """Replace any full-circle Edge with two half-arc Edges.
 
@@ -97,14 +112,7 @@ def _split_circles(edges):
         except Exception:
             is_full_circle = False
         if is_full_circle:
-            r = e.radius
-            centre = e.arc_center
-            loc = Location(centre)
-            for a0, a1 in ((0, 180), (180, 360)):
-                out += [
-                    arc.moved(loc)
-                    for arc in Edge.make_circle(r, start_angle=a0, end_angle=a1).edges()
-                ]
+            out += _circle_arcs(e.radius, e.arc_center)
         else:
             out.append(e)
     return out
@@ -501,8 +509,11 @@ class SafeDimension(_Annotation):
                 continue
 
         if faces is None:
-            # Last resort — bare edge so the drawing isn't missing the line
+            # Last resort — bare edge so the drawing isn't missing the line. No
+            # text is rendered, so clear the label rather than report one the
+            # geometry doesn't show (lint reads .label).
             sk, seg = _strokes_and_text([edge], [], line_width)
+            chosen_label = ""
         else:
             sk = Sketch(children=faces)
 
@@ -604,12 +615,7 @@ class CenterlineCircle(_Annotation):
     ):
         if diameter <= 0:
             raise ValueError(f"diameter must be positive, got {diameter!r}")
-        loc = Location(Vector(center[0], center[1], 0.0))
-        edges = [
-            e.moved(loc)
-            for a0, a1 in ((0, 180), (180, 360))
-            for e in Edge.make_circle(diameter / 2, start_angle=a0, end_angle=a1).edges()
-        ]
+        edges = _circle_arcs(diameter / 2, Vector(center[0], center[1], 0.0))
         sk, seg = _strokes_and_text(edges, [], line_width)
         super().__init__(
             sk, label="", label_bbox=None, segments=seg, rotation=rotation, align=align, mode=mode
@@ -772,30 +778,10 @@ class TextBlock(_Annotation):
 def _seg_intersects_rect(p, q, rect) -> bool:
     """True if segment p→q intersects the (min_x, min_y, max_x, max_y) rect.
 
-    Liang–Barsky clipping: the segment is parametrised and clipped against each
-    rect edge; an empty parameter interval means no intersection.
+    Thin wrapper over :func:`_seg_hits_box` (the same Liang–Barsky clip) with no
+    padding, kept for call-site readability.
     """
-    x0, y0, x1, y1 = rect
-    dx, dy = q[0] - p[0], q[1] - p[1]
-    t0, t1 = 0.0, 1.0
-    for pi, qi in (
-        (-dx, p[0] - x0),
-        (dx, x1 - p[0]),
-        (-dy, p[1] - y0),
-        (dy, y1 - p[1]),
-    ):
-        if pi == 0.0:
-            if qi < 0.0:
-                return False
-        else:
-            r = qi / pi
-            if pi < 0.0:
-                t0 = max(t0, r)
-            else:
-                t1 = min(t1, r)
-            if t0 > t1:
-                return False
-    return True
+    return _seg_hits_box(p, q, rect, pad=0.0)
 
 
 class Leader(_Annotation):
@@ -860,15 +846,6 @@ class Leader(_Annotation):
             raise ValueError(f"text_side must be 'auto', 'left', or 'right', got {text_side!r}")
         tip_v = Vector(tip[0], tip[1], 0.0)
         elbow_v = Vector(elbow[0], elbow[1], 0.0)
-
-        probe = Text(
-            txt=label,
-            font_size=draft.font_size,
-            font=draft.font,
-            align=Align.CENTER,
-            mode=Mode.PRIVATE,
-        )
-        text_w = probe.bounding_box().size.X  # noqa: F841 — kept for clarity/parity
         gap = draft.pad_around_text
 
         if text_side == "auto":
@@ -900,11 +877,7 @@ class Leader(_Annotation):
             r = 0.7 * draft.arrow_length
             radii = [r, 1.7 * r] if all_over else [r]
             for rad in radii:
-                for a0, a1 in ((0, 180), (180, 360)):
-                    ring_strokes += [
-                        e.moved(Location(elbow_v))
-                        for e in Edge.make_circle(rad, start_angle=a0, end_angle=a1).edges()
-                    ]
+                ring_strokes += _circle_arcs(rad, elbow_v)
         if ring_strokes:
             faces += trace(ring_strokes, line_width=line_width).faces()
 
@@ -1449,6 +1422,33 @@ def place_labels(
 # ---------------------------------------------------------------------------
 
 
+def _label_value(label: str) -> float | None:
+    """The dimensional value a dimension/callout label asserts, or ``None``.
+
+    Handles the three label shapes lint compares against measured geometry::
+
+        "12.5", "⌀8.5", "7.5 ±0.1"   -> the leading number   (12.5 / 8.5 / 7.5)
+        "4× 20"                       -> a pitch span          (4·20 = 80)
+        "4× ⌀8.5", "4× ⌀8.5 THRU"     -> a counted diameter    (8.5, not 4·8.5)
+
+    The diameter/radius prefix on the repeated value is the discriminator: a
+    bare ``N× v`` is a span of N pitches, but ``N× ⌀d`` counts d-diameter
+    features, so the value is ``d`` itself.
+    """
+    body = label.split("±")[0].split("+")[0]
+    nums = re.findall(r"\d+\.?\d*", body.lstrip("ø⌀Rr"))
+    if not nums:
+        return None
+    rep = re.match(r"\s*(\d+)\s*[×x]\s*([ø⌀Rr]?)\s*(\d+\.?\d*)", label)
+    try:
+        if rep:
+            count, prefix, value = rep.group(1), rep.group(2), rep.group(3)
+            return float(value) if prefix else int(count) * float(value)
+        return float(nums[0])
+    except ValueError:
+        return None
+
+
 def lint_drawing(
     items,
     part_bbox=None,
@@ -1605,16 +1605,9 @@ def lint_drawing(
         covered: set[float] = set()
         for item in items:
             if getattr(item, "measured_length", None) is not None:
-                lbl = getattr(item, "label", "") or ""
-                nums = re.findall(r"\d+\.?\d*", lbl.split("±")[0].split("+")[0].lstrip("ø⌀Rr"))
-                rep = re.match(r"\s*(\d+)\s*[×x]\s*(\d+\.?\d*)\s*$", lbl)
-                if nums:
-                    try:
-                        covered.add(
-                            int(rep.group(1)) * float(rep.group(2)) if rep else float(nums[0])
-                        )
-                    except ValueError:
-                        pass
+                val = _label_value(getattr(item, "label", "") or "")
+                if val is not None:
+                    covered.add(val)
 
         def _check_extent(axis: str, page_extent: float) -> None:
             world_ext = page_extent / drawing_scale
@@ -1864,41 +1857,35 @@ def _lint_dim(item, part_bbox, issues, drawing_scale: float = 1.0) -> None:
     label = getattr(item, "label", "") or ""
     measured = getattr(item, "measured_length", None)
 
-    nums = re.findall(r"\d+\.?\d*", label.split("±")[0].split("+")[0].lstrip("ø⌀Rr"))
-    # ISO repetition syntax: a pitch label "4× 20" dimensions a span of 4·20
-    rep = re.match(r"\s*(\d+)\s*[×x]\s*(\d+\.?\d*)\s*$", label)
-    if nums and measured is not None:
-        try:
-            label_val = int(rep.group(1)) * float(rep.group(2)) if rep else float(nums[0])
-            # When drawing_scale != 1.0 the geometry was scaled up before projecting
-            # (e.g. part.scale(5) for a 7.5 mm feature drawn at 5:1). The measured
-            # path length is the *scaled* length; the label carries the *real* value.
-            # Divide measured by the scale factor before comparing so a 37.5 mm
-            # measured segment with label "7.5" at 5:1 is accepted, not flagged.
-            # drawing_scale is guaranteed positive by lint_drawing()'s validation.
-            effective_measured = measured / drawing_scale
-            if effective_measured > 1e-6:
-                ratio = abs(label_val - effective_measured) / effective_measured
-                if ratio > 0.005:
-                    issues.append(
-                        LintIssue(
-                            severity="warning",
-                            message=(
-                                f"Dim '{label}': label value {label_val:.3f} differs from "
-                                f"measured path length {measured:.3f}"
-                                + (
-                                    f" (÷{drawing_scale} = {effective_measured:.3f})"
-                                    if drawing_scale != 1.0
-                                    else ""
-                                )
-                                + f" by {ratio * 100:.1f}% "
-                                f"— possible axis swap or wrong endpoint"
-                            ),
-                            code="label_vs_measured",
-                        )
+    label_val = _label_value(label)
+    if label_val is not None and measured is not None:
+        # When drawing_scale != 1.0 the geometry was scaled up before projecting
+        # (e.g. part.scale(5) for a 7.5 mm feature drawn at 5:1). The measured
+        # path length is the *scaled* length; the label carries the *real* value.
+        # Divide measured by the scale factor before comparing so a 37.5 mm
+        # measured segment with label "7.5" at 5:1 is accepted, not flagged.
+        # drawing_scale is guaranteed positive by lint_drawing()'s validation.
+        effective_measured = measured / drawing_scale
+        if effective_measured > 1e-6:
+            ratio = abs(label_val - effective_measured) / effective_measured
+            if ratio > 0.005:
+                issues.append(
+                    LintIssue(
+                        severity="warning",
+                        message=(
+                            f"Dim '{label}': label value {label_val:.3f} differs from "
+                            f"measured path length {measured:.3f}"
+                            + (
+                                f" (÷{drawing_scale} = {effective_measured:.3f})"
+                                if drawing_scale != 1.0
+                                else ""
+                            )
+                            + f" by {ratio * 100:.1f}% "
+                            f"— possible axis swap or wrong endpoint"
+                        ),
+                        code="label_vs_measured",
                     )
-        except ValueError:
-            pass
+                )
 
     if part_bbox is not None:
         try:
@@ -2190,7 +2177,7 @@ class SurfaceFinish(_Annotation):
         draft:    Draft config; defaults to 2.5 mm font.
         size:     diagonal leg length in mm; defaults to 2 × font_size.
 
-    Metadata: ``.label``, ``.label_bbox`` (the Ra text extents), ``.position``,
+    Metadata: ``.label``, ``.label_bbox`` (the Ra text extents), ``.mark_position``,
     ``.segments``.
     """
 
