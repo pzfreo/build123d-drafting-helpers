@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- **`TitleBlock(legal_owner_label=...)`** — per-row control of the full-width
+  owner/origin caption, independent of `show_labels` (#163). Pass `None` to omit
+  it (e.g. when the row holds a self-attribution URL) or a string to rename it;
+  the default keeps `LEGAL OWNER`. Backwards-compatible.
+
 ### Changed
 
 - **`Centerline`, `CenterMark`, and `CenterlineCircle` now draw ISO 128

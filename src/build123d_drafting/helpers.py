@@ -2128,6 +2128,12 @@ class TitleBlock(_Annotation):
     ``REV`` / ``DATE``, ``GEN. TOL.``, ``DRAWN BY``, and ``LEGAL OWNER``.
     Pass ``show_labels=False`` to suppress labels (legacy appearance).
 
+    ``legal_owner_label`` controls just the full-width owner/origin row's
+    identifier independently of ``show_labels``: pass ``None`` to omit it (e.g.
+    when the row holds a self-attribution URL, where a ``LEGAL OWNER`` caption
+    reads as a category error) or a string to rename it; the default keeps
+    ``LEGAL OWNER``.
+
     The scale cell takes either an explicit ``scale`` string ("1:1") or, for
     scaled drawings, a numeric ``drawing_scale`` (e.g. ``5.0``) which is
     formatted to "5:1" via :func:`format_drawing_scale` and overrides ``scale``.
@@ -2149,6 +2155,7 @@ class TitleBlock(_Annotation):
         date: str = "",
         revision: str = "",
         legal_owner: str = "",
+        legal_owner_label: str | None = "LEGAL OWNER",
         show_labels: bool = True,
         cell_height: float = 8.0,
         width: float = 170.0,
@@ -2261,7 +2268,8 @@ class TitleBlock(_Annotation):
         if legal_owner:
             lo_y_mid = (y2 + y_top) / 2.0
             text_faces.append(_cell_txt(legal_owner, (x[0] + x[-1]) / 2.0, lo_y_mid))
-            text_faces.append(_label("LEGAL OWNER", x[0], y2))
+            if legal_owner_label:
+                text_faces.append(_label(legal_owner_label, x[0], y2))
         text_faces = [t for t in text_faces if t is not None]
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
