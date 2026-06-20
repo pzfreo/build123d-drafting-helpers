@@ -1022,6 +1022,30 @@ class TestTitleBlock:
         )
         assert len(with_lo_labelled.faces()) > len(with_lo_unlabelled.faces())
 
+    def test_legal_owner_label_none_omits_only_that_caption(self, draft):
+        # #163: legal_owner_label=None drops just the owner-row caption; the
+        # other field labels (TITLE, DWG NO., …) stay.
+        default = TitleBlock("Part", "001", legal_owner="X", draft=draft)
+        no_caption = TitleBlock("Part", "001", legal_owner="X", legal_owner_label=None, draft=draft)
+        all_off = TitleBlock("Part", "001", legal_owner="X", show_labels=False, draft=draft)
+        assert len(no_caption.faces()) < len(default.faces())  # LEGAL OWNER caption gone
+        assert len(no_caption.faces()) > len(all_off.faces())  # other captions remain
+        assert no_caption.block_bbox == default.block_bbox  # glyphs only, no size change
+
+    def test_legal_owner_label_rename(self, draft):
+        renamed = TitleBlock(
+            "Part", "001", legal_owner="X", legal_owner_label="ORIGIN", draft=draft
+        )
+        omitted = TitleBlock("Part", "001", legal_owner="X", legal_owner_label=None, draft=draft)
+        assert len(renamed.faces()) > len(omitted.faces())  # a renamed caption still renders
+
+    def test_legal_owner_label_default_matches_explicit(self, draft):
+        implicit = TitleBlock("Part", "001", legal_owner="X", draft=draft)
+        explicit = TitleBlock(
+            "Part", "001", legal_owner="X", legal_owner_label="LEGAL OWNER", draft=draft
+        )
+        assert len(implicit.faces()) == len(explicit.faces())  # default unchanged
+
     def test_show_labels_does_not_affect_block_bbox(self, draft):
         # Labels are glyphs only — they must not change the reported block dimensions.
         with_labels = TitleBlock(
