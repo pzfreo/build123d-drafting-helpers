@@ -100,6 +100,67 @@ def _circle_arcs(radius, center):
     ]
 
 
+def _chainline_pattern(draft: Draft) -> tuple[float, float, float]:
+    """ISO 128 long-dash–short-dash chain-line element lengths (long, gap, short),
+    scaled from the Draft font size."""
+    h = draft.font_size
+    return 3.0 * h, 0.4 * h, 0.6 * h
+
+
+def _dash_spans(length: float, draft: Draft) -> list[tuple[float, float]]:
+    """Chain-line dash intervals ``(a, b)`` within ``[-length/2, length/2]``,
+    symmetric about the centre: a short dash centred on 0, long dashes reaching
+    outward, and the outermost dash extended to the end so the full extent of
+    the centreline is preserved. A path too short for a pattern is returned as a
+    single solid span — small centre marks stay solid, as ISO draws them."""
+    long, gap, short = _chainline_pattern(draft)
+    half = length / 2.0
+    if half <= short / 2.0 + gap + long * 0.5:
+        return [(-half, half)]
+    pos_dashes: list[tuple[float, float]] = []
+    pos = short / 2.0
+    seq = ((gap, False), (long, True), (gap, False), (short, True))
+    i = 0
+    while pos < half - 1e-9:
+        seglen, is_dash = seq[i % 4]
+        end = pos + seglen
+        if is_dash:
+            pos_dashes.append((pos, min(end, half)))
+        pos = end
+        i += 1
+    if pos_dashes and pos_dashes[-1][1] < half - 1e-9:
+        # a gap straddled the end; extend the outer dash so the tip is covered
+        pos_dashes[-1] = (pos_dashes[-1][0], half)
+    spans = [(-short / 2.0, short / 2.0)]
+    for a, b in pos_dashes:
+        spans.append((a, b))
+        spans.append((-b, -a))
+    return spans
+
+
+def _dash_line(v1: Vector, v2: Vector, draft: Draft) -> list[Edge]:
+    """Chain-line dash Edges between Vectors *v1* and *v2*."""
+    length = (v2 - v1).length
+    if length < 1e-9:
+        return [Edge.make_line(v1, v2)]
+    u = (v2 - v1) * (1.0 / length)
+    mid = (v1 + v2) * 0.5
+    return [Edge.make_line(mid + u * a, mid + u * b) for a, b in _dash_spans(length, draft)]
+
+
+def _dash_arcs(center: Vector, radius: float, draft: Draft) -> list[Edge]:
+    """Chain-line dash arc Edges around a circle of *radius* at *center*."""
+    loc = Location(center)
+    arcs: list[Edge] = []
+    for a, b in _dash_spans(2.0 * math.pi * radius, draft):
+        sa = math.degrees(a / radius) + 180.0
+        sb = math.degrees(b / radius) + 180.0
+        arcs += [
+            e.moved(loc) for e in Edge.make_circle(radius, start_angle=sa, end_angle=sb).edges()
+        ]
+    return arcs
+
+
 def _split_circles(edges):
     """Replace any full-circle Edge with two half-arc Edges.
 
@@ -541,7 +602,8 @@ class SafeDimension(_Annotation):
 
 
 class Centerline(_Annotation):
-    """A centreline between two points — a single thin line rendered as a face.
+    """A centreline between two points, drawn as an ISO 128 long-dash–short-dash
+    chain line whose dash/gap lengths scale with *draft* (solid if too short).
 
     Metadata: ``.label`` (""), ``.segments``, ``.is_centerline`` (True).
     """
@@ -550,16 +612,16 @@ class Centerline(_Annotation):
         self,
         p1: tuple,
         p2: tuple,
-        draft: Draft | None = None,  # noqa: ARG002 — reserved for dash patterns
+        draft: Draft | None = None,
         line_width: float = 0.15,
         rotation: float = 0,
         align=None,
         mode: Mode = Mode.ADD,
     ):
+        draft = draft or Draft(font_size=2.5)
         v1 = Vector(p1[0], p1[1], p1[2] if len(p1) > 2 else 0.0)
         v2 = Vector(p2[0], p2[1], p2[2] if len(p2) > 2 else 0.0)
-        edge = Edge.make_line(v1, v2)
-        sk, seg = _strokes_and_text([edge], [], line_width)
+        sk, seg = _strokes_and_text(_dash_line(v1, v2, draft), [], line_width)
         super().__init__(
             sk, label="", label_bbox=None, segments=seg, rotation=rotation, align=align, mode=mode
         )
@@ -567,10 +629,12 @@ class Centerline(_Annotation):
 
 
 class CenterMark(_Annotation):
-    """A centre mark — a small crosshair at a hole centre (#95).
+    """A centre mark — a crosshair at a hole centre (#95).
 
     *size* is the full length of each stroke; pick it a little larger than
-    the hole's page-space diameter so the mark protrudes past the circle.
+    the hole's page-space diameter so the mark protrudes past the circle. Each
+    arm is a chain line scaled from *draft*; a mark too small for a dash pattern
+    stays a solid cross, as ISO draws it.
 
     Metadata: ``.label`` (""), ``.segments``, ``.is_centerline`` (True) —
     exempt from view-overlap lint like :class:`Centerline`.
@@ -580,7 +644,7 @@ class CenterMark(_Annotation):
         self,
         point: tuple,
         size: float,
-        draft: Draft | None = None,  # noqa: ARG002 — reserved for dash patterns
+        draft: Draft | None = None,
         line_width: float = 0.15,
         rotation: float = 0,
         align=None,
@@ -588,12 +652,12 @@ class CenterMark(_Annotation):
     ):
         if size <= 0:
             raise ValueError(f"size must be positive, got {size!r}")
+        draft = draft or Draft(font_size=2.5)
         cx, cy = point[0], point[1]
         h = size / 2
-        edges = [
-            Edge.make_line(Vector(cx - h, cy, 0.0), Vector(cx + h, cy, 0.0)),
-            Edge.make_line(Vector(cx, cy - h, 0.0), Vector(cx, cy + h, 0.0)),
-        ]
+        edges = _dash_line(Vector(cx - h, cy, 0.0), Vector(cx + h, cy, 0.0), draft) + _dash_line(
+            Vector(cx, cy - h, 0.0), Vector(cx, cy + h, 0.0), draft
+        )
         sk, seg = _strokes_and_text(edges, [], line_width)
         super().__init__(
             sk, label="", label_bbox=None, segments=seg, rotation=rotation, align=align, mode=mode
@@ -604,16 +668,17 @@ class CenterMark(_Annotation):
 class CenterlineCircle(_Annotation):
     """A circular centreline — e.g. the pitch circle of a bolt pattern (#92).
 
-    Drawn as two stroked half-circles so the loop is a line, not a flooded
-    disc. Metadata: ``.label`` (""), ``.segments``, ``.is_centerline``
-    (True) — exempt from view-overlap lint like :class:`Centerline`.
+    Drawn as an ISO 128 long-dash–short-dash chain line around the circle (a
+    line, not a flooded disc), with dash/gap lengths scaled from *draft*.
+    Metadata: ``.label`` (""), ``.segments``, ``.is_centerline`` (True) —
+    exempt from view-overlap lint like :class:`Centerline`.
     """
 
     def __init__(
         self,
         center: tuple,
         diameter: float,
-        draft: Draft | None = None,  # noqa: ARG002 — reserved for dash patterns
+        draft: Draft | None = None,
         line_width: float = 0.15,
         rotation: float = 0,
         align=None,
@@ -621,7 +686,8 @@ class CenterlineCircle(_Annotation):
     ):
         if diameter <= 0:
             raise ValueError(f"diameter must be positive, got {diameter!r}")
-        edges = _circle_arcs(diameter / 2, Vector(center[0], center[1], 0.0))
+        draft = draft or Draft(font_size=2.5)
+        edges = _dash_arcs(Vector(center[0], center[1], 0.0), diameter / 2, draft)
         sk, seg = _strokes_and_text(edges, [], line_width)
         super().__init__(
             sk, label="", label_bbox=None, segments=seg, rotation=rotation, align=align, mode=mode
