@@ -1860,6 +1860,29 @@ class TestLintViewShapes:
 
     # --- #76: label over a blank region inside the view bbox is only a notice ---
 
+    # --- #143: persisted per-edge bbox cache across repeated lints ---
+
+    def test_view_edge_cache_gives_same_result(self, draft):
+        view = self._make_box_shape(0, 0, 40, 30)
+        d = Dimension((35, 10, 0), (45, 10, 0), "above", 4, draft, label="10")
+        without = {i.code for i in lint_drawing([d], view_shapes=[view])}
+        with_cache = {i.code for i in lint_drawing([d], view_shapes=[view], view_edge_cache={})}
+        assert without == with_cache
+        assert "view_annotation_overlap" in with_cache
+
+    def test_view_edge_cache_reused_not_rebuilt(self, draft):
+        view = self._make_box_shape(0, 0, 40, 30)
+        d = Dimension((35, 10, 0), (45, 10, 0), "above", 4, draft, label="10")
+        cache: dict = {}
+        lint_drawing([d], view_shapes=[view], view_edge_cache=cache)
+        assert cache  # populated with the view's per-edge entries
+        key = next(iter(cache))
+        first = cache[key]
+        # second lint of the same view must reuse the cached entry object, not
+        # rebuild it (rebuilding would reassign cache[key] to a new tuple)
+        lint_drawing([d], view_shapes=[view], view_edge_cache=cache)
+        assert cache[key] is first
+
     def test_label_over_blank_interior_is_info_not_warning(self, draft):
         # The view bbox is mostly blank face here; a label deliberately placed
         # over an empty region (hole-callout convention on big parts) must not

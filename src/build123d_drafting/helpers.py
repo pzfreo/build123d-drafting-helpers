@@ -1535,6 +1535,7 @@ def lint_drawing(
     page_bbox=None,
     drawing_scale: float = 1.0,
     view_shapes: list | None = None,
+    view_edge_cache: dict | None = None,
 ) -> list[LintIssue]:
     """Structural checks on a composed annotation list, duck-typed.
 
@@ -1584,6 +1585,13 @@ def lint_drawing(
             extents only — witness lines, leader shafts, datum triangles, and
             finish marks may enter the view freely.  Shapes whose bounding box
             cannot be computed are silently skipped.
+        view_edge_cache: optional dict, persisted by the caller across repeated
+            ``lint_drawing`` calls on the *same* views, that memoises each view
+            shape's per-edge bounding boxes — the dominant cost when a drawing
+            is linted many times (e.g. a build→critique→fix loop) (#143). Pass
+            the same dict to successive lints; discard it when the view shapes
+            change. Omit it (the default) for a fresh per-call cache, which
+            behaves exactly as before.
 
     Returns:
         list[LintIssue].
@@ -1696,7 +1704,9 @@ def lint_drawing(
                 pass
 
     if view_shapes is not None:
-        _lint_view_shapes(view_shapes, items, issues, page_bbox=page_bbox)
+        _lint_view_shapes(
+            view_shapes, items, issues, page_bbox=page_bbox, edge_cache=view_edge_cache
+        )
 
     # Principal envelope completeness check: verify each bbox extent appears
     # as a dimension label.  Only runs when part_bbox is supplied.
@@ -1795,7 +1805,28 @@ def _edges_intersect_rect(edge_entries, rect) -> bool:
     return False
 
 
-def _lint_view_shapes(view_shapes, ann_items, issues, page_bbox=None) -> None:
+def _view_edge_entries(vs, cache):
+    """Per-edge ``(edge, bbox2d)`` list for view shape *vs*, memoised in *cache*.
+
+    Building this list is the dominant lint cost (one optimal bounding box per
+    projected edge); a caller-persisted *cache* lets repeated lints of the same
+    views reuse it (#143). The shape is stored alongside its entries and checked
+    by identity, so a reused cache can't return a stale list after ``id()``
+    reuse. ``None`` marks a view whose edges can't be analysed (treated as a
+    hit), matching the un-cached behaviour."""
+    key = id(vs)
+    hit = cache.get(key)
+    if hit is not None and hit[0] is vs:
+        return hit[1]
+    try:
+        entries: list | None = [(e, _bbox2d(e)) for e in vs.edges()]
+    except Exception:
+        entries = None
+    cache[key] = (vs, entries)
+    return entries
+
+
+def _lint_view_shapes(view_shapes, ann_items, issues, page_bbox=None, edge_cache=None) -> None:
     """Check views against annotations (#159/#76), each other (#160), and the page (#75)."""
     # Build named bbox list; use the shape's id as fallback name.
     named_views = []
@@ -1816,7 +1847,7 @@ def _lint_view_shapes(view_shapes, ann_items, issues, page_bbox=None) -> None:
     # actual projected edges is a warning (#76) — on a large part the bbox is
     # mostly blank face, where placing callouts is a legitimate convention —
     # so a label over a blank region is reported as an info-level notice.
-    edge_cache: dict[int, list | None] = {}
+    cache = {} if edge_cache is None else edge_cache
     for vname, vbb, vs in named_views:
         vx0, vy0, vx1, vy1 = vbb
         for ann in ann_items:
@@ -1839,12 +1870,7 @@ def _lint_view_shapes(view_shapes, ann_items, issues, page_bbox=None) -> None:
                     getattr(ann, "label", None) or getattr(ann, "name", None) or type(ann).__name__
                 )
                 what = "label of annotation" if label_box is not None else "annotation"
-                if id(vs) not in edge_cache:
-                    try:
-                        edge_cache[id(vs)] = [(e, _bbox2d(e)) for e in vs.edges()]
-                    except Exception:
-                        edge_cache[id(vs)] = None  # unanalysable — fall back to bbox
-                edges = edge_cache[id(vs)]
+                edges = _view_edge_entries(vs, cache)
                 if edges is None or _edges_intersect_rect(edges, ab):
                     issues.append(
                         LintIssue(
