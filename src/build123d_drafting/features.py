@@ -583,6 +583,35 @@ def find_bosses(part, cyls=None) -> list:
     return bosses
 
 
+def feature_diameters(part, cyls=None) -> list:
+    """Sorted unique diameters of the *recognised* dimensionable cylindrical
+    features on *part*: every hole bore, each hole's counterbore/spotface step,
+    and every boss.
+
+    This is the inventory to use for coverage checks ("is each dimensionable
+    diameter called out?"). It is deliberately built from
+    :func:`find_holes` / :func:`find_bosses`, not the raw ``_full_cyls`` patch
+    list, so partial cylinders that never become a real feature — slot ends and
+    interrupted recesses (an exact half-cylinder pair sums to a full turn and
+    fools an angle-only test, but is not a bore) — are excluded, while genuine
+    counterbore/spotface steps are kept. (#158)
+
+    Pass *cyls* — a precomputed ``analyse_cylinders(part)`` result — to share one
+    scan between ``find_holes`` and ``find_bosses``.
+    """
+    cyls = analyse_cylinders(part) if cyls is None else cyls
+    diams: list[float] = []
+    for h in find_holes(part, cyls=cyls):
+        diams.append(h.diameter)
+        if h.cbore is not None:
+            diams.append(h.cbore.diameter)
+        if h.spotface is not None:
+            diams.append(h.spotface.diameter)
+    for b in find_bosses(part, cyls=cyls):
+        diams.append(b.diameter)
+    return sorted(set(diams))
+
+
 # ---------------------------------------------------------------------------
 # Hole patterns — bolt circles and linear arrays (#92)
 # ---------------------------------------------------------------------------

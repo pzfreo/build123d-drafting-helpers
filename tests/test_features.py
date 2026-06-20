@@ -27,6 +27,7 @@ from build123d_drafting import (
     CounterBore,
     HoleFeature,
     analyse_cylinders,
+    feature_diameters,
     find_bosses,
     find_holes,
 )
@@ -632,3 +633,47 @@ class TestEdgeFaceMap:
 
         counts = [len(faces) for faces in _edge_face_map(Box(10, 10, 10)).values()]
         assert counts and max(counts) >= 2
+
+
+class TestFeatureDiameters:
+    # #158: the dimensionable-bore inventory must be the *recognised* features
+    # (bores + cbore/spotface steps + bosses), not raw cylinder patches, so
+    # slot ends / interrupted recesses are excluded while real steps are kept.
+    @pytest.mark.timeout(60)
+    def test_counterbored_hole_lists_bore_and_step(self):
+        part = Box(60, 60, 20) - Cylinder(5, 20) - Pos(0, 0, 10 - 3) * Cylinder(9, 6)
+        assert feature_diameters(part) == [10.0, 18.0]
+
+    @pytest.mark.timeout(60)
+    def test_spotface_stack_lists_all_three_diameters(self):
+        block = Box(100, 100, 40)
+        part = (
+            block
+            - Pos(0, 0, 20 - 2.5) * Cylinder(30, 5)
+            - Pos(0, 0, 20 - 5 - 3) * Cylinder(9, 6)
+            - Pos(0, 0, 20 - 11 - 7.5) * Cylinder(5.05, 15)
+        )
+        assert feature_diameters(part) == [10.1, 18.0, 60.0]
+
+    @pytest.mark.timeout(60)
+    def test_boss_diameter_included(self):
+        part = Box(60, 60, 10) + Pos(0, 0, 9) * Cylinder(12, 8)
+        assert feature_diameters(part) == [24.0]
+
+    @pytest.mark.timeout(60)
+    def test_obround_slot_is_excluded(self):
+        # a milled slot's semicircular ends are partial cylinders, not bores
+        tool = Cylinder(6, 30) + Pos(30, 0, 0) * Cylinder(6, 30) + Pos(15, 0, 0) * Box(30, 12, 30)
+        part = Box(80, 40, 30) - Pos(-15, 0, 0) * tool
+        assert feature_diameters(part) == []
+
+    @pytest.mark.timeout(60)
+    def test_slot_alongside_hole_lists_only_the_hole(self):
+        slot = Cylinder(6, 30) + Pos(20, 0, 0) * Cylinder(6, 30) + Pos(10, 0, 0) * Box(20, 12, 30)
+        part = (Box(120, 60, 30) - Cylinder(5, 30)) - Pos(40, 0, 0) * slot
+        assert feature_diameters(part) == [10.0]
+
+    @pytest.mark.timeout(60)
+    def test_cyls_argument_matches_self_scan(self):
+        part = Box(60, 60, 20) - Cylinder(5, 20) - Pos(0, 0, 10 - 3) * Cylinder(9, 6)
+        assert feature_diameters(part, cyls=analyse_cylinders(part)) == feature_diameters(part)

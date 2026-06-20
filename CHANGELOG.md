@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- **`feature_diameters(part, cyls=None)`** — the sorted unique diameters of the
+  *recognised* dimensionable cylindrical features (hole bores, their
+  counterbore/spotface steps, and bosses). Use this for coverage checks instead
+  of the raw `_full_cyls` patch inventory: it is built from `find_holes` /
+  `find_bosses`, so partial cylinders that never become a real feature — slot
+  ends and interrupted recesses — are excluded, while genuine counterbore/
+  spotface steps are kept (#158). Validated on NIST CTC-02: drops the phantom
+  ø60/ø75/ø115 slot-ends, keeps the real ø100/ø120 spotfaces and all bores.
+
 ### Fixed
 
 - **`annotate(label=...)` is now actually read by `lint_drawing()` (#146).** The
