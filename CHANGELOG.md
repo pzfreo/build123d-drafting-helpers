@@ -2,23 +2,7 @@
 
 ## Unreleased
 
-### Added
-
-- **`TitleBlock(legal_owner_label=...)`** — per-row control of the full-width
-  owner/origin caption, independent of `show_labels` (#163). Pass `None` to omit
-  it (e.g. when the row holds a self-attribution URL) or a string to rename it;
-  the default keeps `LEGAL OWNER`. Backwards-compatible.
-
-### Changed
-
-- **`Centerline`, `CenterMark`, and `CenterlineCircle` now draw ISO 128
-  long-dash–short-dash chain lines** instead of solid lines (#154). The
-  `draft` argument is finally honoured: dash and gap lengths scale from
-  `draft.font_size`, and the pattern is symmetric about the centre with the
-  outermost dash reaching each end so the centreline's extent (and the
-  lint/`place_labels` clearance geometry) is unchanged. A path too short for a
-  pattern stays solid — small centre marks remain solid crosses, as ISO draws
-  them.
+## v0.11.0 — 2026-06-20
 
 ### Added
 
@@ -30,69 +14,61 @@
   ends and interrupted recesses — are excluded, while genuine counterbore/
   spotface steps are kept (#158). Validated on NIST CTC-02: drops the phantom
   ø60/ø75/ø115 slot-ends, keeps the real ø100/ø120 spotfaces and all bores.
-
-### Fixed
-
-- **`lint_drawing` can reuse projected-view edge boxes across repeated lints
-  (#143).** The view-vs-annotation check builds a per-edge bounding box for each
-  view's projected line-work — the dominant lint cost — and previously rebuilt
-  it on *every* `lint_drawing` call. A new optional `view_edge_cache` dict lets a
-  caller that lints the same views repeatedly (e.g. a build→critique→fix loop)
-  persist it across calls; on a warm cache the per-edge boxes are reused instead
-  of recomputed (demonstrated: `_bbox2d` calls 13→1 on the second lint). Omitting
-  it keeps the previous per-call behaviour exactly; output is unchanged.
-- **`lint_drawing` no longer recomputes optimal bounding boxes O(n²) times
-  (#161).** The pairwise label-overlap loop computed each label-less item's
-  `bounding_box(optimal=True)` once per *pair* it appeared in — ~200 s of
-  `BRepBndLib.AddOptimal` on an 83-hole part. Each item's compare-box is now
-  computed exactly once before the loop and indexed into; lint output is
-  byte-identical and ~60× faster on complex parts.
-- **`annotate(label=...)` is now actually read by `lint_drawing()` (#146).** The
-  label was stored as `_annotate_label` but nothing ever read it, so the
-  documented standalone-`annotate` use case (attaching a label to a vanilla
-  build123d `ExtensionLine` for the `label_vs_measured` check) was a no-op. Lint
-  now resolves an item's label via `_item_label()` — its `.label`, falling back
-  to `_annotate_label` when it has none.
-
-- **`ViewCoordinates.pp()` now projects ISO/oblique views correctly (#145).**
-  `view_axes()` collapses each world axis onto a single page direction with a
-  ±1 sign, which is exact for orthographic views but discards the foreshortening
-  and the orthogonal component on ISO/oblique views. `pp()` summed those
-  collapsed signs, so it silently returned un-foreshortened (wrong) points for
-  ISO views while its docstring claimed it "works for all views including ISO".
-  `pp()` now uses the true world-space `(page_x, page_y)` projection basis — the
-  same camera axes build123d's `project_to_viewport` uses. Construct via the new
-  `ViewCoordinates.from_viewport(...)` (or pass `page_basis=`) to carry that
-  basis; the orthographic path is byte-for-byte unchanged, and an ISO/oblique
-  mapping built from a bare `view_axes()` result now raises from `pp()` instead
-  of returning a wrong point.
-- **Count-prefixed diameter labels no longer misparse in lint (#148).** The
-  label number-extraction read the *count* from `4× ⌀8.5`-style labels (4.0)
-  instead of the diameter (8.5), producing spurious `label_vs_measured` warnings
-  and wrong principal-envelope coverage. Extraction is now a single
-  `_label_value()` helper shared by both lint sites: `N× ⌀d` is read as the
-  diameter `d`, while a bare `N× v` pitch label is still a span of `N·v`.
-- **`SurfaceFinish` metadata docstring corrected (#147).** It advertised
-  `.position`; the attribute is `.mark_position` (the name avoids shadowing
-  build123d's inherited `.position` property).
-- **`SafeDimension.label` is cleared when it falls back to a bare edge.**
-  Previously it reported a label the geometry didn't render.
+- **`TitleBlock(legal_owner_label=...)`** — per-row control of the full-width
+  owner/origin caption, independent of `show_labels` (#163). Pass `None` to omit
+  it (e.g. when the row holds a self-attribution URL) or a string to rename it;
+  the default keeps `LEGAL OWNER`. Backwards-compatible.
+- **`ViewCoordinates.from_viewport(...)`** (and a `page_basis=` kwarg) — carries
+  the full projection basis so `pp()` is correct on ISO/oblique views (#145).
 
 ### Changed
 
+- **`Centerline`, `CenterMark`, and `CenterlineCircle` now draw ISO 128
+  long-dash–short-dash chain lines** instead of solid lines (#154). The `draft`
+  argument is finally honoured: dash and gap lengths scale from
+  `draft.font_size`, and the pattern is symmetric about the centre with the
+  outermost dash reaching each end so the centreline's extent (and the
+  lint/`place_labels` clearance geometry) is unchanged. A path too short for a
+  pattern stays solid — small centre marks remain solid crosses, as ISO draws
+  them.
 - Internal cleanup (#150): deduplicated the label parser, the Liang–Barsky
-  segment clip, and the half-circle arc split (`_circle_arcs`); removed dead
-  code (`features._log`, a `Leader` text-width probe); tidied repeated point
-  projection and `math.hypot` usage in `features`. No behavioural change.
-- Further cleanup (#150): `FeatureControlFrame` and `CompositeFeatureControlFrame`
-  now share their cell geometry through `_gdt_tol_cell` / `_gdt_datum_cell` /
-  `_gdt_text` helpers instead of near-duplicated bodies (identical output);
-  `find_holes` / `find_bosses` memoise end classification within a call
-  (`_end_partners` / `_classify_end`), so coaxial-stack recombination no longer
-  rescans every face's edges repeatedly. No behavioural change.
+  segment clip, and the half-circle arc split (`_circle_arcs`); shared the GD&T
+  frame cell geometry between `FeatureControlFrame` and
+  `CompositeFeatureControlFrame`; memoised hole/boss end classification within a
+  call; removed dead code and tidied `math.hypot`/projection usage. Identical
+  output.
 - A stroke that fails to `trace()` in `_strokes_and_text` is now logged at
   warning level (with the offending edge) instead of being silently dropped
   (#150).
+
+### Fixed
+
+- **`ViewCoordinates.pp()` now projects ISO/oblique views correctly (#145).**
+  `view_axes()` collapses each world axis onto a single page direction with a
+  ±1 sign — exact for orthographic views but lossy for ISO/oblique. `pp()` now
+  uses the true world-space `(page_x, page_y)` projection basis (the same camera
+  axes build123d's `project_to_viewport` uses); the orthographic path is
+  unchanged, and an ISO mapping built from a bare `view_axes()` result now raises
+  rather than return a wrong point.
+- **`lint_drawing` no longer recomputes optimal bounding boxes O(n²) times
+  (#161).** The pairwise label-overlap loop computed each label-less item's
+  `bounding_box(optimal=True)` once per *pair*; each item's compare-box is now
+  computed once before the loop. Output is byte-identical, ~60× faster on
+  complex parts.
+- **`lint_drawing` can reuse projected-view edge boxes across repeated lints
+  (#143).** A new optional `view_edge_cache` dict lets a caller that lints the
+  same view objects repeatedly persist each view's per-edge bounding boxes;
+  omitting it keeps the previous per-call behaviour exactly.
+- **`annotate(label=...)` is now actually read by `lint_drawing()` (#146).** The
+  stored `_annotate_label` was never read; lint now resolves an item's label as
+  its `.label` falling back to `_annotate_label`.
+- **Count-prefixed diameter labels no longer misparse in lint (#148).** A
+  shared `_label_value()` helper reads `N× ⌀d` as the diameter `d` (not the
+  count) while a bare `N× v` pitch label stays a span of `N·v`.
+- **`SurfaceFinish` metadata docstring corrected (#147)** — the attribute is
+  `.mark_position` (avoids shadowing build123d's inherited `.position`).
+- **`SafeDimension.label` is cleared when it falls back to a bare edge** —
+  previously it reported a label the geometry didn't render.
 
 ## v0.10.1 — 2026-06-18
 
