@@ -613,7 +613,8 @@ def feature_diameters(part, cyls=None) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Hole patterns — bolt circles and linear arrays (#92)
+# Hole patterns — bolt circles, linear arrays, and rectangular grids
+# (#92; sub-clustering and grids #126/#144)
 # ---------------------------------------------------------------------------
 
 # A pattern's holes must share a radius (bolt circle) or pitch (linear array)
@@ -651,6 +652,31 @@ class LinearArray:
     holes: tuple
     pitch: float
     direction: tuple
+
+
+@dataclass(frozen=True)
+class RectGrid:
+    """A fully-populated rectangular grid of identical holes (an N×M lattice).
+
+    ``rows``×``cols`` holes sit on a regular rectangular lattice with
+    ``row_pitch`` spacing along the first lattice axis and ``col_pitch`` along
+    the second; every lattice position is occupied (``rows * cols == len(holes)``).
+    ``angle`` is the first axis's orientation in degrees within the holes'
+    opening plane, normalised to ``[0, 90)``. ``center`` is the world point at
+    the grid centroid (opening plane).
+
+    A rectangular *ring* / perimeter (holes only around the edge, interior
+    empty) is not a grid — it is reported as its constituent edge
+    :class:`LinearArray` rows instead.
+    """
+
+    holes: tuple
+    rows: int
+    cols: int
+    row_pitch: float
+    col_pitch: float
+    angle: float
+    center: tuple
 
 
 def _pattern_tol(nominal: float) -> float:
@@ -706,8 +732,16 @@ def _as_bolt_circle(holes, pts):
 def _as_linear_array(holes, pts):
     """LinearArray when *pts* (2D) are collinear at constant pitch."""
     n = len(pts)
-    order = sorted(range(n), key=lambda i: (pts[i][0], pts[i][1]))
-    first, last = pts[order[0]], pts[order[-1]]
+    # endpoints are the farthest-apart pair: robust for any orientation. A
+    # lexicographic (x, y) sort would pick the wrong ends for a near-axis row
+    # whose coordinates carry the sub-micron noise real STEP geometry always
+    # has — an interior point sorts first, halving the span and pitch and
+    # rejecting a perfectly good array.
+    i0, i1 = max(
+        ((i, j) for i in range(n) for j in range(i + 1, n)),
+        key=lambda ij: math.dist(pts[ij[0]], pts[ij[1]]),
+    )
+    first, last = pts[i0], pts[i1]
     dx, dy = last[0] - first[0], last[1] - first[1]
     span = math.hypot(dx, dy)
     if span < _PATTERN_ABS_TOL:
@@ -740,16 +774,180 @@ def _as_linear_array(holes, pts):
     )
 
 
-def find_hole_patterns(holes) -> list:
-    """Recognise :class:`BoltCircle` and :class:`LinearArray` patterns among
-    *holes* (``HoleFeature`` records, e.g. from :func:`find_holes`).
+def _circumcircle(p0, p1, p2):
+    """Centre and radius ``(cx, cy, r)`` of the circle through three 2D points,
+    or ``None`` when they are collinear (so a collinear triple can never seed a
+    bolt circle — collinearity must win, per :func:`find_hole_patterns`)."""
+    ax, ay = p0
+    bx, by = p1
+    cx, cy = p2
+    d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-9:
+        return None
+    a2, b2, c2 = ax * ax + ay * ay, bx * bx + by * by, cx * cx + cy * cy
+    ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d
+    uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d
+    return ux, uy, math.hypot(ax - ux, ay - uy)
 
-    Identical-spec, identical-axis holes are tested together: collinear sets
-    at constant pitch become a :class:`LinearArray`; sets equally spaced on a
-    common circle become a :class:`BoltCircle` (collinearity is tested first
-    — any three points are concyclic, so a 3-hole "bolt circle" must really
-    be an equilateral triangle). Each hole belongs to at most one pattern;
-    unpatterned holes are simply absent from the result.
+
+def _bolt_circle_candidates(members, pts):
+    """All bolt circles within a spec group: every triple seeds a candidate
+    circle, the group's points lying on it are gathered, and the set is kept
+    only if :func:`_as_bolt_circle` confirms it is fully, evenly populated.
+    Returns ``(BoltCircle, frozenset(member indices))`` candidates."""
+    n = len(pts)
+    out, seen = [], set()
+    for i in range(n):
+        for j in range(i + 1, n):
+            for k in range(j + 1, n):
+                circ = _circumcircle(pts[i], pts[j], pts[k])
+                if circ is None:
+                    continue
+                cx, cy, r = circ
+                if r < _PATTERN_ABS_TOL:
+                    continue
+                key = (round(cx, 2), round(cy, 2), round(r, 2))
+                if key in seen:
+                    continue
+                seen.add(key)
+                tol = _pattern_tol(r)
+                idx = [
+                    m
+                    for m in range(n)
+                    if abs(math.hypot(pts[m][0] - cx, pts[m][1] - cy) - r) <= tol
+                ]
+                if len(idx) < 3:
+                    continue
+                pat = _as_bolt_circle([members[m] for m in idx], [pts[m] for m in idx])
+                if pat is not None:
+                    out.append((pat, frozenset(idx)))
+    return out
+
+
+def _linear_array_candidates(members, pts):
+    """All linear arrays within a spec group: every pair seeds a line, the
+    group's collinear points are gathered and sorted, and each maximal
+    constant-pitch run of ≥3 becomes a candidate. Returns
+    ``(LinearArray, frozenset(member indices))`` candidates."""
+    n = len(pts)
+    out, seen = [], set()
+    for i in range(n):
+        for j in range(i + 1, n):
+            dx, dy = pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]
+            span = math.hypot(dx, dy)
+            if span < _PATTERN_ABS_TOL:
+                continue
+            ux, uy = dx / span, dy / span
+            tol = _pattern_tol(span)
+            online = [
+                m
+                for m in range(n)
+                if abs(-(pts[m][1] - pts[i][1]) * ux + (pts[m][0] - pts[i][0]) * uy) <= tol
+            ]
+            order = sorted(
+                online,
+                key=lambda m: (pts[m][0] - pts[i][0]) * ux + (pts[m][1] - pts[i][1]) * uy,
+            )
+            ts = [(pts[m][0] - pts[i][0]) * ux + (pts[m][1] - pts[i][1]) * uy for m in order]
+            # split the sorted collinear points into maximal constant-pitch runs
+            a = 0
+            while a < len(order) - 2:
+                pitch = ts[a + 1] - ts[a]
+                b = a + 1
+                while b + 1 < len(order) and abs((ts[b + 1] - ts[b]) - pitch) <= _pattern_tol(
+                    pitch
+                ):
+                    b += 1
+                run = order[a : b + 1]
+                run_key = frozenset(run)
+                if len(run) >= 3 and run_key not in seen:
+                    seen.add(run_key)
+                    pat = _as_linear_array([members[m] for m in run], [pts[m] for m in run])
+                    if pat is not None:
+                        out.append((pat, run_key))
+                a = b  # a broken pitch starts the next run at the break point
+    return out
+
+
+def _rect_grid(members, pts):
+    """A :class:`RectGrid` when the whole spec group fills a regular N×M
+    rectangular lattice, else ``None``. The two shortest near-orthogonal
+    pairwise vectors define the lattice basis; every point must land on an
+    integer cell and every cell must be occupied (no holes, no extras). 2×2 is
+    excluded — four lattice corners are a rectangle, not a grid."""
+    n = len(pts)
+    if n < 6:
+        return None
+    diffs = []
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            dx, dy = pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]
+            length = math.hypot(dx, dy)
+            if length > _PATTERN_ABS_TOL:
+                diffs.append((length, dx, dy))
+    if not diffs:
+        return None
+    diffs.sort()
+    l1, b1x, b1y = diffs[0]
+    u1 = (b1x / l1, b1y / l1)
+    basis2 = next(
+        (
+            (length, dx, dy)
+            for length, dx, dy in diffs
+            if abs((dx * u1[0] + dy * u1[1]) / length) < 0.2
+        ),
+        None,
+    )
+    if basis2 is None:
+        return None
+    l2, b2x, b2y = basis2
+    u2 = (b2x / l2, b2y / l2)
+    a0 = min(p[0] * u1[0] + p[1] * u1[1] for p in pts)
+    b0 = min(p[0] * u2[0] + p[1] * u2[1] for p in pts)
+    cells = []
+    for p in pts:
+        da = p[0] * u1[0] + p[1] * u1[1] - a0
+        db = p[0] * u2[0] + p[1] * u2[1] - b0
+        ci, cj = round(da / l1), round(db / l2)
+        if abs(da - ci * l1) > _pattern_tol(l1) or abs(db - cj * l2) > _pattern_tol(l2):
+            return None
+        cells.append((ci, cj))
+    if len(set(cells)) != n:
+        return None
+    rows = max(c[0] for c in cells) + 1
+    cols = max(c[1] for c in cells) + 1
+    if rows < 2 or cols < 2 or max(rows, cols) < 3 or rows * cols != n:
+        return None
+    center = tuple(sum(c) / n for c in zip(*(h.location for h in members), strict=True))
+    return RectGrid(
+        holes=tuple(members),
+        rows=rows,
+        cols=cols,
+        row_pitch=round(l1, 2),
+        col_pitch=round(l2, 2),
+        angle=round(math.degrees(math.atan2(u1[1], u1[0])) % 90.0, 2),
+        center=center,
+    )
+
+
+def find_hole_patterns(holes) -> list:
+    """Recognise :class:`BoltCircle`, :class:`LinearArray`, and
+    :class:`RectGrid` patterns among *holes* (``HoleFeature`` records, e.g.
+    from :func:`find_holes`).
+
+    Holes are grouped by machining spec and drilling axis, then each group is
+    *sub-clustered* — a single spec can contribute several patterns (two
+    separate bolt circles, the rows of a rectangular perimeter, a grid). All
+    candidate sub-patterns are enumerated and allocated greedily largest-first,
+    so each hole belongs to at most one pattern and the richest interpretation
+    wins. A filled N×M lattice becomes one :class:`RectGrid`; a rectangular
+    ring or perimeter is reported as its edge :class:`LinearArray` rows.
+
+    Collinearity is tested ahead of concyclicity (any three points are
+    concyclic, so a 3-hole "bolt circle" must really be an equilateral
+    triangle); unpatterned holes are simply absent from the result.
     """
     groups: dict = {}
     for h in holes:
@@ -767,7 +965,20 @@ def find_hole_patterns(holes) -> list:
             )
             for h in members
         ]
-        pattern = _as_linear_array(members, pts) or _as_bolt_circle(members, pts)
-        if pattern:
+        candidates: list = []
+        grid = _rect_grid(members, pts)
+        if grid is not None:
+            candidates.append((grid, frozenset(range(len(members)))))
+        candidates += _bolt_circle_candidates(members, pts)
+        candidates += _linear_array_candidates(members, pts)
+        # allocate largest-first; a hole used by one pattern is off the table
+        # for the rest (stable sort keeps grids ahead of circles ahead of rows
+        # at equal size)
+        candidates.sort(key=lambda c: -len(c[1]))
+        used: set = set()
+        for pattern, idx in candidates:
+            if idx & used:
+                continue
             patterns.append(pattern)
+            used |= idx
     return patterns

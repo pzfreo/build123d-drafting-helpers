@@ -621,6 +621,106 @@ class TestFindHolePatterns:
             part = part - Pos(r * math.cos(ang), r * math.sin(ang), 0) * Cylinder(4, 10)
         assert find_hole_patterns(find_holes(part)) == []
 
+    @staticmethod
+    def _circle(part, n, r, cx, hole_r=3, phase=0.0):
+        for i in range(n):
+            ang = math.radians(360 / n * i + phase)
+            part = part - Pos(cx + r * math.cos(ang), r * math.sin(ang), 0) * Cylinder(hole_r, 12)
+        return part
+
+    @staticmethod
+    def _grid_plate(nx, ny, px, py, hole_r=3):
+        part = Box(px * (nx + 1), py * (ny + 1), 10)
+        for i in range(nx):
+            for j in range(ny):
+                x = (i - (nx - 1) / 2) * px
+                y = (j - (ny - 1) / 2) * py
+                part = part - Pos(x, y, 0) * Cylinder(hole_r, 10)
+        return part
+
+    @pytest.mark.timeout(120)
+    def test_two_same_spec_bolt_circles_yield_two_patterns(self):
+        # A single drill spec used on two distinct bolt circles must produce
+        # two BoltCircles, not zero (the whole spec group is no longer fitted
+        # as one circle). #144
+        from build123d_drafting import BoltCircle, find_hole_patterns
+
+        part = Box(160, 80, 12)
+        part = self._circle(part, 6, 20, cx=-40)
+        part = self._circle(part, 6, 15, cx=40)
+        pats = find_hole_patterns(find_holes(part))
+        assert len(pats) == 2
+        assert all(isinstance(p, BoltCircle) for p in pats)
+        assert sorted(round(p.diameter) for p in pats) == [30, 40]
+
+    @pytest.mark.timeout(120)
+    def test_rectangular_ring_decomposes_into_linear_arrays(self):
+        # A rectangular perimeter / ring (interior empty) is reported as its
+        # edge rows, not returned as zero patterns. #144
+        from build123d_drafting import LinearArray, find_hole_patterns
+
+        part = Box(80, 60, 10)
+        for x in (-24, 0, 24):
+            for y in (-16, 0, 16):
+                if x == 0 and y == 0:
+                    continue  # ring: centre empty
+                part = part - Pos(x, y, 0) * Cylinder(3, 10)
+        pats = find_hole_patterns(find_holes(part))
+        assert pats, "rectangular ring must be recognised, not 0 patterns"
+        assert all(isinstance(p, LinearArray) for p in pats)
+        covered = {h.location for p in pats for h in p.holes}
+        assert len(covered) >= 6
+
+    @pytest.mark.timeout(120)
+    def test_uniform_grid_is_a_rect_grid(self):
+        from build123d_drafting import RectGrid, find_hole_patterns
+
+        for nx, ny in ((3, 2), (4, 3), (4, 2)):
+            part = self._grid_plate(nx, ny, px=20, py=30)
+            pats = find_hole_patterns(find_holes(part))
+            assert len(pats) == 1, f"{nx}x{ny} grid should be one pattern"
+            (grid,) = pats
+            assert isinstance(grid, RectGrid)
+            assert sorted((grid.rows, grid.cols)) == sorted((nx, ny))
+            assert {round(grid.row_pitch), round(grid.col_pitch)} == {20, 30}
+            assert len(grid.holes) == nx * ny
+
+    @pytest.mark.timeout(60)
+    def test_near_axis_array_with_float_noise_is_found(self):
+        # A near-axis-aligned row whose coordinates carry sub-micron
+        # perpendicular noise (as real STEP geometry does) must still be a
+        # LinearArray: endpoints are the farthest-apart pair, not a
+        # lexicographic sort that a tiny jitter can reorder (mis-measuring the
+        # span and pitch).
+        from build123d_drafting import LinearArray, find_hole_patterns
+        from build123d_drafting.features import HoleFeature
+
+        holes = [
+            HoleFeature(
+                axis=(0.0, 0.0, -1.0),
+                location=(x, 1e-4 * ((i % 2) * 2 - 1), 0.0),
+                diameter=5.0,
+                depth=10.0,
+                bottom="through",
+            )
+            for i, x in enumerate((0.0, 10.0, 20.0, 30.0))
+        ]
+        (pat,) = find_hole_patterns(holes)
+        assert isinstance(pat, LinearArray)
+        assert len(pat.holes) == 4
+        assert pat.pitch == pytest.approx(10.0, abs=0.05)
+
+    @pytest.mark.timeout(120)
+    def test_square_grid_pitches_equal(self):
+        from build123d_drafting import RectGrid, find_hole_patterns
+
+        part = self._grid_plate(3, 3, px=25, py=25)
+        (grid,) = find_hole_patterns(find_holes(part))
+        assert isinstance(grid, RectGrid)
+        assert grid.rows == 3 and grid.cols == 3
+        assert grid.row_pitch == pytest.approx(25, abs=0.1)
+        assert grid.col_pitch == pytest.approx(25, abs=0.1)
+
 
 class TestEdgeFaceMap:
     @pytest.mark.timeout(60)
