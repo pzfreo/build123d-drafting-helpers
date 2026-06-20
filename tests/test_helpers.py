@@ -696,6 +696,18 @@ class TestLintDrawing:
         codes = {i.code for i in lint_drawing([ns])}
         assert "label_vs_measured" in codes
 
+    def test_annotate_label_is_read_when_item_has_no_label(self):
+        # #146: annotate(label=...) attaches a label that lint_drawing() reads
+        # when the object carries none (e.g. a vanilla build123d ExtensionLine).
+        from types import SimpleNamespace
+
+        ns = SimpleNamespace(measured_length=20.0, label_bbox=None)
+        # with no label attached, lint has nothing to compare and stays silent
+        assert "label_vs_measured" not in {i.code for i in lint_drawing([ns])}
+        # annotate() attaches the label the docstring promises lint will read
+        annotate(ns, "width", label="999")
+        assert "label_vs_measured" in {i.code for i in lint_drawing([ns])}
+
 
 # ---------------------------------------------------------------------------
 # Principal envelope completeness check (issue #106)

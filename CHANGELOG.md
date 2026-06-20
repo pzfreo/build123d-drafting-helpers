@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **`annotate(label=...)` is now actually read by `lint_drawing()` (#146).** The
+  label was stored as `_annotate_label` but nothing ever read it, so the
+  documented standalone-`annotate` use case (attaching a label to a vanilla
+  build123d `ExtensionLine` for the `label_vs_measured` check) was a no-op. Lint
+  now resolves an item's label via `_item_label()` — its `.label`, falling back
+  to `_annotate_label` when it has none.
+
 - **`ViewCoordinates.pp()` now projects ISO/oblique views correctly (#145).**
   `view_axes()` collapses each world axis onto a single page direction with a
   ±1 sign, which is exact for orthographic views but discards the foreshortening
