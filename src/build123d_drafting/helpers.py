@@ -1428,6 +1428,14 @@ def place_labels(
 # ---------------------------------------------------------------------------
 
 
+def _item_label(item) -> str:
+    """The label lint should use for *item*: its ``.label``, or the explicit
+    string attached via :func:`annotate` (``_annotate_label``) when it has none
+    — e.g. a vanilla build123d ``ExtensionLine`` that does not retain its
+    constructor label."""
+    return getattr(item, "label", "") or getattr(item, "_annotate_label", "") or ""
+
+
 def _label_value(label: str) -> float | None:
     """The dimensional value a dimension/callout label asserts, or ``None``.
 
@@ -1588,7 +1596,7 @@ def lint_drawing(
             try:
                 bb = item.bounding_box()
                 for detail in _overshoots((bb.min.X, bb.min.Y, bb.max.X, bb.max.Y), page_bbox):
-                    lbl = getattr(item, "label", None) or "?"
+                    lbl = _item_label(item) or "?"
                     issues.append(
                         LintIssue(
                             severity="error",
@@ -1611,7 +1619,7 @@ def lint_drawing(
         covered: set[float] = set()
         for item in items:
             if getattr(item, "measured_length", None) is not None:
-                val = _label_value(getattr(item, "label", "") or "")
+                val = _label_value(_item_label(item))
                 if val is not None:
                     covered.add(val)
 
@@ -1860,7 +1868,7 @@ def _lint_centerline_dim_overlap(dim_item, cl_item, issues) -> None:
 
 
 def _lint_dim(item, part_bbox, issues, drawing_scale: float = 1.0) -> None:
-    label = getattr(item, "label", "") or ""
+    label = _item_label(item)
     measured = getattr(item, "measured_length", None)
 
     label_val = _label_value(label)
@@ -3036,7 +3044,7 @@ def _annotation_geom(item):
             except Exception:
                 continue
 
-    name = getattr(item, "label", None) or "?"
+    name = _item_label(item) or "?"
     return label_box, segs, name
 
 
