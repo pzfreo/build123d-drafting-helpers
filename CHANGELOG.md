@@ -26,6 +26,12 @@
 
 ### Fixed
 
+- **`lint_drawing` no longer recomputes optimal bounding boxes O(n²) times
+  (#161).** The pairwise label-overlap loop computed each label-less item's
+  `bounding_box(optimal=True)` once per *pair* it appeared in — ~200 s of
+  `BRepBndLib.AddOptimal` on an 83-hole part. Each item's compare-box is now
+  computed exactly once before the loop and indexed into; lint output is
+  byte-identical and ~60× faster on complex parts.
 - **`annotate(label=...)` is now actually read by `lint_drawing()` (#146).** The
   label was stored as `_annotate_label` but nothing ever read it, so the
   documented standalone-`annotate` use case (attaching a label to a vanilla

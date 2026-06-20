@@ -688,6 +688,22 @@ class TestLintDrawing:
         outer = Dimension((-10, 0, 0), (10, 0, 0), "above", 18, draft, label="20")
         assert [i for i in lint_drawing([inner, outer]) if "overlap" in i.message.lower()] == []
 
+    def test_labelless_items_overlap_via_memoized_box(self):
+        # #161: label-less items are compared via bounding_box(), now computed
+        # once per item instead of once per pair. Overlap detection is unchanged.
+        from types import SimpleNamespace
+
+        def _item(x0, y0, x1, y1, label):
+            bb = SimpleNamespace(min=SimpleNamespace(X=x0, Y=y0), max=SimpleNamespace(X=x1, Y=y1))
+            return SimpleNamespace(label_bbox=None, label=label, bounding_box=lambda b=bb: b)
+
+        a = _item(0, 0, 10, 10, "A")
+        b = _item(5, 5, 15, 15, "B")  # overlaps A
+        c = _item(100, 100, 110, 110, "C")  # clear of both
+        overlaps = [i for i in lint_drawing([a, b, c]) if i.code == "annotation_overlap"]
+        assert len(overlaps) == 1
+        assert "'A'" in overlaps[0].message and "'B'" in overlaps[0].message
+
     def test_duck_typed_namespace_dim(self, draft):
         # lint must work on a lightweight SimpleNamespace stand-in (the MCP uses these)
         from types import SimpleNamespace

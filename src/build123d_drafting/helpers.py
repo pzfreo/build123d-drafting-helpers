@@ -1608,8 +1608,32 @@ def lint_drawing(
         elif getattr(item, "measured_length", None) is not None:
             _lint_dim(item, part_bbox, issues, drawing_scale)
 
+    # Pairwise label-overlap check. The compare-box for a label-less item is an
+    # *optimal* bounding_box() — expensive, and previously recomputed for both
+    # items of every pair (O(n²): ~200 s on an 83-hole part). Compute each
+    # item's box exactly once up front and index into it instead (#161); the
+    # result is identical. Centre lines are compared via _centerline_extent, not
+    # this box, so they don't need one.
+    def _label_box(item):
+        lb = getattr(item, "label_bbox", None)
+        if lb is not None:
+            return lb
+        bb = item.bounding_box()
+        return (bb.min.X, bb.min.Y, bb.max.X, bb.max.Y)
+
+    boxes: list = []
+    for item in items:
+        if getattr(item, "is_centerline", False):
+            boxes.append(None)
+            continue
+        try:
+            boxes.append(_label_box(item))
+        except Exception:
+            boxes.append(None)
+
     for i, item_a in enumerate(items):
-        for item_b in items[i + 1 :]:
+        for j in range(i + 1, len(items)):
+            item_b = items[j]
             try:
                 is_cl_a = getattr(item_a, "is_centerline", False)
                 is_cl_b = getattr(item_b, "is_centerline", False)
@@ -1628,15 +1652,10 @@ def lint_drawing(
                 # stacked dims (every inner bbox is a subset of the outer one).
                 # label_bbox is the keep-clear region around the value text — the
                 # thing that actually matters to a reader.
-                def _label_box(item):
-                    lb = getattr(item, "label_bbox", None)
-                    if lb is not None:
-                        return lb
-                    bb = item.bounding_box()
-                    return (bb.min.X, bb.min.Y, bb.max.X, bb.max.Y)
-
-                la_box = _label_box(item_a)
-                lb_box = _label_box(item_b)
+                la_box = boxes[i]
+                lb_box = boxes[j]
+                if la_box is None or lb_box is None:
+                    continue
                 ox = max(0.0, min(la_box[2], lb_box[2]) - max(la_box[0], lb_box[0]))
                 oy = max(0.0, min(la_box[3], lb_box[3]) - max(la_box[1], lb_box[1]))
                 if ox > 0.5 and oy > 0.5:
