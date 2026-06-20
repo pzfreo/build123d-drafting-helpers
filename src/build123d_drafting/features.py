@@ -252,11 +252,22 @@ def _axis_point(seg, s):
     return (ax + t * dx, ay + t * dy, az + t * dz)
 
 
-def _end_partners(seg, s_end, edge_faces):
+def _end_partners(seg, s_end, edge_faces, cache=None):
     """The faces beyond one axial end of *seg*: partners of edges that lie at
     that end. An opening edge on a slanted or curved surface dips away from
     the end plane (by the lip sagitta), so edges match within a margin — but
-    stay well clear of the segment's other end."""
+    stay well clear of the segment's other end.
+
+    *cache* (optional) memoises the result per ``(seg, s_end)`` within one
+    ``find_holes``/``find_bosses`` call — the same end is classified several
+    times (``_merge_stacks`` plus the main loop), and each scan walks every
+    face's edges. The seg is stored in the cached value so an ``is`` check
+    rejects (and pins against) any ``id`` reuse."""
+    if cache is not None:
+        key = ("ep", id(seg), round(s_end, 9))
+        hit = cache.get(key)
+        if hit is not None and hit[0] is seg:
+            return hit[1]
     dx, dy, dz = seg["dir_xyz"]
     margin = max(_STACK_GAP_TOL, min(0.45 * (seg["s_hi"] - seg["s_lo"]), 0.5 * seg["diameter"]))
     partners = []
@@ -268,10 +279,25 @@ def _end_partners(seg, s_end, edge_faces):
             for partner in edge_faces.get(edge, ()):
                 if not any(partner.is_same(f) for f in seg["faces"]):
                     partners.append(partner)
+    if cache is not None:
+        cache[key] = (seg, partners)
     return partners
 
 
-def _classify_end(seg, s_end, hi_end, edge_faces):
+def _classify_end(seg, s_end, hi_end, edge_faces, cache=None):
+    """Cached wrapper over :func:`_classify_end_uncached` (see *cache* there)."""
+    if cache is None:
+        return _classify_end_uncached(seg, s_end, hi_end, edge_faces)
+    key = ("ce", id(seg), round(s_end, 9), hi_end)
+    hit = cache.get(key)
+    if hit is not None and hit[0] is seg:
+        return hit[1]
+    result = _classify_end_uncached(seg, s_end, hi_end, edge_faces, cache)
+    cache[key] = (seg, result)
+    return result
+
+
+def _classify_end_uncached(seg, s_end, hi_end, edge_faces, cache=None):
     """Classify one axial end of a cylinder segment from the face beyond it.
 
     Returns ``"open"`` (the bore exits, or the boss's free end), ``"flat"``
@@ -295,7 +321,7 @@ def _classify_end(seg, s_end, hi_end, edge_faces):
     dx, dy, dz = seg["dir_xyz"]
     e_sign = 1.0 if hi_end else -1.0
     weak = None
-    for partner in _end_partners(seg, s_end, edge_faces):
+    for partner in _end_partners(seg, s_end, edge_faces, cache):
         surf = BRepAdaptor_Surface(partner.wrapped)
         kind = surf.GetType()
         if kind == GeomAbs_Cone:
@@ -359,15 +385,15 @@ def _edge_face_map(part):
     return edge_faces
 
 
-def _shared_transition(a, b, edge_faces):
+def _shared_transition(a, b, edge_faces, cache=None):
     """True when a cone or torus face spans the gap between segment *a*'s
     high end and segment *b*'s low end — the shoulder chamfer or fillet that
     makes the two segments steps of one hole. The transition face touches
     one segment directly and may reach the other through the shoulder ring
     plane, so one adjacency hop is followed. Solid material between two
     unrelated coaxial features has no such connecting face."""
-    a_partners = _end_partners(a, a["s_hi"], edge_faces)
-    b_partners = _end_partners(b, b["s_lo"], edge_faces)
+    a_partners = _end_partners(a, a["s_hi"], edge_faces, cache)
+    b_partners = _end_partners(b, b["s_lo"], edge_faces, cache)
     for own, other in ((a_partners, b_partners), (b_partners, a_partners)):
         for t in own:
             if BRepAdaptor_Surface(t.wrapped).GetType() not in (GeomAbs_Cone, GeomAbs_Torus):
@@ -380,7 +406,7 @@ def _shared_transition(a, b, edge_faces):
     return False
 
 
-def _merge_stacks(stacks, edge_faces):
+def _merge_stacks(stacks, edge_faces, cache=None):
     """Recombine coaxial stacks that are one hole:
 
     - same bore diameter on both sides of a crossing void, neither facing
@@ -403,14 +429,14 @@ def _merge_stacks(stacks, edge_faces):
             closed = ("flat", "drill_point")
             if (
                 abs(a["diameter"] - b["diameter"]) < 0.01
-                and _classify_end(a, a["s_hi"], True, edge_faces) not in closed
-                and _classify_end(b, b["s_lo"], False, edge_faces) not in closed
+                and _classify_end(a, a["s_hi"], True, edge_faces, cache) not in closed
+                and _classify_end(b, b["s_lo"], False, edge_faces, cache) not in closed
             ):
                 joined = dict(a, s_hi=b["s_hi"], faces=a["faces"] + b["faces"])
                 cur = [s for s in cur if s is not a] + [joined] + [s for s in nxt if s is not b]
             elif b["s_lo"] - a["s_hi"] <= _STACK_GAP_TOL + abs(
                 a["diameter"] - b["diameter"]
-            ) and _shared_transition(a, b, edge_faces):
+            ) and _shared_transition(a, b, edge_faces, cache):
                 cur = cur + nxt
             else:
                 merged.append(cur)
@@ -437,15 +463,19 @@ def find_holes(part, cyls=None) -> list:
     if not internal:
         return []
     edge_faces = _edge_face_map(part)
-    stacks = _merge_stacks(_merge_runs(_segments(internal), _line_key), edge_faces)
+    # one end-classification cache for the whole call: the same (seg, end) is
+    # classified by _merge_stacks and again in the loop below, each scan walking
+    # every face's edges (#150).
+    cache: dict = {}
+    stacks = _merge_stacks(_merge_runs(_segments(internal), _line_key), edge_faces, cache)
 
     holes = []
     for stack in stacks:
         d = stack[0]["dir_xyz"]
         lo_seg = min(stack, key=lambda s: s["s_lo"])
         hi_seg = max(stack, key=lambda s: s["s_hi"])
-        lo_state = _classify_end(lo_seg, lo_seg["s_lo"], False, edge_faces)
-        hi_state = _classify_end(hi_seg, hi_seg["s_hi"], True, edge_faces)
+        lo_state = _classify_end(lo_seg, lo_seg["s_lo"], False, edge_faces, cache)
+        hi_state = _classify_end(hi_seg, hi_seg["s_hi"], True, edge_faces, cache)
 
         # The opening is the open end; with both ends open (a through hole)
         # prefer the wider segment's end (counterbores sit at the opening),
@@ -532,12 +562,13 @@ def find_bosses(part, cyls=None) -> list:
     if not external:
         return []
     edge_faces = _edge_face_map(part)
+    cache: dict = {}
 
     bosses = []
     for seg in _segments(external):
         d = seg["dir_xyz"]
-        lo_state = _classify_end(seg, seg["s_lo"], False, edge_faces)
-        hi_state = _classify_end(seg, seg["s_hi"], True, edge_faces)
+        lo_state = _classify_end(seg, seg["s_lo"], False, edge_faces, cache)
+        hi_state = _classify_end(seg, seg["s_hi"], True, edge_faces, cache)
         # The free end is the open one (its cap faces away from the segment);
         # default to the high end when both or neither are open.
         from_hi = not (lo_state == "open" and hi_state != "open")
