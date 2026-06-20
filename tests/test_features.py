@@ -685,6 +685,31 @@ class TestFindHolePatterns:
             assert {round(grid.row_pitch), round(grid.col_pitch)} == {20, 30}
             assert len(grid.holes) == nx * ny
 
+    @pytest.mark.timeout(60)
+    def test_near_axis_array_with_float_noise_is_found(self):
+        # A near-axis-aligned row whose coordinates carry sub-micron
+        # perpendicular noise (as real STEP geometry does) must still be a
+        # LinearArray: endpoints are the farthest-apart pair, not a
+        # lexicographic sort that a tiny jitter can reorder (mis-measuring the
+        # span and pitch).
+        from build123d_drafting import LinearArray, find_hole_patterns
+        from build123d_drafting.features import HoleFeature
+
+        holes = [
+            HoleFeature(
+                axis=(0.0, 0.0, -1.0),
+                location=(x, 1e-4 * ((i % 2) * 2 - 1), 0.0),
+                diameter=5.0,
+                depth=10.0,
+                bottom="through",
+            )
+            for i, x in enumerate((0.0, 10.0, 20.0, 30.0))
+        ]
+        (pat,) = find_hole_patterns(holes)
+        assert isinstance(pat, LinearArray)
+        assert len(pat.holes) == 4
+        assert pat.pitch == pytest.approx(10.0, abs=0.05)
+
     @pytest.mark.timeout(120)
     def test_square_grid_pitches_equal(self):
         from build123d_drafting import RectGrid, find_hole_patterns

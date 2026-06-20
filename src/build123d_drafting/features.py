@@ -732,8 +732,16 @@ def _as_bolt_circle(holes, pts):
 def _as_linear_array(holes, pts):
     """LinearArray when *pts* (2D) are collinear at constant pitch."""
     n = len(pts)
-    order = sorted(range(n), key=lambda i: (pts[i][0], pts[i][1]))
-    first, last = pts[order[0]], pts[order[-1]]
+    # endpoints are the farthest-apart pair: robust for any orientation. A
+    # lexicographic (x, y) sort would pick the wrong ends for a near-axis row
+    # whose coordinates carry the sub-micron noise real STEP geometry always
+    # has — an interior point sorts first, halving the span and pitch and
+    # rejecting a perfectly good array.
+    i0, i1 = max(
+        ((i, j) for i in range(n) for j in range(i + 1, n)),
+        key=lambda ij: math.dist(pts[ij[0]], pts[ij[1]]),
+    )
+    first, last = pts[i0], pts[i1]
     dx, dy = last[0] - first[0], last[1] - first[1]
     span = math.hypot(dx, dy)
     if span < _PATTERN_ABS_TOL:
