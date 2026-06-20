@@ -26,6 +26,14 @@
 
 ### Fixed
 
+- **`lint_drawing` can reuse projected-view edge boxes across repeated lints
+  (#143).** The view-vs-annotation check builds a per-edge bounding box for each
+  view's projected line-work — the dominant lint cost — and previously rebuilt
+  it on *every* `lint_drawing` call. A new optional `view_edge_cache` dict lets a
+  caller that lints the same views repeatedly (e.g. a build→critique→fix loop)
+  persist it across calls; on a warm cache the per-edge boxes are reused instead
+  of recomputed (demonstrated: `_bbox2d` calls 13→1 on the second lint). Omitting
+  it keeps the previous per-call behaviour exactly; output is unchanged.
 - **`lint_drawing` no longer recomputes optimal bounding boxes O(n²) times
   (#161).** The pairwise label-overlap loop computed each label-less item's
   `bounding_box(optimal=True)` once per *pair* it appeared in — ~200 s of
