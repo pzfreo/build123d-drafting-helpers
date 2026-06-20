@@ -2065,7 +2065,7 @@ class TestLeaderCallout:
 
 class TestCenterMark:
     def test_crosshair_geometry(self):
-        cm = CenterMark((5, 7), 4.0)
+        cm = CenterMark((5, 7), 4.0)  # below the dash threshold → solid cross
         assert len(cm.faces()) == 2
         bb = cm.bounding_box()
         assert bb.size.X == pytest.approx(4.0, abs=0.01)
@@ -2084,7 +2084,7 @@ class TestCenterMark:
 class TestCenterlineCircle:
     def test_stroked_loop_geometry(self):
         cc = CenterlineCircle((5, 7), 60.0)
-        assert len(cc.faces()) == 2  # two stroked half-circles, not a disc
+        assert len(cc.faces()) > 2  # chain-line dashes around the loop, not a disc
         bb = cc.bounding_box()
         assert bb.size.X == pytest.approx(60.0, abs=0.5)
         assert (bb.min.X + bb.max.X) / 2 == pytest.approx(5.0, abs=0.1)
@@ -2093,6 +2093,34 @@ class TestCenterlineCircle:
     def test_rejects_nonpositive_diameter(self):
         with pytest.raises(ValueError, match="diameter"):
             CenterlineCircle((0, 0), 0)
+
+
+class TestChainLineDashes:
+    # #154: centrelines are ISO 128 long-dash–short-dash chain lines whose
+    # dash/gap lengths derive from the Draft (solid when too short to dash).
+    def test_centerline_is_dashed_and_keeps_extent(self):
+        cl = Centerline((0, 0, 0), (0, 40, 0))  # well above the dash threshold
+        assert len(cl.faces()) > 1  # multiple dashes, not one solid line
+        bb = cl.bounding_box()
+        assert bb.min.Y == pytest.approx(0.0, abs=0.1)
+        assert bb.max.Y == pytest.approx(40.0, abs=0.1)
+
+    def test_dash_size_scales_with_draft(self):
+        small = Centerline((0, 0, 0), (0, 40, 0), draft=Draft(font_size=2.5))
+        big = Centerline((0, 0, 0), (0, 40, 0), draft=Draft(font_size=6.0))
+        # larger font → longer dashes → fewer of them over the same length
+        assert len(big.faces()) < len(small.faces())
+
+    def test_small_center_mark_stays_solid(self):
+        assert len(CenterMark((0, 0), 4.0).faces()) == 2
+
+    def test_large_center_mark_is_dashed(self):
+        assert len(CenterMark((0, 0), 40.0).faces()) > 2
+
+    def test_centerline_circle_dashes_scale_with_draft(self):
+        small = CenterlineCircle((0, 0), 80.0, draft=Draft(font_size=2.5))
+        big = CenterlineCircle((0, 0), 80.0, draft=Draft(font_size=6.0))
+        assert len(big.faces()) < len(small.faces())
 
 
 class TestHoleCalloutPatternExtensions:

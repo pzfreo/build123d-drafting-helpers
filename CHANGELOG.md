@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed
+
+- **`Centerline`, `CenterMark`, and `CenterlineCircle` now draw ISO 128
+  long-dash–short-dash chain lines** instead of solid lines (#154). The
+  `draft` argument is finally honoured: dash and gap lengths scale from
+  `draft.font_size`, and the pattern is symmetric about the centre with the
+  outermost dash reaching each end so the centreline's extent (and the
+  lint/`place_labels` clearance geometry) is unchanged. A path too short for a
+  pattern stays solid — small centre marks remain solid crosses, as ISO draws
+  them.
+
 ### Added
 
 - **`feature_diameters(part, cyls=None)`** — the sorted unique diameters of the
