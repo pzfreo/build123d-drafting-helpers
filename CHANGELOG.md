@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+## v0.12.0 — 2026-06-21
+
+### Added
+
+- **`RectGrid`** pattern type — `find_hole_patterns` now recognises a
+  fully-populated N×M rectangular grid of identical holes as one pattern, with
+  `rows`, `cols`, `row_pitch`, `col_pitch`, `angle`, and `center` (#126). A 2×2
+  set is deliberately excluded (four lattice corners are a rectangle, not a
+  grid). Tests cover 3×2 / 4×3 / 4×2 and a square grid.
+
+### Changed
+
+- **`find_hole_patterns` now sub-clusters within each machining-spec group**
+  instead of fitting the whole group as a single bolt circle or line (#144).
+  All candidate sub-patterns are enumerated and allocated greedily
+  largest-first, so one spec can contribute several patterns and each hole
+  belongs to at most one: two separate bolt circles of the same screw yield two
+  `BoltCircle`s, and a rectangular perimeter / ring is reported as its edge
+  `LinearArray` rows. Validated on the NIST CTC-02 model: `find_hole_patterns`
+  goes from **0 → 14 patterns** (the ⌀10.1 outer perimeter and ⌀8.38 inner ring
+  are now recognised, where previously nothing was).
+
+### Fixed
+
+- **`_as_linear_array` no longer drops near-axis rows that carry float noise.**
+  Endpoints were chosen by a lexicographic `(x, y)` sort, which the sub-micron
+  perpendicular jitter of real STEP geometry could reorder — picking an interior
+  point as an endpoint, halving the measured span and pitch, and rejecting a
+  valid array. Endpoints are now the farthest-apart pair, correct for any
+  orientation. (Pre-existing; surfaced by the heavier use of this path in the
+  pattern sub-clustering.)
+
 ## v0.11.0 — 2026-06-20
 
 ### Added
