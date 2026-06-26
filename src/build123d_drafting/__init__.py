@@ -18,6 +18,7 @@ from build123d_drafting.features import (
     BossFeature,
     CounterBore,
     HoleFeature,
+    HoleSpec,
     LinearArray,
     RectGrid,
     analyse_cylinders,
@@ -25,6 +26,7 @@ from build123d_drafting.features import (
     find_bosses,
     find_hole_patterns,
     find_holes,
+    full_cylinders,
 )
 from build123d_drafting.helpers import (
     Centerline,
@@ -72,6 +74,7 @@ __all__ = [
     "FeatureControlFrame",
     "HoleCallout",
     "HoleFeature",
+    "HoleSpec",
     "Leader",
     "LinearArray",
     "LintIssue",
@@ -93,6 +96,7 @@ __all__ = [
     "find_interferences",
     "find_overlaps",
     "format_drawing_scale",
+    "full_cylinders",
     "leader_offset",
     "lint_drawing",
     "place_dims",

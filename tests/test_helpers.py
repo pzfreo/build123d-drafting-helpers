@@ -1076,6 +1076,52 @@ class TestTitleBlock:
         without_labels = TitleBlock("Part", "001", cell_height=8, show_labels=False, draft=draft)
         assert len(with_labels.faces()) > len(without_labels.faces())
 
+    def test_cell_bbox_columns_tile_the_top_row(self, draft):
+        # The five top-row cells abut with no gaps and span the full width.
+        tb = TitleBlock("Part", "001", width=170, cell_height=8, draft=draft)
+        names = ["title", "drawing_number", "scale", "material", "revision"]
+        cells = [tb.cell_bbox(n) for n in names]
+        # 40/20/15/15/10 % of 170.
+        assert [c["width"] for c in cells] == pytest.approx([68.0, 34.0, 25.5, 25.5, 17.0])
+        for lo, hi in zip(cells, cells[1:]):
+            assert lo["max_x"] == pytest.approx(hi["min_x"])
+        assert cells[0]["min_x"] == pytest.approx(0.0)
+        assert cells[-1]["max_x"] == pytest.approx(170.0)
+        # Top row sits between the two row dividers (y = cell_height .. 2*cell_height).
+        assert cells[0]["min_y"] == pytest.approx(8.0)
+        assert cells[0]["max_y"] == pytest.approx(16.0)
+
+    def test_drawn_by_cell_spans_bottom_row_after_first_column(self, draft):
+        tb = TitleBlock("Part", "001", width=170, cell_height=8, draft=draft)
+        cell = tb.drawn_by_cell_bbox()
+        assert cell == tb.cell_bbox("designed_by")
+        # General tolerance owns the first 40% column; drawn-by takes the rest.
+        assert cell["min_x"] == pytest.approx(68.0)
+        assert cell["max_x"] == pytest.approx(170.0)
+        assert cell["min_y"] == pytest.approx(0.0)
+        assert cell["max_y"] == pytest.approx(8.0)
+
+    def test_cell_bbox_aliases(self, draft):
+        tb = TitleBlock("Part", "001", draft=draft)
+        assert tb.cell_bbox("drawn_by") == tb.cell_bbox("designed_by")
+        assert tb.cell_bbox("date") == tb.cell_bbox("revision")
+
+    def test_legal_owner_cell_only_when_row_present(self, draft):
+        without = TitleBlock("Part", "001", cell_height=8, draft=draft)
+        with pytest.raises(KeyError):
+            without.cell_bbox("legal_owner")
+        with_lo = TitleBlock("Part", "001", legal_owner="ACME", cell_height=8, draft=draft)
+        lo = with_lo.cell_bbox("legal_owner")
+        assert lo["min_x"] == pytest.approx(0.0)
+        assert lo["max_x"] == pytest.approx(with_lo.block_bbox["width"])
+        # Full-width owner row sits above the standard two rows.
+        assert lo["min_y"] == pytest.approx(16.0)
+        assert lo["max_y"] == pytest.approx(24.0)
+
+    def test_cell_bbox_unknown_name_raises(self, draft):
+        with pytest.raises(KeyError):
+            TitleBlock("Part", "001", draft=draft).cell_bbox("nonsense")
+
 
 # ---------------------------------------------------------------------------
 # SurfaceFinish

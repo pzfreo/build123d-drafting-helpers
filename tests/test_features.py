@@ -26,10 +26,12 @@ from build123d_drafting import (
     BossFeature,
     CounterBore,
     HoleFeature,
+    HoleSpec,
     analyse_cylinders,
     feature_diameters,
     find_bosses,
     find_holes,
+    full_cylinders,
 )
 
 
@@ -777,3 +779,54 @@ class TestFeatureDiameters:
     def test_cyls_argument_matches_self_scan(self):
         part = Box(60, 60, 20) - Cylinder(5, 20) - Pos(0, 0, 10 - 3) * Cylinder(9, 6)
         assert feature_diameters(part, cyls=analyse_cylinders(part)) == feature_diameters(part)
+
+
+class TestFullCylinders:
+    @pytest.mark.timeout(60)
+    def test_keeps_a_bore_drops_corner_fillets(self):
+        # A box with rounded vertical edges and a central bore: the bore's
+        # cylinder records survive, the fillet faces do not.
+        part = fillet((Box(60, 60, 20) - Cylinder(5, 20)).edges().filter_by(Axis.Z), radius=4)
+        z_cyls, _ = analyse_cylinders(part)
+        full = full_cylinders(z_cyls)
+        # Exactly the bore is full; its diameter is 10.
+        assert full
+        assert all(c["diameter"] == pytest.approx(10.0) for c in full)
+        assert len(full) < len(z_cyls)
+
+    @pytest.mark.timeout(60)
+    def test_empty_input_returns_empty(self):
+        assert full_cylinders([]) == []
+
+
+class TestHoleSpec:
+    @pytest.mark.timeout(60)
+    def test_identical_holes_share_one_spec(self):
+        part = Box(120, 60, 20) - Pos(-30, 0, 0) * Cylinder(5, 20) - Pos(30, 0, 0) * Cylinder(5, 20)
+        a, b = find_holes(part)
+        sa, sb = HoleSpec.from_hole(a), HoleSpec.from_hole(b)
+        assert sa == sb
+        assert hash(sa) == hash(sb)
+        assert len({sa, sb}) == 1
+
+    @pytest.mark.timeout(60)
+    def test_different_diameter_is_a_different_spec(self):
+        part = Box(120, 60, 20) - Pos(-30, 0, 0) * Cylinder(5, 20) - Pos(30, 0, 0) * Cylinder(7, 20)
+        a, b = find_holes(part)
+        assert HoleSpec.from_hole(a) != HoleSpec.from_hole(b)
+
+    @pytest.mark.timeout(60)
+    def test_through_hole_depth_is_normalised_to_none(self):
+        part = Box(60, 60, 20) - Cylinder(5, 20)
+        (h,) = find_holes(part)
+        assert h.bottom == "through"
+        assert HoleSpec.from_hole(h).depth is None
+
+    @pytest.mark.timeout(60)
+    def test_usable_as_dict_key_for_grouping(self):
+        part = Box(120, 60, 20) - Pos(-30, 0, 0) * Cylinder(5, 20) - Pos(30, 0, 0) * Cylinder(5, 20)
+        groups: dict = {}
+        for h in find_holes(part):
+            groups.setdefault(HoleSpec.from_hole(h), []).append(h)
+        assert len(groups) == 1
+        assert len(next(iter(groups.values()))) == 2

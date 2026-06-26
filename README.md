@@ -317,6 +317,34 @@ non-cylindrical features.
 
 ---
 
+### Public contracts for downstream consumers
+
+These are **stable** public APIs intended for tools built on top of the helpers
+(e.g. [`draftwright`](https://github.com/pzfreo/draftwright)). They expose the
+lower-level grouping primitives the auto-drawing engine itself uses, so a
+consumer's pattern detection and callout grouping agree with the helpers'.
+
+- **`full_cylinders(cyls)`** — given one of the two record lists from
+  `analyse_cylinders(part)` (z-axis or cross-axis), returns the feature-relevant
+  ("full") cylinder records — the patches belonging to a hole or boss, with
+  fillet faces and slot end caps removed. For the higher-level inventory of
+  *dimensionable diameters*, prefer `feature_diameters(part)`.
+- **`HoleSpec.from_hole(hole)`** — the machining spec of a `HoleFeature` as a
+  frozen, hashable value. Two holes that are the same drilled feature (same
+  drill, same direction, same counterbore/spotface stack) compare and hash equal,
+  so `HoleSpec` is a stable dict/set key for grouping holes. A through hole's
+  depth is normalised to `None` (irrelevant to the spec).
+- **`TitleBlock.cell_bbox(name)`** / **`TitleBlock.drawn_by_cell_bbox()`** —
+  the bounding box of a named title-block cell in the **build frame** (same dict
+  shape as `block_bbox`). `name` is the constructor field the cell holds —
+  `"title"`, `"drawing_number"`, `"scale"`, `"material"`, `"revision"` (alias
+  `"date"`), `"general_tolerance"`, `"designed_by"` (alias `"drawn_by"`), or
+  `"legal_owner"` (only when that row was drawn). Useful for placing an
+  attribution link in the drawn-by cell. When the block has been `.moved()`,
+  apply the same location to the returned corners.
+
+---
+
 ### `find_interferences(items, *, part_bbox=None, page_bbox=None, obstacles=None)`
 
 Geometry-precise interference detection between annotation objects. Each item is
