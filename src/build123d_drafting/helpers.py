@@ -2090,6 +2090,18 @@ def format_drawing_scale(scale: float) -> str:
 _TB_COL_FRACTIONS = [0.40, 0.20, 0.15, 0.15, 0.10]
 
 
+def _bbox_dict(min_x, min_y, max_x, max_y):
+    """A bbox dict in the same shape as ``TitleBlock.block_bbox``."""
+    return {
+        "min_x": min_x,
+        "min_y": min_y,
+        "max_x": max_x,
+        "max_y": max_y,
+        "width": max_x - min_x,
+        "height": max_y - min_y,
+    }
+
+
 class TitleBlock(_Annotation):
     """ISO 7200:2004 title block built at the origin (bottom-left at (0, 0)).
 
@@ -2293,6 +2305,54 @@ class TitleBlock(_Annotation):
             "width": width,
             "height": y_top,
         }
+        # Named cell rectangles in the BUILD frame, keyed by the constructor
+        # field they hold (see cell_bbox()). The legal-owner cell exists only
+        # when that full-width row was drawn.
+        self._cells = {
+            "title": _bbox_dict(x[0], y1, x[1], y2),
+            "drawing_number": _bbox_dict(x[1], y1, x[2], y2),
+            "scale": _bbox_dict(x[2], y1, x[3], y2),
+            "material": _bbox_dict(x[3], y1, x[4], y2),
+            "revision": _bbox_dict(x[4], y1, x[5], y2),
+            "general_tolerance": _bbox_dict(x[0], y0, x[1], y1),
+            "designed_by": _bbox_dict(x[1], y0, x[5], y1),
+        }
+        if legal_owner:
+            self._cells["legal_owner"] = _bbox_dict(x[0], y2, x[-1], y_top)
+        # Friendly aliases for the two cells whose constructor name and ISO 7200
+        # label differ.
+        self._cell_aliases = {"drawn_by": "designed_by", "date": "revision"}
+
+    def cell_bbox(self, name: str) -> dict:
+        """Bounding box of the named title-block cell, in the BUILD frame.
+
+        *name* is the constructor field the cell holds: ``"title"``,
+        ``"drawing_number"``, ``"scale"``, ``"material"``, ``"revision"``
+        (alias ``"date"``), ``"general_tolerance"``, ``"designed_by"`` (alias
+        ``"drawn_by"``), or ``"legal_owner"`` (only when a ``legal_owner`` row
+        was drawn). Returns a dict with ``min_x``, ``min_y``, ``max_x``,
+        ``max_y``, ``width``, ``height`` — same shape as ``block_bbox``.
+
+        Coordinates are in the build frame (bottom-left of the block at the
+        origin), like ``block_bbox``. When the title block has been
+        repositioned with ``.moved()`` / ``rotation=``, apply the same location
+        to these corners to get the live placement — a single cell cannot be
+        recovered from ``.bounding_box()``. Intended for downstream consumers
+        (e.g. ``draftwright`` placing an attribution link in the drawn-by cell).
+
+        Raises:
+            KeyError: if *name* is not a known cell (or ``"legal_owner"`` when
+                no legal-owner row was drawn).
+        """
+        key = self._cell_aliases.get(name, name)
+        if key not in self._cells:
+            raise KeyError(f"unknown title-block cell: {name!r}")
+        return dict(self._cells[key])
+
+    def drawn_by_cell_bbox(self) -> dict:
+        """Bounding box of the drawn-by (``designed_by``) cell, in the BUILD
+        frame. Convenience for ``cell_bbox("designed_by")``."""
+        return self.cell_bbox("designed_by")
 
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ overhang; counterbores on the far side of a through hole's bore are not
 reported.
 
 This module also hosts the low-level cylinder analysis that
-``make_drawing`` builds on (``analyse_cylinders``, ``_full_cyls``).
+``make_drawing`` builds on (``analyse_cylinders``, ``full_cylinders``).
 """
 
 import math
@@ -162,16 +162,32 @@ def _merge_runs(items, key_fn):
     return runs
 
 
-def _full_cyls(cyls):
-    """Only the hole/boss cylinder records — patches around one axis must
-    total more than half a turn within one contiguous axial range, so fillet
-    faces and slot end caps are excluded (even coaxial caps at different
-    heights) but a bore split by a slot or keyway still counts."""
+def full_cylinders(cyls):
+    """The feature-relevant ("full") cylinder records within *cyls*.
+
+    *cyls* is one of the two record lists returned by :func:`analyse_cylinders`
+    (the z-axis list or the cross-axis list); the records are the dicts that
+    function produces. The result keeps only the records that belong to a hole
+    or boss: patches around one axis must total more than half a turn within
+    one contiguous axial range, so fillet faces and slot end caps are excluded
+    (even coaxial caps at different heights) but a bore split by a slot or
+    keyway still counts.
+
+    This is the patch-level filter shared with ``make_drawing``. For the
+    higher-level inventory of dimensionable diameters use
+    :func:`feature_diameters`, which is built from the recognised
+    :func:`find_holes` / :func:`find_bosses` features instead. Public and
+    stable for downstream consumers (e.g. ``draftwright``).
+    """
     keep = []
     for run in _merge_runs(cyls, _cyl_group_key):
         if sum(c["u_extent"] for c in run) >= _FULL_CYL_MIN_EXTENT:
             keep.extend(run)
     return keep
+
+
+# Internal alias retained for the in-module call sites.
+_full_cyls = full_cylinders
 
 
 # ---------------------------------------------------------------------------
@@ -590,8 +606,8 @@ def feature_diameters(part, cyls=None) -> list:
 
     This is the inventory to use for coverage checks ("is each dimensionable
     diameter called out?"). It is deliberately built from
-    :func:`find_holes` / :func:`find_bosses`, not the raw ``_full_cyls`` patch
-    list, so partial cylinders that never become a real feature — slot ends and
+    :func:`find_holes` / :func:`find_bosses`, not the raw :func:`full_cylinders`
+    patch list, so partial cylinders that never become a real feature — slot ends and
     interrupted recesses (an exact half-cylinder pair sums to a full turn and
     fools an angle-only test, but is not a bore) — are excluded, while genuine
     counterbore/spotface steps are kept. (#158)
@@ -683,14 +699,43 @@ def _pattern_tol(nominal: float) -> float:
     return _PATTERN_REL_TOL * nominal + _PATTERN_ABS_TOL
 
 
+@dataclass(frozen=True)
+class HoleSpec:
+    """The machining spec shared by holes that are the *same drilled feature*.
+
+    Two holes drilled with the same tool, in the same direction, with the same
+    counterbore/spotface stack have equal :class:`HoleSpec` values (a through
+    drill is the same spec whatever wall it pierces). Because the dataclass is
+    frozen it hashes and compares by value, so it is a stable dict/set key for
+    grouping holes — pattern detection and callout grouping agree when they key
+    on the same :class:`HoleSpec`.
+
+    Build one with :meth:`from_hole`; do not construct the fields by hand (the
+    normalisation in :meth:`from_hole` is part of the contract). ``axis`` is the
+    drilling direction snapped to 6 dp (boolean ops leave ~1e-16 noise on the
+    components, and exact float keys would split a pattern silently). ``depth``
+    is ``None`` for a through hole — its depth is irrelevant to the spec —
+    otherwise the bore depth. Public and stable for downstream consumers (e.g.
+    ``draftwright``).
+    """
+
+    axis: tuple
+    diameter: float
+    depth: float | None
+    bottom: str
+    cbore: CounterBore | None
+    spotface: CounterBore | None
+
+    @classmethod
+    def from_hole(cls, hole: HoleFeature) -> "HoleSpec":
+        """The :class:`HoleSpec` for *hole* (a :class:`HoleFeature`)."""
+        depth = None if hole.bottom == "through" else hole.depth
+        axis = tuple(0.0 if abs(c) < 1e-6 else round(c, 6) for c in hole.axis)
+        return cls(axis, hole.diameter, depth, hole.bottom, hole.cbore, hole.spotface)
+
+
 def _spec_key(h):
-    """Holes sharing one machining spec: identical drill (a through drill is
-    the same spec whatever wall it pierces) and identical drilling direction.
-    The axis is snapped to 6 dp — boolean ops leave ~1e-16 noise on the
-    components, and exact float keys would split a pattern silently."""
-    depth_key = None if h.bottom == "through" else h.depth
-    axis = tuple(0.0 if abs(c) < 1e-6 else round(c, 6) for c in h.axis)
-    return (axis, h.diameter, depth_key, h.bottom, h.cbore, h.spotface)
+    return HoleSpec.from_hole(h)
 
 
 def _plane_uv(axis):
@@ -954,10 +999,10 @@ def find_hole_patterns(holes) -> list:
         groups.setdefault(_spec_key(h), []).append(h)
 
     patterns = []
-    for (axis, *_), members in groups.items():
+    for spec, members in groups.items():
         if len(members) < 3:
             continue
-        u, v = _plane_uv(axis)
+        u, v = _plane_uv(spec.axis)
         pts = [
             (
                 sum(a * b for a, b in zip(h.location, u, strict=True)),

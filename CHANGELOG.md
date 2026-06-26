@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- **Public contracts for downstream consumers** (#169) — stable equivalents of
+  three previously private names that `draftwright` depended on:
+  - **`full_cylinders(cyls)`** (was `_full_cyls`) — the feature-relevant ("full")
+    cylinder records within one `analyse_cylinders` list.
+  - **`HoleSpec`** + **`HoleSpec.from_hole(hole)`** (was `_spec_key`) — a frozen,
+    hashable machining-spec value usable as a dict/set key for grouping holes.
+  - **`TitleBlock.cell_bbox(name)`** and **`TitleBlock.drawn_by_cell_bbox()`**
+    (replacing the need for the private `_TB_COL_FRACTIONS`) — build-frame
+    bounding box of a named title-block cell.
+
 ## v0.12.0 — 2026-06-21
 
 ### Added
