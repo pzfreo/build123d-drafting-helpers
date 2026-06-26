@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.12.1 — 2026-06-26
+
 ### Added
 
 - **Public contracts for downstream consumers** (#169) — stable equivalents of
