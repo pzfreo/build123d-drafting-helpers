@@ -29,6 +29,7 @@ from build123d_drafting.features import (
     full_cylinders,
 )
 from build123d_drafting.helpers import (
+    DEFAULT_FONT_PATH,
     Centerline,
     CenterlineCircle,
     CenterMark,
@@ -61,6 +62,7 @@ from build123d_drafting.helpers import (
 )
 
 __all__ = [
+    "DEFAULT_FONT_PATH",
     "BoltCircle",
     "BossFeature",
     "CenterMark",

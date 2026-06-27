@@ -1,6 +1,7 @@
 """Tests for build123d_drafting (0.2.0 — native BaseSketchObject API)."""
 
 import math
+import os
 
 import pytest
 from build123d import Color, Draft, ExportSVG, Sketch
@@ -28,6 +29,7 @@ from build123d_drafting import (
     find_interferences,
     find_overlaps,
     format_drawing_scale,
+    helpers,
     leader_offset,
     lint_drawing,
     place_dims,
@@ -35,7 +37,12 @@ from build123d_drafting import (
     set_page,
     view_axes,
 )
-from build123d_drafting.helpers import _GDT_GLYPHS, _label_value
+from build123d_drafting.helpers import (
+    _GDT_GLYPHS,
+    DEFAULT_FONT_PATH,
+    _font_path,
+    _label_value,
+)
 
 
 @pytest.fixture
@@ -1564,6 +1571,59 @@ class TestDraftPreset:
         d = draft_preset(font_size=2.0, arrow_length=5.0, line_width=0.3)
         assert d.arrow_length == pytest.approx(5.0)
         assert d.line_width == pytest.approx(0.3)
+
+
+class TestFontPath:
+    def test_bundled_font_exists(self):
+        # The default font is vendored in the package and renders.
+        assert os.path.isfile(DEFAULT_FONT_PATH)
+        assert DEFAULT_FONT_PATH.endswith("LiberationSans-Regular.ttf")
+
+    def test_bundled_is_the_default(self):
+        # No font_path given -> bundled Liberation Sans (deterministic geometry).
+        assert _font_path(draft_preset()) == DEFAULT_FONT_PATH
+        assert _font_path(Draft(font_size=2.5)) == DEFAULT_FONT_PATH
+
+    def test_pinned_on_preset(self):
+        d = draft_preset(font_path="/fonts/custom.ttf")
+        assert d.font_path == "/fonts/custom.ttf"
+        assert _font_path(d) == "/fonts/custom.ttf"
+
+    def test_none_opts_out_to_name(self):
+        # Explicit None -> resolve the font *name* via the OS font stack.
+        assert _font_path(draft_preset(font_path=None)) is None
+
+    def test_assignable_onto_plain_draft(self):
+        d = Draft(font_size=2.5)
+        d.font_path = "/fonts/custom.ttf"
+        assert _font_path(d) == "/fonts/custom.ttf"
+
+    def test_reaches_text_construction(self, monkeypatch):
+        # The pinned font_path must flow through to every build123d.Text call.
+        seen: list = []
+        real_text = helpers.Text
+
+        def spy(*args, **kwargs):
+            seen.append(kwargs.get("font_path"))
+            return real_text(*args, **kwargs)
+
+        monkeypatch.setattr(helpers, "Text", spy)
+        d = draft_preset(font_path="/fonts/custom.ttf")
+        Dimension((-10, 0, 0), (10, 0, 0), "above", 8, d, label="20")
+        assert seen, "Dimension built no Text geometry"
+        assert all(fp == "/fonts/custom.ttf" for fp in seen)
+
+    def test_default_reaches_text_construction(self, monkeypatch):
+        seen: list = []
+        real_text = helpers.Text
+
+        def spy(*args, **kwargs):
+            seen.append(kwargs.get("font_path"))
+            return real_text(*args, **kwargs)
+
+        monkeypatch.setattr(helpers, "Text", spy)
+        Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft_preset(), label="20")
+        assert seen and all(fp == DEFAULT_FONT_PATH for fp in seen)
 
 
 # ---------------------------------------------------------------------------
