@@ -35,6 +35,7 @@ import logging
 import math
 import re
 from dataclasses import dataclass
+from importlib.resources import files
 from typing import Any, Literal
 
 from build123d import (
@@ -58,6 +59,36 @@ from build123d.objects_sketch import BaseSketchObject
 from build123d.operations_generic import sweep
 
 _log = logging.getLogger(__name__)
+
+# A freely-redistributable font (Liberation Sans, SIL OFL 1.1) vendored under
+# ``fonts/`` and used by default so text geometry is identical on every platform.
+# ``build123d.Draft.font`` defaults to the *name* "Arial", which the OS font stack
+# silently substitutes (Liberation/DejaVu on Linux, real Arial on macOS) — yielding
+# different glyph outlines and metrics per machine. Pinning to a bundled file fixes
+# that. Liberation Sans is metric-compatible with Arial, so output barely shifts.
+DEFAULT_FONT_PATH: str = str(files("build123d_drafting") / "fonts" / "LiberationSans-Regular.ttf")
+
+# Sentinel: distinguishes "caller did not pass font_path" (use the bundled default)
+# from an explicit ``font_path=None`` (opt out — resolve the ``font`` name instead).
+_UNSET = object()
+
+
+def _font_path(draft: Draft) -> str | None:
+    """Font-file path used to render ``draft``'s text.
+
+    Resolution order:
+
+    1. ``draft.font_path`` if the attribute is set — a file path (or ``None`` to
+       opt out and resolve the ``font`` *name* through the OS font stack);
+    2. otherwise :data:`DEFAULT_FONT_PATH`, the bundled Liberation Sans.
+
+    A file path yields byte-identical glyph geometry across platforms, where a
+    font *name* does not. Pin a font via :func:`draft_preset`'s ``font_path=``
+    argument or by assigning ``draft.font_path = "/path.ttf"``; pass
+    ``font_path=None`` to fall back to name-based, system-font behaviour.
+    """
+    return getattr(draft, "font_path", DEFAULT_FONT_PATH)
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -317,7 +348,12 @@ class _Annotation(BaseSketchObject):
 # ---------------------------------------------------------------------------
 
 
-def draft_preset(font_size: float = 2.5, decimal_precision: int = 2, **overrides) -> Draft:
+def draft_preset(
+    font_size: float = 2.5,
+    decimal_precision: int = 2,
+    font_path: str | None = _UNSET,  # type: ignore[assignment]
+    **overrides,
+) -> Draft:
     """A ``Draft`` tuned for clean technical-drawing output.
 
     Scales the arrowhead to the font and uses a thin line, closer to ISO
@@ -327,6 +363,12 @@ def draft_preset(font_size: float = 2.5, decimal_precision: int = 2, **overrides
         line_width   = 0.1
 
     Any field can be overridden by keyword.
+
+    Text is rendered with the bundled :data:`DEFAULT_FONT_PATH` (Liberation Sans)
+    so glyph geometry is identical on every platform. Pass ``font_path`` to pin a
+    different font *file*, or ``font_path=None`` to opt out and resolve the
+    ``font`` *name* through the OS font stack instead. The choice travels on the
+    returned ``Draft`` as a ``font_path`` attribute (see :func:`_font_path`).
     """
     params: dict[str, Any] = dict(
         font_size=font_size,
@@ -335,7 +377,10 @@ def draft_preset(font_size: float = 2.5, decimal_precision: int = 2, **overrides
         line_width=0.1,
     )
     params.update(overrides)
-    return Draft(**params)
+    draft = Draft(**params)
+    if font_path is not _UNSET:
+        draft.font_path = font_path  # type: ignore[attr-defined]  # Draft has no field; we pin it
+    return draft
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +508,7 @@ class Dimension(_Annotation):
             txt=label_str,
             font_size=draft.font_size,
             font=draft.font,
+            font_path=_font_path(draft),
             align=Align.CENTER,
             mode=Mode.PRIVATE,
         )
@@ -483,6 +529,7 @@ class Dimension(_Annotation):
                     txt=label_str,
                     font_size=draft.font_size,
                     font=draft.font,
+                    font_path=_font_path(draft),
                     align=(Align.CENTER, Align.CENTER),
                     mode=Mode.PRIVATE,
                 ).moved(
@@ -735,6 +782,7 @@ class Note(_Annotation):
             txt=text,
             font_size=draft.font_size,
             font=draft.font,
+            font_path=_font_path(draft),
             align=Align.CENTER if align is None else align,
             mode=Mode.PRIVATE,
         ).moved(Location(Vector(position[0], position[1], 0.0)))
@@ -798,6 +846,7 @@ class TextBlock(_Annotation):
                     txt=line,
                     font_size=draft.font_size,
                     font=draft.font,
+                    font_path=_font_path(draft),
                     # Align.NONE keeps the font's raw vertical frame, so all
                     # lines sit on a shared baseline grid (bbox-MAX alignment
                     # would float lowercase-only lines up by the ascender gap)
@@ -973,6 +1022,7 @@ class Leader(_Annotation):
                 txt=label,
                 font_size=draft.font_size,
                 font=draft.font,
+                font_path=_font_path(draft),
                 align=text_align,
                 mode=Mode.PRIVATE,
             ).moved(Location(Vector(text_x, elbow_v.Y, 0.0)))
@@ -2216,6 +2266,7 @@ class TitleBlock(_Annotation):
 
         fs = draft.font_size
         font = draft.font
+        font_path = _font_path(draft)
 
         def _cell_txt(value, cx, cy):
             if not value:
@@ -2224,6 +2275,7 @@ class TitleBlock(_Annotation):
                 txt=value,
                 font_size=fs,
                 font=font,
+                font_path=font_path,
                 align=(Align.CENTER, Align.CENTER),
                 mode=Mode.PRIVATE,
             ).moved(Location(Vector(cx, cy, 0.0)))
@@ -2242,6 +2294,7 @@ class TitleBlock(_Annotation):
                 txt=text,
                 font_size=lfs,
                 font=font,
+                font_path=font_path,
                 align=(Align.MIN, Align.MIN),
                 mode=Mode.PRIVATE,
             ).moved(Location(Vector(x_left + lpad, y_bottom + lpad, 0.0)))
@@ -2402,6 +2455,7 @@ class SurfaceFinish(_Annotation):
             txt=ra_value,
             font_size=draft.font_size,
             font=draft.font,
+            font_path=_font_path(draft),
             align=Align.CENTER,
             mode=Mode.PRIVATE,
         )
@@ -2417,6 +2471,7 @@ class SurfaceFinish(_Annotation):
             txt=ra_value,
             font_size=draft.font_size,
             font=draft.font,
+            font_path=_font_path(draft),
             align=(Align.MIN, Align.MIN),
             mode=Mode.PRIVATE,
         ).moved(Location(Vector(elbow_x + gap, elbow_y + v_gap, 0.0)))
@@ -2581,6 +2636,7 @@ def _gdt_text(draft: Draft, txt: str, fs: float):
         txt=txt,
         font_size=fs,
         font=draft.font,
+        font_path=_font_path(draft),
         align=(Align.CENTER, Align.CENTER),
         mode=Mode.PRIVATE,
     )
@@ -2800,6 +2856,7 @@ class DatumFeature(_Annotation):
             txt=letter,
             font_size=h,
             font=draft.font,
+            font_path=_font_path(draft),
             align=(Align.CENTER, Align.CENTER),
             mode=Mode.PRIVATE,
         ).moved(Location(Vector(0, (by0 + by1) / 2, 0)))
@@ -2850,6 +2907,7 @@ class DatumTarget(_Annotation):
                 txt=identifier,
                 font_size=fs,
                 font=draft.font,
+                font_path=_font_path(draft),
                 align=(Align.CENTER, Align.CENTER),
                 mode=Mode.PRIVATE,
             ).moved(Location(Vector(0, -r / 2, 0)))
@@ -2860,6 +2918,7 @@ class DatumTarget(_Annotation):
                     txt=area_label,
                     font_size=fs,
                     font=draft.font,
+                    font_path=_font_path(draft),
                     align=(Align.CENTER, Align.CENTER),
                     mode=Mode.PRIVATE,
                 ).moved(Location(Vector(0, r / 2, 0)))
@@ -3073,6 +3132,7 @@ class HoleCallout(_Annotation):
                     txt=val,
                     font_size=h,
                     font=draft.font,
+                    font_path=_font_path(draft),
                     align=(Align.MIN, Align.CENTER),
                     mode=Mode.PRIVATE,
                 ).moved(Location(Vector(x, 0, 0)))

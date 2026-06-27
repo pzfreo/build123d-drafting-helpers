@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## v0.13.0 — 2026-06-27
+
+### Added
+
+- **Deterministic, platform-independent text** (#172) — every label is now
+  rendered from a bundled font *file* instead of a font *name*. build123d's
+  `Draft.font` defaults to the name `"Arial"`, which the OS font stack silently
+  substitutes when absent (Liberation/DejaVu on Linux, real Arial on macOS),
+  giving different glyph outlines and metrics per platform and drifting a whole
+  sheet by ~1 mm across operating systems. The helpers now default to a bundled
+  **Liberation Sans** (SIL OFL 1.1), exposed as `DEFAULT_FONT_PATH`, so glyph
+  geometry is identical everywhere.
+  - **`draft_preset(font_path=...)`** pins any font file; `font_path=None` opts
+    out and resolves the `font` name through the OS font stack as before.
+  - Any `Draft` honours a `font_path` attribute (`draft.font_path = "/f.ttf"`);
+    a path always takes precedence over the `font` name.
+
+### Changed
+
+- Default rendered typeface is now bundled Liberation Sans rather than the
+  OS-resolved `Draft.font` name. Liberation Sans is metric-compatible with Arial,
+  so layout shifts are negligible; pass `font_path=None` for the previous
+  name-based behaviour.
+
 ## v0.12.1 — 2026-06-26
 
 ### Added

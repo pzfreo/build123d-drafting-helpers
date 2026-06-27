@@ -62,7 +62,7 @@ make_drawing(part, out="drawing", title="My Part", number="DWG-001")
 
 ## Helpers
 
-### `draft_preset(font_size=2.5, decimal_precision=2, **overrides)`
+### `draft_preset(font_size=2.5, decimal_precision=2, font_path=..., **overrides)`
 
 A `Draft` tuned for clean output. build123d's `Draft` defaults draw heavy arrowheads
 (`arrow_length=3.0` mm) and thick dimension lines (`line_width=0.5` mm) that look clumsy at
@@ -76,6 +76,22 @@ draft = draft_preset(font_size=3.0, line_width=0.15)      # override any field
 
 (On-screen/SVG stroke thickness is separate — set it on the exporter via
 `ExportSVG.add_layer(line_weight=...)`.)
+
+**Deterministic text.** build123d's `Draft.font` is a font *name* (default `"Arial"`)
+that the OS font stack silently substitutes when absent — so the same part's labels get
+different glyph outlines and metrics on Linux vs macOS, drifting the whole sheet by ~1 mm.
+These helpers instead render every label from a bundled font *file*
+(`DEFAULT_FONT_PATH` → Liberation Sans, SIL OFL 1.1), so glyph geometry is identical on
+every platform. Override or opt out per draft:
+
+```python
+draft = draft_preset()                                    # bundled Liberation Sans (default)
+draft = draft_preset(font_path="/path/to/MyFont.ttf")     # pin your own font file
+draft = draft_preset(font_path=None)                      # opt out → resolve draft.font by name
+```
+
+The same applies to any `Draft`: assign `draft.font_path = "/path/to/Font.ttf"` (or `None`).
+A path always wins over the `font` name.
 
 ---
 
@@ -499,3 +515,10 @@ annotation primitives and feature recognition.
 ## Documentation
 
 - [Drafting conventions and gotchas](docs/drafting-conventions.md) — offset sign table, crash modes, recommended feedback loop, and when to reach for which helper.
+
+## Bundled font
+
+Text is rendered from a bundled copy of **Liberation Sans**
+([Liberation Fonts](https://github.com/liberationfonts/liberation-fonts), © Red Hat, Inc.),
+licensed under the [SIL Open Font License v1.1](src/build123d_drafting/fonts/LICENSE). The
+font file is a separate, aggregated work; this package's own code remains Apache-2.0.
