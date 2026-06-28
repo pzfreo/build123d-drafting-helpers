@@ -97,6 +97,16 @@ def _font_path(draft: Draft) -> str | None:
 
 @dataclass
 class LintIssue:
+    """A single lint finding.
+
+    .. deprecated::
+        Linting has moved to the ``draftwright`` package (ADR 0007 — "helpers
+        renders; draftwright reasons"). This type is vendored-and-frozen for
+        backward compatibility; importing it through ``build123d_drafting`` emits
+        a ``DeprecationWarning`` and it will be removed in a future release. Use
+        ``draftwright``'s linting package instead.
+    """
+
     severity: Literal["error", "warning", "info"]
     message: str
     location: tuple[float, float] | None = None
@@ -1588,6 +1598,11 @@ def lint_drawing(
     view_edge_cache: dict | None = None,
 ) -> list[LintIssue]:
     """Structural checks on a composed annotation list, duck-typed.
+
+    .. deprecated::
+        Linting has moved to the ``draftwright`` package (ADR 0007). This is a
+        vendored-and-frozen copy; accessing it through ``build123d_drafting``
+        warns and it will be removed in a future release.
 
     Dispatch is by attribute presence, not type:
 
@@ -3172,6 +3187,11 @@ def find_overlaps(sketches, *, min_area: float = 0.01) -> list[LintIssue]:
     """Pure-geometry collision check: pairs of sketches whose filled faces
     actually intersect with area > *min_area*.
 
+    .. deprecated::
+        Linting has moved to the ``draftwright`` package (ADR 0007). This is a
+        vendored-and-frozen copy; accessing it through ``build123d_drafting``
+        warns and it will be removed in a future release.
+
     Works on any build123d ``Sketch`` with zero metadata — uses the boolean
     intersect ``(a & b)`` and tests the resulting area.
 
@@ -3355,6 +3375,11 @@ def find_interferences(
     items, *, part_bbox=None, page_bbox=None, obstacles=None, min_overlap=0.5, pad=0.2, min_run=1.5
 ):
     """Geometry-precise interference detection between drafting annotations.
+
+    .. deprecated::
+        Linting has moved to the ``draftwright`` package (ADR 0007). This is a
+        vendored-and-frozen copy; accessing it through ``build123d_drafting``
+        warns and it will be removed in a future release.
 
     Duck-typed: each item is decomposed into a **label box**
     (``.label_bbox`` or its own face bbox) and **structural line segments**
