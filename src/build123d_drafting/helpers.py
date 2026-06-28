@@ -3483,6 +3483,11 @@ _DRAWING_PAGE: dict | None = None
 def set_page(width: float, height: float, margin: float = 5.0) -> dict:
     """Register the drawing page extent for lint_drawing() bounds checking.
 
+    .. deprecated::
+        This only feeds the standalone linting that has moved to the
+        ``draftwright`` package (ADR 0007). Accessing it through
+        ``build123d_drafting`` warns; it will be removed in a future release.
+
     In the MCP server ``set_page()`` is a session builtin that stores state in
     the session object; this module-level version stores state globally in the
     ``build123d_drafting`` module so that standalone drawing scripts can use it
@@ -3518,13 +3523,24 @@ def set_page(width: float, height: float, margin: float = 5.0) -> dict:
 
 
 def clear_page() -> None:
-    """Clear the module-level drawing page context (e.g. between sheets in tests)."""
+    """Clear the module-level drawing page context (e.g. between sheets in tests).
+
+    .. deprecated::
+        Standalone-lint helper; linting has moved to the ``draftwright`` package
+        (ADR 0007). Accessing it through ``build123d_drafting`` warns; it will be
+        removed in a future release.
+    """
     global _DRAWING_PAGE
     _DRAWING_PAGE = None
 
 
 def annotate(result, name: str | None = None, label: str | None = None) -> None:
     """Register a drawing annotation for lint_drawing() in standalone scripts.
+
+    .. deprecated::
+        Standalone-lint helper; linting has moved to the ``draftwright`` package
+        (ADR 0007). Accessing it through ``build123d_drafting`` warns; it will be
+        removed in a future release.
 
     In the MCP server ``annotate()`` is a session builtin that stores metadata
     in the session *and* calls ``show()``.  This module-level version is a

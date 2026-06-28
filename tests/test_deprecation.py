@@ -18,7 +18,6 @@ _KEPT = [
     "Centerline",
     "TitleBlock",
     "draft_preset",
-    "set_page",
     "view_axes",
     "ViewCoordinates",
     "place_dims",

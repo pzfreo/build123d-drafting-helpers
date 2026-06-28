@@ -10,13 +10,14 @@
   `analyse_cylinders`, `feature_diameters`, `full_cylinders`, and the
   `HoleFeature`/`BossFeature`/`CounterBore`/`HoleSpec`/`BoltCircle`/
   `LinearArray`/`RectGrid` types) and the lint API (`lint_drawing`,
-  `find_overlaps`, `find_interferences`, `LintIssue`) are now **vendored-and-
-  frozen** here: importing any of them through `build123d_drafting` emits a
-  `DeprecationWarning`. Nothing is removed — the copies still work — but they no
-  longer change and will be deleted in a future major version. Use `draftwright`
-  for recognition and linting. The rendering substrate (annotation objects,
-  `draft_preset`/`set_page`, `view_axes`/`ViewCoordinates`, `place_dims`/
-  `place_labels`) is unaffected.
+  `find_overlaps`, `find_interferences`, `LintIssue`) and the standalone-lint
+  registration helpers (`set_page`, `annotate`, `clear_page`) are now
+  **vendored-and-frozen** here: importing any of them through
+  `build123d_drafting` emits a `DeprecationWarning`. Nothing is removed — the
+  copies still work — but they no longer change and will be deleted in a future
+  major version. Use `draftwright` for recognition and linting. The rendering
+  substrate (annotation objects, `draft_preset`, `view_axes`/`ViewCoordinates`,
+  `place_dims`/`place_labels`) is unaffected.
 
 ## v0.13.0 — 2026-06-27
 
