@@ -21,6 +21,13 @@ reported.
 
 This module also hosts the low-level cylinder analysis that
 ``make_drawing`` builds on (``analyse_cylinders``, ``full_cylinders``).
+
+.. deprecated::
+    Feature recognition has moved to the ``draftwright`` package (ADR 0007 —
+    "helpers renders; draftwright reasons"). This module is vendored-and-frozen
+    for backward compatibility: importing its symbols through
+    ``build123d_drafting`` emits a ``DeprecationWarning``, and it will be removed
+    in a future release. Use ``draftwright``'s recognition package instead.
 """
 
 import math

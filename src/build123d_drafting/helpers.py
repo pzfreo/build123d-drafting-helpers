@@ -97,6 +97,16 @@ def _font_path(draft: Draft) -> str | None:
 
 @dataclass
 class LintIssue:
+    """A single lint finding.
+
+    .. deprecated::
+        Linting has moved to the ``draftwright`` package (ADR 0007 — "helpers
+        renders; draftwright reasons"). This type is vendored-and-frozen for
+        backward compatibility; importing it through ``build123d_drafting`` emits
+        a ``DeprecationWarning`` and it will be removed in a future release. Use
+        ``draftwright``'s linting package instead.
+    """
+
     severity: Literal["error", "warning", "info"]
     message: str
     location: tuple[float, float] | None = None
@@ -1588,6 +1598,11 @@ def lint_drawing(
     view_edge_cache: dict | None = None,
 ) -> list[LintIssue]:
     """Structural checks on a composed annotation list, duck-typed.
+
+    .. deprecated::
+        Linting has moved to the ``draftwright`` package (ADR 0007). This is a
+        vendored-and-frozen copy; accessing it through ``build123d_drafting``
+        warns and it will be removed in a future release.
 
     Dispatch is by attribute presence, not type:
 
@@ -3172,6 +3187,11 @@ def find_overlaps(sketches, *, min_area: float = 0.01) -> list[LintIssue]:
     """Pure-geometry collision check: pairs of sketches whose filled faces
     actually intersect with area > *min_area*.
 
+    .. deprecated::
+        Linting has moved to the ``draftwright`` package (ADR 0007). This is a
+        vendored-and-frozen copy; accessing it through ``build123d_drafting``
+        warns and it will be removed in a future release.
+
     Works on any build123d ``Sketch`` with zero metadata — uses the boolean
     intersect ``(a & b)`` and tests the resulting area.
 
@@ -3356,6 +3376,11 @@ def find_interferences(
 ):
     """Geometry-precise interference detection between drafting annotations.
 
+    .. deprecated::
+        Linting has moved to the ``draftwright`` package (ADR 0007). This is a
+        vendored-and-frozen copy; accessing it through ``build123d_drafting``
+        warns and it will be removed in a future release.
+
     Duck-typed: each item is decomposed into a **label box**
     (``.label_bbox`` or its own face bbox) and **structural line segments**
     (``.segments`` or straight LINE edges from its geometry). Works on the
@@ -3458,6 +3483,11 @@ _DRAWING_PAGE: dict | None = None
 def set_page(width: float, height: float, margin: float = 5.0) -> dict:
     """Register the drawing page extent for lint_drawing() bounds checking.
 
+    .. deprecated::
+        This only feeds the standalone linting that has moved to the
+        ``draftwright`` package (ADR 0007). Accessing it through
+        ``build123d_drafting`` warns; it will be removed in a future release.
+
     In the MCP server ``set_page()`` is a session builtin that stores state in
     the session object; this module-level version stores state globally in the
     ``build123d_drafting`` module so that standalone drawing scripts can use it
@@ -3493,13 +3523,24 @@ def set_page(width: float, height: float, margin: float = 5.0) -> dict:
 
 
 def clear_page() -> None:
-    """Clear the module-level drawing page context (e.g. between sheets in tests)."""
+    """Clear the module-level drawing page context (e.g. between sheets in tests).
+
+    .. deprecated::
+        Standalone-lint helper; linting has moved to the ``draftwright`` package
+        (ADR 0007). Accessing it through ``build123d_drafting`` warns; it will be
+        removed in a future release.
+    """
     global _DRAWING_PAGE
     _DRAWING_PAGE = None
 
 
 def annotate(result, name: str | None = None, label: str | None = None) -> None:
     """Register a drawing annotation for lint_drawing() in standalone scripts.
+
+    .. deprecated::
+        Standalone-lint helper; linting has moved to the ``draftwright`` package
+        (ADR 0007). Accessing it through ``build123d_drafting`` warns; it will be
+        removed in a future release.
 
     In the MCP server ``annotate()`` is a session builtin that stores metadata
     in the session *and* calls ``show()``.  This module-level version is a
