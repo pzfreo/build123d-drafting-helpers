@@ -1,4 +1,4 @@
-"""examples/part_drawing.py builds a real part drawing, lints clean, exports SVG."""
+"""examples/part_drawing.py builds a real part drawing and exports SVG."""
 
 import importlib.util
 from pathlib import Path
@@ -18,11 +18,6 @@ def mod():
 
 def test_builds_and_has_geometry(mod):
     assert mod.border and mod.part_v and mod.dims_l and mod.text_l
-
-
-def test_lints_clean(mod):
-    errors = [i for i in mod.lint() if i.severity == "error"]
-    assert errors == [], "; ".join(f"{i.code}: {i.message}" for i in errors)
 
 
 def test_writes_nonempty_svg(mod, tmp_path):

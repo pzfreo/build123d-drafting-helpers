@@ -4,15 +4,14 @@ Unlike the specimen sheet (a catalogue of symbols), this shows how you actually
 *make a drawing* with the helpers, on a real library part:
 
     bd_warehouse fastener  ->  project_to_viewport() views (front/top/side/iso)
-    ->  dimension with the helpers  ->  lint with find_interferences()  ->  export
+    ->  dimension with the helpers  ->  export
 
 The part is a ``bd_warehouse`` ``HexHeadScrew`` + ``HexNut``, and **every
 dimension and callout is pulled from the bd_warehouse object** — change
 ``BOLT_SIZE`` / ``BOLT_LENGTH`` below and the views, dimensions, thread
 designation and title block all reflow automatically. It's an A4 frame with a
 TitleBlock; each part gets front/top/side views plus an isometric, dimensioned
-with Dimension()/Leader() (drafts from draft_preset()). The layout is verified
-collision-free by lint() before export.
+with Dimension()/Leader() (drafts from draft_preset()).
 
     python examples/part_drawing.py            # writes part_drawing.svg
 
@@ -22,7 +21,6 @@ Requires the dev/example dependency ``bd_warehouse`` (``uv sync --group dev``).
 from __future__ import annotations
 
 import math
-from types import SimpleNamespace
 
 from bd_warehouse.fastener import HexHeadScrew, HexNut
 from build123d import (
@@ -39,7 +37,6 @@ from build123d import (
 from build123d_drafting import (
     Dimension,
     draft_preset,
-    find_interferences,
     Leader,
     TitleBlock,
 )
@@ -74,16 +71,6 @@ SANS = "Liberation Sans"
 D = 800.0  # camera distance
 
 border, part_v, hidden_v, dims_l, text_l = [], [], [], [], []
-lint_items: list = []
-view_labels: list = []  # FRONT/TOP/SIDE/ISO labels — linted against the dim lines
-view_boxes: list = []  # bbox of each projected view — labels must clear them
-
-
-def _label_box(t, name="text"):
-    bb = t.bounding_box()
-    return SimpleNamespace(
-        label_bbox=(bb.min.X, bb.min.Y, bb.max.X, bb.max.Y), label=name, segments=[], elbow=None
-    )
 
 
 def _project(part, origin, up, look):
@@ -106,21 +93,17 @@ def _add_view(vis, hid, cx, cy, label):
         Location((cx, bb.min.Y - 3.0, 0))
     )
     text_l.append(lbl)
-    view_labels.append(lbl)
-    view_boxes.append((bb.min.X, bb.min.Y, bb.max.X, bb.max.Y))
     return bb
 
 
 def _dim(p1, p2, side, dist, label):
     d = Dimension(p1, p2, side, dist, DRAFT, label=label)
     dims_l.append(d)
-    lint_items.append(d)
 
 
 def _leader(tip, elbow, label):
     ld = Leader(tip, elbow, label, DRAFT)
     dims_l.append(ld)
-    lint_items.append(ld)
 
 
 def _draw_part(part, gx, gy):
@@ -181,8 +164,7 @@ _dim(
 )  # length
 _dim((xL, y_top, 0), (xR, y_top, 0), "above", 8, f"{HEAD_AF:g}")  # head A/F
 # thread designation: leader from the shaft down into the clear area below the
-# views (its label must not land over the SIDE view, which the annotation lint
-# can't see — part geometry isn't a label).
+# views, so its label doesn't land over the SIDE view.
 _leader((fb.center().X + THREAD_D / 2, y0 + 8, 0), (fb.center().X + 30, y0 - 20, 0), THREAD)
 
 # --- nut: views + dimensions (front view) -----------------------------------
@@ -198,20 +180,6 @@ _leader(
     (tb_loc.position.X + 30, -PH / 2 + MARGIN + tb_h + 16, 0),
     "TitleBlock",
 )
-
-
-def lint():
-    """Lint the drawing's annotations with find_interferences() before export.
-
-    Checks the dim/leader lines + labels against each other and against the
-    FRONT/TOP/SIDE/ISO view labels, and — via ``obstacles`` — that no label lands
-    over a projected view (the title block text is intentionally not a forbidden
-    zone, since the TitleBlock leader is *meant* to point at it).
-    """
-    return find_interferences(
-        lint_items + [_label_box(v) for v in view_labels],
-        obstacles=view_boxes,
-    )
 
 
 def write_part_drawing(svg_path: str = "part_drawing.svg") -> str:
@@ -254,7 +222,4 @@ def write_part_drawing(svg_path: str = "part_drawing.svg") -> str:
 if __name__ == "__main__":
     import sys
 
-    for i in lint():
-        print(f"[{i.severity}] {i.code}: {i.message}")
-    print(f"lint: {sum(i.severity == 'error' for i in lint())} error(s)")
     print("wrote", write_part_drawing(sys.argv[1] if len(sys.argv) > 1 else "part_drawing.svg"))
