@@ -89,9 +89,7 @@ def __getattr__(name):
     try:
         module, kind = _DEPRECATED[name]
     except KeyError:
-        raise AttributeError(
-            f"module {__name__!r} has no attribute {name!r}"
-        ) from None
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
     warnings.warn(
         f"build123d_drafting.{name} is deprecated: {kind} has moved to the "
         f"draftwright package (ADR 0007). This frozen copy will be removed in a "
