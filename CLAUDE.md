@@ -1,27 +1,36 @@
 # build123d-drafting-helpers
 
-Automated technical-drawing generation for [build123d](https://github.com/gumyr/build123d).
+Drawing-annotation primitives for [build123d](https://github.com/gumyr/build123d).
 Import name is `build123d_drafting`; install name is `build123d-drafting-helpers`.
+
+This package is the **rendering substrate** for technical drawings: the
+composable annotation building blocks. The application-level systems that *use*
+it — the auto-drawing engine, feature recognition, and the drawing lint — live
+in the separate [`draftwright`](https://github.com/pzfreo/draftwright) package.
+The dividing line (draftwright ADR 0007): **helpers renders; draftwright
+reasons.**
 
 ## Scope
 
-This project has three distinct layers. Keep them separate:
+1. **Annotation primitives** (`helpers.py`) — the rendering substrate, and the
+   only actively-developed layer here: `Dimension`, `Leader`, `TitleBlock`,
+   `HoleCallout`, `Centerline`, `CenterlineCircle`, the GD&T family
+   (`FeatureControlFrame`, `DatumFeature`, …), plus the styling/coordinate
+   helpers they need (`draft_preset`, `view_axes`, `ViewCoordinates`,
+   `place_dims`/`place_labels`). Close to build123d's own drafting model; may
+   eventually be contributed upstream.
 
-1. **Annotation primitives** (`helpers.py`) — composable building blocks:
-   `Dimension`, `Leader`, `TitleBlock`, `HoleCallout`, `CenterlineCircle`, etc.
-   These are close to build123d's own drafting model and may eventually be
-   contributed upstream.
+2. **Frozen, deprecated layers** — feature recognition (`features.py`:
+   `find_holes`, `find_bosses`, `find_hole_patterns`, …) and the drawing lint
+   (`lint_drawing`, `find_overlaps`, `find_interferences`, `LintIssue`, and the
+   `set_page`/`annotate`/`clear_page` registration helpers) were moved to
+   draftwright (ADR 0007). The copies here are **vendored-and-frozen**: importing
+   them through `build123d_drafting` emits a `DeprecationWarning`. Do **not**
+   extend them or add new recognition/lint here — that work goes in draftwright.
+   They will be deleted in a future major version.
 
-2. **Feature recognition** (`features.py`) — geometric analysis of CAD solids:
-   `find_holes`, `find_bosses`, `find_hole_patterns`, `BoltCircle`, `LinearArray`.
-   No dependency on the drawing layer.
-
-3. **Auto-drawing engine** (`make_drawing.py`) — the application-level system:
-   `build_drawing`, `make_drawing`, `Drawing`, layout solver, sheet selection,
-   PMI normalisation. Depends on both layers above.
-
-Do not blur these boundaries. Feature recognition must not import drawing
-primitives. The engine imports both.
+Do not blur these boundaries. New annotation work belongs in `helpers.py`; new
+recognition or lint work belongs in draftwright, not here.
 
 ## Core principle: stay in line with build123d's technical-drawing model
 
@@ -44,40 +53,32 @@ Do **not** introduce text or annotations that bypass the geometry model — e.g.
 native SVG `<text>`, raster-only overlays, or anything that renders in a preview
 but vanishes on DXF export.
 
-## Architecture: strip/zone layout model
-
-The auto-drawing engine places annotations in **strips** — directional bands
-adjacent to each orthographic view. Each strip has an `anchor` (the view edge),
-an `outer_limit` (page margin, neighbouring view, or title-block boundary), and a
-cursor that advances as annotations are allocated. This replaces ad-hoc per-
-annotation spacing arithmetic.
-
-`_analyse()` constructs a `ViewZones` (front, plan, side) immediately after
-computing view positions. Annotation functions call `strip.allocate(size)` to
-reserve space; they skip the annotation and log a warning if the strip is full.
-`_auto_annotate()` tightens iso-view limits at entry once the iso has been
-projected.
-
-New annotation types **must** declare which strip they belong to and register
-via `strip.allocate()`. Do not add free-floating `distance=` constants.
-
 ## Conventions to match
 
-- **Result objects** are dataclasses exposing `.lines` (stroke) and `.text` (fill)
-  where the symbol mixes both, plus `.shape` and `.bbox()`.
+- **Annotation objects are native build123d `BaseSketchObject` subclasses** — the
+  returned object *is* a `Sketch`. It composes in a `BuildSketch`, combines with
+  `+`/`-`, can be `.moved()`, and exports directly. All geometry (frame boxes,
+  witness lines, GD&T glyphs, and text) is rendered as thin filled *faces* on a
+  single ink layer — there is no `.lines`/`.text` split. Carry placement/lint
+  metadata as instance attributes (`.label`, `.label_bbox`, `.segments`,
+  `.measured_length`, …).
 - **Standards-faithful output**: follow the relevant ISO/ASME convention and draw
-  geometric-characteristic glyphs geometrically.
+  geometric-characteristic glyphs geometrically (the symbols are absent from
+  CAD-safe fonts).
 - **Sizing** derives from the `Draft` config (`font_size`, `line_width`,
   `pad_around_text`).
+- **Deterministic text**: labels render from a bundled font *file*
+  (`DEFAULT_FONT_PATH` → Liberation Sans) so glyph geometry is identical across
+  platforms; a `font_path` always wins over the `font` name.
 
 ## Dependencies
 
-`kiwisolver>=1.4,<2` is an allowed runtime dependency for the layout solver
-(the Cassowary constraint solver, < 200 KB wheel, no transitive deps). Add it
-only when the constraint-optimisation layer is wired in. Other new runtime
-dependencies require explicit discussion.
+The runtime dependency is build123d only. New runtime dependencies require
+explicit discussion.
 
 ## Testing
 
 `uv run pytest`. Tests are geometry-level (edge counts, bbox placement, face
-counts, error paths) — match that style. Target is 100% passing.
+counts, error paths) — match that style. Target is 100% passing. (CI lints with
+`ruff check` / `ruff format --check` and type-checks with `mypy` over
+`src/build123d_drafting/`; `examples/` is not linted in CI.)

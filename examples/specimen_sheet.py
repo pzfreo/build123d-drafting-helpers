@@ -13,8 +13,6 @@ technical drawing.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from build123d import (
     Align,
     Color,
@@ -33,7 +31,6 @@ from build123d_drafting import (
     Dimension,
     draft_preset,
     FeatureControlFrame,
-    find_interferences,
     Leader,
     place_dims,
     SurfaceFinish,
@@ -108,20 +105,6 @@ PRE = (
 
 border, stroke, ink, fill, code = [], [], [], [], []
 
-# Page-level annotations to lint with find_interferences: the leader callouts
-# (which carry lines + a label) and the code/note text blocks (label boxes).
-lint_items: list = []
-
-
-def _text_box_item(shapes, name):
-    """A lint item carrying just a label box (no lines) for a block of text."""
-    bb = Compound(children=shapes).bounding_box()
-    lint_items.append(
-        SimpleNamespace(
-            label_bbox=(bb.min.X, bb.min.Y, bb.max.X, bb.max.Y), label=name, segments=[], elbow=None
-        )
-    )
-
 
 def run(snippet, var):
     ns: dict = {}
@@ -137,7 +120,6 @@ def place_code(snippet, cx, top_y):
         t.moved(Location((cx - maxw / 2.0, top_y - j * LINE_DY, 0))) for j, t in enumerate(texts)
     ]
     code.extend(placed)
-    _text_box_item(placed, "code")
 
 
 def label_with_leader(bb, name, left=False):
@@ -151,7 +133,6 @@ def label_with_leader(bb, name, left=False):
     else:
         lab = Leader((bb.max.X, bb.max.Y, 0), (bb.max.X + 9, bb.max.Y + 8, 0), name, LBL_DRAFT)
     ink.append(lab)  # arrow + shelf + text are all faces on one sketch
-    lint_items.append(lab)
 
 
 def add_cell(name, snippet, var, cx, cy):
@@ -194,12 +175,10 @@ ink.append(tb.moved(tb_loc))
 # the title block is itself a specimen — call it out with a leader too, and
 # note *why* it exists (the nuance vs build123d's TechnicalDrawing title box).
 # The leader runs up the left; the name + note sit to its right so the leader
-# line never crosses the text (verified by lint() below).
+# line never crosses the text.
 tb_top = TB_Y0 + tb.bounding_box().size.Y
 tb_lab = Leader((TB_X0 + 44, tb_top, 0), (TB_X0 + 46, tb_top + 15, 0), "TitleBlock", LBL_DRAFT)
 ink.append(tb_lab)
-lint_items.append(tb_lab)
-note = []
 for k, ln in enumerate(
     (
         "standalone alternative to TechnicalDrawing's title box —",
@@ -211,8 +190,6 @@ for k, ln in enumerate(
         Location((TB_X0 + 92, tb_top + 18 - k * 3.2, 0))
     )
     fill.append(t)
-    note.append(t)
-_text_box_item(note, "title-block note")
 
 # --- specimens ---
 for name, snippet, var, (cx, cy) in SPECS:
@@ -239,15 +216,6 @@ ink.append(dims.moved(loc))
 bb = whole.moved(loc).bounding_box()
 label_with_leader(bb, "place_dims")
 place_code(pd, -50, bb.min.Y - 5)
-
-
-def lint():
-    """Lint the sheet's own annotations — dogfood find_interferences().
-
-    Checks every leader callout's line against every label / code / note box, so
-    a leader that strikes through text is caught. Returns a list[LintIssue].
-    """
-    return find_interferences(lint_items)
 
 
 def write_specimen_sheet(svg_path: str = "specimen_sheet.svg") -> str:
@@ -290,11 +258,4 @@ def write_specimen_sheet(svg_path: str = "specimen_sheet.svg") -> str:
 if __name__ == "__main__":
     import sys
 
-    issues = lint()
-    for i in issues:
-        print(f"[{i.severity}] {i.code}: {i.message}")
-    print(
-        f"lint: {sum(i.severity == 'error' for i in issues)} error(s), "
-        f"{sum(i.severity == 'warning' for i in issues)} warning(s)"
-    )
     print("wrote", write_specimen_sheet(sys.argv[1] if len(sys.argv) > 1 else "specimen_sheet.svg"))

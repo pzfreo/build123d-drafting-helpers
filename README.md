@@ -8,7 +8,7 @@
 
 Third-party drawing-annotation helpers for [build123d](https://github.com/gumyr/build123d) — pure Python, no MCP dependency. Not affiliated with the upstream build123d project.
 
-Dimensions, leaders, centrelines, GD&T symbols, a title block, and a geometry-precise lint —
+Dimensions, leaders, centrelines, GD&T symbols, and a title block —
 all as build123d geometry, so a drawing exports to SVG **and** DXF and scales like any
 technical drawing. The sheet below is itself produced by the library, with every helper drawn
 and labelled by the helpers it documents ([`examples/specimen_sheet.py`](examples/specimen_sheet.py)):
@@ -18,8 +18,7 @@ and labelled by the helpers it documents ([`examples/specimen_sheet.py`](example
 ```python
 from build123d_drafting import (
     Dimension, place_dims, place_labels, Centerline,
-    Leader, view_axes, lint_drawing, find_interferences, find_overlaps,
-    format_drawing_scale,
+    Leader, view_axes, format_drawing_scale,
 )
 ```
 
@@ -57,6 +56,14 @@ uses these primitives as its annotation layer:
 from draftwright import make_drawing
 make_drawing(part, out="drawing", title="My Part", number="DWG-001")
 ```
+
+> **Feature recognition and linting moved to draftwright.** This package is the
+> *rendering* substrate (annotation geometry); recognising holes/bosses/patterns
+> and checking a drawing for placement problems are now owned by draftwright (its
+> ADR 0007 — "helpers renders; draftwright reasons"). The old `find_holes` /
+> `find_bosses` / `find_hole_patterns` / `lint_drawing` / `find_overlaps` /
+> `find_interferences` symbols remain importable here but are **deprecated** and
+> emit a `DeprecationWarning`; use draftwright instead.
 
 ---
 
@@ -120,8 +127,7 @@ dimension per ISO 1101 / ASME Y14.5.
 
 The object is a `Sketch` with metadata attributes `.label`, `.measured_length`,
 `.dim_level_y`, `.is_basic`, `.segments`, and `.label_bbox` — the precise text extent
-`(min_x, min_y, max_x, max_y)` used by `lint_drawing` / `find_interferences` and
-`place_labels` for centreline-overlap detection.
+`(min_x, min_y, max_x, max_y)` used by `place_labels` for centreline-overlap detection.
 
 ---
 
@@ -167,18 +173,17 @@ automatically. Multiple crossing centrelines are handled in one pass.
 ### `Centerline(p1, p2, draft=None)`
 
 A centreline between two points — a single thin line rendered as a face, with
-`.is_centerline = True` and a zero-width `.segments` rail for lint.
+`.is_centerline = True` and a zero-width `.segments` rail.
 
 ```python
 bore_cl = Centerline((cx, -50, 0), (cx, 50, 0))   # vertical through bore axis
 ```
 
-Pass `Centerline` objects to `place_labels(..., centerlines=[bore_cl])` for auto-avoidance,
-or pass them to `lint_drawing([...] + [bore_cl])` to get `label_centerline_overlap` warnings.
+Pass `Centerline` objects to `place_labels(..., centerlines=[bore_cl])` for auto-avoidance.
 
 `CenterMark(point, size, draft=None)` is the crosshair sibling for hole centres —
 *size* is the full stroke length (pick it slightly larger than the hole's page-space
-diameter). Same `.is_centerline` lint exemption.
+diameter). Same `.is_centerline` flag.
 
 ---
 
@@ -193,7 +198,7 @@ Truncates gracefully and retries.
 
 `Leader(..., callout=HoleCallout(...))` hangs a symbol-built callout at the shelf
 end instead of text (pass `label=""`); the callout's bbox becomes `label_bbox` and
-its `covers_diameters` is surfaced on the leader for the coverage lint.
+its `covers_diameters` is surfaced on the leader.
 
 Leader annotation built from scratch. The line stops cleanly before the label text.
 
@@ -236,120 +241,25 @@ axes = view_axes((0, 0, -100), (0, 1, 0), (0, 0, 0))
 
 ---
 
-### `lint_drawing(items, part_bbox=None, page_bbox=None, drawing_scale=1.0, view_shapes=None)`
+### Scaled drawings
 
-Duck-typed structural checks on a list of annotation objects (`Dimension`, `Leader`,
-`Centerline`, …). Dispatch is by attribute presence, not type:
-
-| Check | Trigger |
-|---|---|
-| `label_vs_measured` | Label value differs from measured path length by >0.5% — likely axis swap |
-| `annotation_overlap` | Two annotations overlap by >0.5 mm in both axes at the same Y level |
-| `label_centerline_overlap` | Dim label bbox crosses a `Centerline` — use `label_offset_x` or `place_labels` |
-| `dim_inside_part` | Dim bbox overlaps part outline by >10% — dim is inside the view |
-| `leader_line_through_text` | Leader elbow point inside label bbox — line strikes through text |
-| `annotation_out_of_bounds` | An item's bbox extends past the page (set `page_bbox` or call `set_page()`) |
-| `view_annotation_overlap` | An annotation's label text overlaps a view's projected edges (full bbox for annotations without a label; centrelines and datum targets are exempt; witness lines, leader shafts, datum triangles, and finish marks may touch the view freely) |
-| `view_annotation_inside_extents` | Info: a label sits inside a view's bbox but over a blank region — a legitimate convention for callouts on large faces |
-| `view_overlap` | Two view shape bboxes overlap each other — views are too close |
-| `view_out_of_bounds` | A view extends past the drawable area (set `page_bbox` or call `set_page()`) |
+To draw a small part enlarged — e.g. a 7.5 mm feature at 5:1 — scale the geometry up
+before projecting and dimension it with labels carrying the *real* value:
 
 ```python
-bore_cl = Centerline((0, -30, 0), (0, 30, 0))
-issues = lint_drawing([dim1, dim2, lea1, bore_cl])
-for issue in issues:
-    print(issue.severity, issue.message)
-```
-
-**Scaled drawings.** To draw a small part enlarged — e.g. a 7.5 mm feature at 5:1 —
-scale the geometry up before projecting and pass the same factor as `drawing_scale`.
-The `label_vs_measured` check then divides the measured path length by it, so labels
-carry the *real* dimension while the geometry is drawn large:
-
-```python
-issues = lint_drawing([dim], drawing_scale=5.0)   # 37.5 mm measured, label "7.5" → OK
 tb = TitleBlock("Gear", "DRW-007", drawing_scale=5.0)   # title block prints "5:1"
 ```
 
 `format_drawing_scale(5.0)` → `"5:1"`, `format_drawing_scale(0.5)` → `"1:2"`. Pass the
-numeric factor to both `lint_drawing` and `TitleBlock` so the linted and printed scales
-can't drift.
-
-**Page bounds.** Set a drawable area — pass `page_bbox=(min_x, min_y, max_x, max_y)`
-or call `set_page(width, height, margin)` first — and any item whose bounding box spills
-past it is flagged `annotation_out_of_bounds`. Include your `TitleBlock` in the items
-list: its bounding box grows when a long string (e.g. a verbose subtitle) overflows the
-frame, so a too-long title block is caught the same way as a stray dimension.
-
----
-
-
-### `find_holes(part)` and `find_bosses(part)`
-
-Feature recognition on a solid's cylindrical faces. `find_holes` returns one
-`HoleFeature` per drilled hole — coaxial internal cylinders are grouped into stacks,
-so a drill + counterbore + spotface is **one** hole:
-
-```python
-from build123d_drafting import find_holes, find_bosses
-
-for h in find_holes(part):
-    print(h.diameter, h.depth, h.bottom, h.cbore, h.spotface)
-# 10.1 15.0 flat CounterBore(diameter=18.0, depth=6.0) CounterBore(diameter=60.0, depth=5.0)
-```
-
-- `axis` is the drilling direction (unit vector pointing into the hole), `location`
-  the axis point at the opening surface.
-- `diameter`/`depth` describe the bore itself (the narrowest segment); `depth` runs
-  from the top of the bore to the hole's deep end — a bottom relief groove counts,
-  a drill point's cone does not.
-- `bottom` is `"through"`, `"flat"`, `"drill_point"` (cone found at the deep end), or
-  `"unknown"`, classified by probing the face adjacent to the bottom edge. Entry
-  chamfers, lip fillets, and countersink cones at the opening are recognised as
-  openings (a filleted blind bottom reads as `"flat"`); chamfered or filleted
-  counterbore shoulders don't split the stack.
-- A step above the bore shallower than 20 % of its diameter is reported as the
-  `spotface`, deeper as the `cbore` (both `CounterBore(diameter, depth)`).
-- Fillets and slot end caps never count (patches must total more than half a turn
-  around their axis); a bore split by a slot or keyway still counts, and a bore
-  interrupted by a crossing hole is recombined into one feature. Coaxial blind
-  holes drilled from opposite faces stay separate features.
-
-`find_hole_patterns(holes)` recognises patterns among the hole records: ≥3
-identical-spec holes equally spaced on a circle become a `BoltCircle(holes,
-center, diameter)`, collinear holes at constant pitch a `LinearArray(holes,
-pitch, direction)`. Collinearity is tested first (any three points are
-concyclic), and each hole belongs to at most one pattern.
-
-`find_bosses` returns one `BossFeature(axis, location, diameter, height)` per
-external cylinder segment — including a turned part's OD; filter on diameter
-against the part envelope if you only want local bosses.
-
-Known approximations: a hole opening onto a slanted or curved surface is located
-at the axial extreme of its lip (depth includes the lip overhang), and steps on
-the far side of a through hole's bore (a second counterbore from the back face)
-are not reported. Out of scope for now: countersink steps, threads, and
-non-cylindrical features.
+numeric factor to `TitleBlock` so the printed scale matches the geometry.
 
 ---
 
 ### Public contracts for downstream consumers
 
 These are **stable** public APIs intended for tools built on top of the helpers
-(e.g. [`draftwright`](https://github.com/pzfreo/draftwright)). They expose the
-lower-level grouping primitives the auto-drawing engine itself uses, so a
-consumer's pattern detection and callout grouping agree with the helpers'.
+(e.g. [`draftwright`](https://github.com/pzfreo/draftwright)).
 
-- **`full_cylinders(cyls)`** — given one of the two record lists from
-  `analyse_cylinders(part)` (z-axis or cross-axis), returns the feature-relevant
-  ("full") cylinder records — the patches belonging to a hole or boss, with
-  fillet faces and slot end caps removed. For the higher-level inventory of
-  *dimensionable diameters*, prefer `feature_diameters(part)`.
-- **`HoleSpec.from_hole(hole)`** — the machining spec of a `HoleFeature` as a
-  frozen, hashable value. Two holes that are the same drilled feature (same
-  drill, same direction, same counterbore/spotface stack) compare and hash equal,
-  so `HoleSpec` is a stable dict/set key for grouping holes. A through hole's
-  depth is normalised to `None` (irrelevant to the spec).
 - **`TitleBlock.cell_bbox(name)`** / **`TitleBlock.drawn_by_cell_bbox()`** —
   the bounding box of a named title-block cell in the **build frame** (same dict
   shape as `block_bbox`). `name` is the constructor field the cell holds —
@@ -358,33 +268,6 @@ consumer's pattern detection and callout grouping agree with the helpers'.
   `"legal_owner"` (only when that row was drawn). Useful for placing an
   attribution link in the drawn-by cell. When the block has been `.moved()`,
   apply the same location to the returned corners.
-
----
-
-### `find_interferences(items, *, part_bbox=None, page_bbox=None, obstacles=None)`
-
-Geometry-precise interference detection between annotation objects. Each item is
-decomposed into a **label box** (`.label_bbox` or its own face bbox) and **structural
-line segments** (`.segments` or straight edges), then checked for `labels_overlap`,
-`label_out_of_frame`, `label_on_part`, `label_over_geometry`, `line_pierces_label`, and
-`redundant_lines`. Works on the native objects and on lightweight `SimpleNamespace`
-stand-ins exposing `label_bbox` / `label` / `segments` (e.g. a raw view-label `Text`).
-
-```python
-issues = find_interferences([dim1, dim2, leader1], obstacles=view_boxes)
-```
-
----
-
-### `find_overlaps(sketches, min_area=0.01)`
-
-A generic, zero-metadata geometric collision check: returns the pairs of `Sketch`es whose
-filled faces actually intersect (boolean `a & b`) with area above `min_area`. Useful for a
-final once-over of *any* drawing, not just helper objects.
-
-```python
-issues = find_overlaps([sketch_a, sketch_b, sketch_c])   # code: "faces_overlap"
-```
 
 ---
 
@@ -460,11 +343,10 @@ single-line hole note, e.g. `4× ⌀8.5 THRU`.
 renders a multi-line, left-aligned block — general notes lists and hole tables —
 anchored by default at its top-left corner. `lines` is a list of strings (empty
 strings leave blank lines) or one string split on newlines. The whole block is a
-single annotation for lint purposes.
+single annotation.
 
 ## Status against upstream
 
-- `lint_drawing` is a prototype of rule-based drawing checks that build123d's roadmap mentions as future work. If upstream ships its own linter later, this one can be deprecated.
 - `Dimension` is a thin convenience wrapper over `ExtensionLine` — it does not replace the underlying class, it just lets you write `side="above"` instead of computing the right-hand-normal signed offset by hand. If upstream adds a named-side parameter, this helper becomes redundant.
 
 ## Examples
@@ -484,15 +366,14 @@ is build123d geometry — text included — it also exports to DXF and scales li
 Where the specimen sheet is a *catalogue*, this shows the **end-to-end workflow on a real
 part**: take a [`bd_warehouse`](https://github.com/gumyr/bd_warehouse) `HexHeadScrew` +
 `HexNut` → `project_to_viewport()` views → dimension with `Dimension` / `Leader` →
-**lint with `find_interferences()`** → export. An A4 frame, a `TitleBlock`, **front / top /
-side views plus an isometric** for each part (with dashed hidden lines), and the layout is
-verified collision-free by `lint()` before it's written.
+export. An A4 frame, a `TitleBlock`, and **front / top / side views plus an isometric**
+for each part (with dashed hidden lines).
 
 **Every dimension and callout is pulled from the bd_warehouse object** — change
 `BOLT_SIZE` / `BOLT_LENGTH` at the top of the script (e.g. `"M8-1.25"`, `"M12-1.75"`) and the
 views, length / across-flats dimensions, thread designation and title block all reflow
-automatically; the lint stays clean because the label values come from the same source as
-the geometry. (`bd_warehouse` is an example-only dev dependency, not a runtime dependency.)
+automatically, because the label values come from the same source as the geometry.
+(`bd_warehouse` is an example-only dev dependency, not a runtime dependency.)
 
 ![hex bolt and nut drawing](docs/part_drawing.png)
 
@@ -508,9 +389,10 @@ uv run pytest tests/
 
 Alpha. API may change. Developed alongside [build123d-mcp](https://github.com/pzfreo/build123d-mcp), which integrates these helpers into its LLM-facing drawing workflow.
 
-The automated drawing engine (`make_drawing`, `build_drawing`, `Drawing`) was spun out
-into **[draftwright](https://github.com/pzfreo/draftwright)**. This package focuses on
-annotation primitives and feature recognition.
+The automated drawing engine (`make_drawing`, `build_drawing`, `Drawing`), feature
+recognition, and the drawing lint were spun out into
+**[draftwright](https://github.com/pzfreo/draftwright)**. This package focuses on the
+annotation primitives — the rendering substrate for technical drawings.
 
 ## Documentation
 

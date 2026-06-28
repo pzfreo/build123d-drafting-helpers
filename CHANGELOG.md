@@ -19,6 +19,16 @@
   substrate (annotation objects, `draft_preset`, `view_axes`/`ViewCoordinates`,
   `place_dims`/`place_labels`) is unaffected.
 
+### Documentation
+
+- README and `CLAUDE.md` reframed around the rendering-substrate role: the
+  feature-recognition and lint sections were removed (those APIs moved to
+  draftwright), leaving a short pointer. `docs/drafting-conventions.md` was
+  rewritten to the current API (`Dimension`/`SafeDimension`/`Leader`/`Centerline`/
+  `SurfaceFinish`/`TitleBlock`, single ink layer), replacing a stale pre-rename
+  API. The two `examples/` scripts no longer dogfeed the deprecated lint
+  (rendered output unchanged).
+
 ## v0.13.0 — 2026-06-27
 
 ### Added
