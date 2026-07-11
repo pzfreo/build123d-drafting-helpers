@@ -528,8 +528,24 @@ class Dimension(_Annotation):
         hx, hy = (half_h, half_w) if vertical else (half_w, half_h)
         label_bbox_tuple = (label_cx - hx, label_cy - hy, label_cx + hx, label_cy + hy)
 
-        # ExtensionLine geometry: keep its faces directly (already filled).
-        faces = list(el.faces())
+        # ExtensionLine geometry: keep its faces directly (already filled). When the
+        # label is placed externally (shifted off the midpoint via label_offset_x, or
+        # relocated because it didn't fit the path), `el` was built with an empty/no
+        # label above, so ExtensionLine drew one continuous, unbroken line — it has no
+        # way to know where the *external* label will actually land. Left as-is, that
+        # label sits directly on top of the now-unbroken line. Cut the same gap
+        # ExtensionLine/DimensionLine would have cut for an inline label — full label
+        # extent plus draft.pad_around_text on every side, matching their own
+        # `label_length + 2 * pad_around_text` convention — but centred on the label's
+        # real (possibly shifted) position instead of the path midpoint.
+        if label_offset_x != 0.0 or _force_external:
+            pad = draft.pad_around_text
+            gap = Face.make_rect(2 * (hx + pad), 2 * (hy + pad)).moved(
+                Location(Vector(label_cx, label_cy, 0.0))
+            )
+            faces = list((Sketch(children=list(el.faces())) - gap).faces())
+        else:
+            faces = list(el.faces())
         strokes: list[Edge] = []
         extra_text: list = []
 
