@@ -134,6 +134,29 @@ class TestDimension:
         lmin_x, *_ = d.label_bbox
         assert lmin_x > 0.0
 
+    def test_label_offset_x_cuts_a_gap_in_the_dimension_line(self, draft):
+        # A shifted label is placed externally (ExtensionLine draws a continuous,
+        # unbroken line since it was built with no inline label) — the shift must
+        # still cut a matching gap at the label's real position, or the label sits
+        # directly on top of the dimension line it was moved away from a centerline
+        # to clear.
+        d = Dimension((0, 0, 0), (60, 0, 0), "above", 8, draft, label="1× 60", label_offset_x=-20)
+        lmin_x, lmin_y, lmax_x, lmax_y = d.label_bbox
+        label_width = lmax_x - lmin_x
+        for f in d.faces():
+            bb = f.bounding_box()
+            fbox = (bb.min.X, bb.min.Y, bb.max.X, bb.max.Y)
+            # A face substantially wider than the label itself is line/arrow geometry,
+            # not one of the label's own glyph faces (each glyph is narrower than the
+            # whole label) — that's the only shape that could visually read as "the
+            # line passes through the text".
+            if fbox[2] - fbox[0] <= label_width * 1.5:
+                continue
+            overlaps = min(fbox[2], lmax_x) > max(fbox[0], lmin_x) and min(fbox[3], lmax_y) > max(
+                fbox[1], lmin_y
+            )
+            assert not overlaps, f"line face {fbox} overlaps the shifted label {d.label_bbox}"
+
     def test_centerline_overlap_flagged(self, draft):
         d = Dimension((-10, 0, 0), (10, 0, 0), "above", 8, draft, label="Ø5.0 H8")
         cl = Centerline((0, 0, 0), (0, 20, 0))
