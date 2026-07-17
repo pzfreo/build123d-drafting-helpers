@@ -523,6 +523,7 @@ def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: f
             txt=label_str,
             font_size=draft.font_size,
             font=draft.font,
+            font_style=draft.font_style,
             font_path=_font_path(draft),
             align=(Align.CENTER, Align.CENTER),
             mode=Mode.PRIVATE,
@@ -534,15 +535,17 @@ def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: f
     if fits:
         # heads at the ends, tips outward, bodies inward; shafts trimmed by
         # half a head so the tip isn't overdrawn (Arrow's own trim)
-        head_angles = [(0.0, u_ang + 180.0), (length, u_ang)]
+        heads = [(0.0, u_ang + 180.0, (0.0, al)), (length, u_ang, (length - al, length))]
         ink = [(al / 2.0, length - al / 2.0)]
         if label_t is None:
             label_t = length / 2.0
     else:
-        head_angles = [(0.0, u_ang), (length, u_ang + 180.0)]
+        heads = [(0.0, u_ang, (-al, 0.0)), (length, u_ang + 180.0, (length, length + al))]
         ink = [(-2.0 * al, -al / 2.0), (length + al / 2.0, length + 2.0 * al)]
         if label_t is None:
-            label_t = length + 2.0 * al + pad + half_w
+            # a label that fits between the ends stays centred (DimensionLine's
+            # scorer keeps it there); only one wider than the span hangs past the end
+            label_t = length / 2.0 if 2.0 * half_w < length else length + 2.0 * al + pad + half_w
     if text_face is not None:
         ink = _spans_minus_gap(ink, label_t - half_w - pad, label_t + half_w + pad)
 
@@ -555,7 +558,12 @@ def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: f
             faces.append(rect)
             spans.append(((p.X, p.Y), (q.X, q.Y)))
     head = _arrowhead_face(al, draft.head_type)
-    for t, ang in head_angles:
+    for t, ang, (h_lo, h_hi) in heads:
+        # nothing renders under the label: a head the text itself would cover is
+        # dropped, as the old boolean gap-cut removed that ink (pad-zone contact
+        # is fine — DimensionLine's scorer tested actual glyph overlap, not pads)
+        if text_face is not None and label_t - half_w < h_hi and h_lo < label_t + half_w:
+            continue
         tip = av + u * t
         faces.append(head.moved(Location(Vector(tip.X, tip.Y, 0.0), (0, 0, 1), ang)))
 
@@ -611,6 +619,8 @@ class Dimension(_Annotation):
         toward = _SIDE_VECTORS[side] if isinstance(side, str) else tuple(side)
         sign = _offset_sign(p1, p2, toward)
         offset = sign * abs(distance)
+        if offset == 0:
+            raise ValueError("A dimension line should be used if offset is 0")
 
         p1v = Vector(p1[0], p1[1], 0.0)
         p2v = Vector(p2[0], p2[1], 0.0)
@@ -734,11 +744,14 @@ class SafeDimension(_Annotation):
         faces = None
         seg: list = []
         if is_line and measured > 1e-9:
-            faces, seg, _ = _dim_line_ink(
-                edge.position_at(0), edge.position_at(1), draft, label, label_t=None
-            )
-            chosen_label = label
-        else:
+            try:
+                faces, seg, _ = _dim_line_ink(
+                    edge.position_at(0), edge.position_at(1), draft, label, label_t=None
+                )
+                chosen_label = label
+            except Exception:
+                faces = None  # fall through to the legacy path, then the bare line
+        if faces is None:
             for lbl in [label, fallback_label or _truncate(label)]:
                 try:
                     dl = DimensionLine(path=path, draft=draft, label=lbl, mode=Mode.PRIVATE)
