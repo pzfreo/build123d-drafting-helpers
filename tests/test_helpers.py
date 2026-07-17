@@ -180,6 +180,41 @@ class TestDimension:
         d = Dimension((-2, 0, 0), (2, 0, 0), "above", 5, draft, label="4")
         assert d.label_bbox is not None
 
+    def test_zero_distance_raises(self, draft):
+        with pytest.raises(ValueError):
+            Dimension((-10, 0, 0), (10, 0, 0), "above", 0, draft, label="20")
+
+    def test_label_shifted_onto_arrowhead_drops_the_head(self, draft):
+        clear = Dimension((0, 0, 0), (60, 0, 0), "above", 8, draft, label="60")
+        on_head = Dimension(
+            (0, 0, 0), (60, 0, 0), "above", 8, draft, label="60", label_offset_x=-28
+        )
+        # the shifted label sits over the left arrowhead: the head is dropped and
+        # the left shaft piece is swallowed by the gap — no ink renders under text
+        assert len(on_head.faces()) == len(clear.faces()) - 2
+
+    def test_label_shifted_onto_witness_line_cuts_it(self, draft):
+        # a label shifted onto the witness line at an end must cut the witness
+        # stroke, as the old boolean gap-cut did — no ink under the label
+        d = Dimension((0, 0, 0), (60, 0, 0), "above", 8, draft, label="60", label_offset_x=-30)
+        lmin_x, lmin_y, lmax_x, lmax_y = d.label_bbox
+        for f in d.faces():
+            bb = f.bounding_box()
+            # witness/line faces are taller or wider than any single glyph;
+            # glyph faces themselves live inside the label bbox
+            inside_label = (
+                bb.min.X >= lmin_x - 0.1
+                and bb.max.X <= lmax_x + 0.1
+                and bb.min.Y >= lmin_y - 0.1
+                and bb.max.Y <= lmax_y + 0.1
+            )
+            if inside_label:
+                continue
+            overlaps = min(bb.max.X, lmax_x) > max(bb.min.X, lmin_x) and min(
+                bb.max.Y, lmax_y
+            ) > max(bb.min.Y, lmin_y)
+            assert not overlaps, f"ink face {bb} overlaps the shifted label {d.label_bbox}"
+
 
 # ---------------------------------------------------------------------------
 # place_dims
@@ -314,6 +349,14 @@ class TestSafeDimension:
     def test_measured_length_from_path(self, draft):
         d = SafeDimension([(0, 0, 0), (15, 0, 0)], "15", draft)
         assert d.measured_length == pytest.approx(15.0, abs=0.01)
+
+    def test_mid_length_label_stays_centred(self, draft):
+        # label narrower than the span but too wide to fit with the heads:
+        # arrows go outside and the label stays centred between the ends,
+        # as DimensionLine's scorer keeps it (not hung past the end)
+        d = SafeDimension([(0, 0, 0), (4, 0, 0)], "4", draft)
+        bb = d.bounding_box()
+        assert abs((bb.min.X + bb.max.X) / 2.0 - 2.0) < 0.5
 
 
 # ---------------------------------------------------------------------------
