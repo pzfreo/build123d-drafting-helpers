@@ -531,7 +531,14 @@ def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: f
         tb = text_face.bounding_box()
         half_w, half_h = tb.size.X / 2.0, tb.size.Y / 2.0
 
-    fits = 2.0 * half_w + 2.0 * al < length
+    # Inside arrows need the label to fit (DimensionLine's own test) AND a
+    # drawable shaft piece beside each head: where the reference formula
+    # (length/2 - half_w - pad) leaves less than the al/2 head trim, build123d
+    # raises "empty wire" — route that band to the outside-arrows layout
+    # instead of rendering a head with no shaft behind it.
+    fits = 2.0 * half_w + 2.0 * al < length and (
+        text_face is None or length / 2.0 - half_w - pad > al / 2.0
+    )
     if fits:
         # heads at the ends, tips outward, bodies inward; shafts trimmed by
         # half a head so the tip isn't overdrawn (Arrow's own trim)
@@ -637,23 +644,35 @@ class Dimension(_Annotation):
         rendered = label if label is not None else draft._number_with_units(measured, tolerance)
         label_str = label if label is not None else _format_label(measured, draft, tolerance)
 
-        faces, spans, label_geo = _dim_line_ink(
-            d1, d2, draft, rendered, label_t=measured / 2.0 + label_offset_x
-        )
+        label_t = measured / 2.0 + label_offset_x
+        faces, spans, label_geo = _dim_line_ink(d1, d2, draft, rendered, label_t=label_t)
 
         # witness (extension) lines: from the part — offset by extension_gap
-        # along their own direction, as ExtensionLine places them
+        # along their own direction, as ExtensionLine places them. The label
+        # keep-clear (glyph extent + pad, the old boolean gap-cut's rect) is
+        # cut out so a shifted label never sits on top of a witness stroke;
+        # s runs along the witness line from the part point.
         w = n if offset >= 0 else -n
         g = draft.extension_gap
-        for pv, dv in ((p1v, d1), (p2v, d2)):
-            wa, wb = pv + w * g, dv + w * g
-            rect = _rect_face((wa.X, wa.Y), (wb.X, wb.Y), draft.line_width)
-            if rect is not None:
-                faces.append(rect)
-                spans.append(((wa.X, wa.Y), (wb.X, wb.Y)))
+        pad = draft.pad_around_text
+        for t_i, pv in ((0.0, p1v), (measured, p2v)):
+            s_spans = [(g, abs(offset) + g)]
+            if label_geo is not None and abs(label_t - t_i) < label_geo[3] + pad:
+                half_h = label_geo[4]
+                s_spans = _spans_minus_gap(
+                    s_spans, abs(offset) - half_h - pad, abs(offset) + half_h + pad
+                )
+            for s0, s1 in s_spans:
+                wa, wb = pv + w * s0, pv + w * s1
+                rect = _rect_face((wa.X, wa.Y), (wb.X, wb.Y), draft.line_width)
+                if rect is not None:
+                    faces.append(rect)
+                    spans.append(((wa.X, wa.Y), (wb.X, wb.Y)))
 
-        ink_bb = Sketch(children=list(faces)).bounding_box()
-        dim_level_y = ink_bb.max.Y if abs(ink_bb.max.Y) >= abs(ink_bb.min.Y) else ink_bb.min.Y
+        boxes = [f.bounding_box() for f in faces]
+        max_y = max(b.max.Y for b in boxes)
+        min_y = min(b.min.Y for b in boxes)
+        dim_level_y = max_y if abs(max_y) >= abs(min_y) else min_y
 
         if label_geo is not None:
             label_cx, label_cy, label_ang, half_w, half_h = label_geo
@@ -740,7 +759,6 @@ class SafeDimension(_Annotation):
         except Exception:
             is_line = False
 
-        chosen_label = fallback_label or _truncate(label)
         faces = None
         seg: list = []
         if is_line and measured > 1e-9:

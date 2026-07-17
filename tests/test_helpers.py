@@ -193,6 +193,28 @@ class TestDimension:
         # the left shaft piece is swallowed by the gap — no ink renders under text
         assert len(on_head.faces()) == len(clear.faces()) - 2
 
+    def test_label_shifted_onto_witness_line_cuts_it(self, draft):
+        # a label shifted onto the witness line at an end must cut the witness
+        # stroke, as the old boolean gap-cut did — no ink under the label
+        d = Dimension((0, 0, 0), (60, 0, 0), "above", 8, draft, label="60", label_offset_x=-30)
+        lmin_x, lmin_y, lmax_x, lmax_y = d.label_bbox
+        for f in d.faces():
+            bb = f.bounding_box()
+            # witness/line faces are taller or wider than any single glyph;
+            # glyph faces themselves live inside the label bbox
+            inside_label = (
+                bb.min.X >= lmin_x - 0.1
+                and bb.max.X <= lmax_x + 0.1
+                and bb.min.Y >= lmin_y - 0.1
+                and bb.max.Y <= lmax_y + 0.1
+            )
+            if inside_label:
+                continue
+            overlaps = min(bb.max.X, lmax_x) > max(bb.min.X, lmin_x) and min(
+                bb.max.Y, lmax_y
+            ) > max(bb.min.Y, lmin_y)
+            assert not overlaps, f"ink face {bb} overlaps the shifted label {d.label_bbox}"
+
 
 # ---------------------------------------------------------------------------
 # place_dims
