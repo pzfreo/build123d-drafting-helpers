@@ -41,11 +41,11 @@ from typing import Any, Literal
 from build123d import (
     Align,
     Arrow,
+    ArrowHead,
     Color,  # noqa: F401 — re-exported convenience
     DimensionLine,
     Draft,
     Edge,
-    ExtensionLine,
     Face,
     GeomType,
     Location,
@@ -431,8 +431,148 @@ def _format_label(length, draft, tolerance) -> str:
     return f"{s} +{hi} -{lo}"
 
 
+# --- boolean-free dimension ink (#177) -------------------------------------
+#
+# build123d's DimensionLine/ExtensionLine assemble their output with boolean
+# fuse/intersect (arrow fuse + a 3-candidate label-placement search scored by
+# intersecting text faces) — ~150-230 ms per dimension, the dominant cost of a
+# dimension-dense drawing. Every element of a straight dimension is analytically
+# known, so the helpers below build the identical ink as a plain collection of
+# faces: cached arrowhead copies, thin rectangles trimmed by arithmetic around
+# the label gap, and one Text. Layout constants (shaft trim, gap width, outside
+# arrows when the label + heads don't fit) follow DimensionLine's own formulas.
+
+_ARROWHEAD_CACHE: dict[tuple[float, Any], Face] = {}
+
+
+def _arrowhead_face(size: float, head_type) -> Face:
+    """The filled arrowhead face for (size, head_type) — tip at the origin, body
+    extending toward -X — built once via build123d's ``ArrowHead`` (so the curve
+    is identical) and cached; callers place cheap transformed copies with
+    ``.moved()``."""
+    key = (round(size, 9), head_type)
+    face = _ARROWHEAD_CACHE.get(key)
+    if face is None:
+        face = ArrowHead(size, head_type=head_type, mode=Mode.PRIVATE).faces()[0]
+        _ARROWHEAD_CACHE[key] = face
+    return face
+
+
+def _rect_face(a, b, width: float) -> Face | None:
+    """A thin filled rectangle of *width* centred on the segment a→b (2D points),
+    or ``None`` for a degenerate segment."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        return None
+    return Face.make_rect(length, width).moved(
+        Location(
+            Vector((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, 0.0),
+            (0, 0, 1),
+            math.degrees(math.atan2(dy, dx)),
+        )
+    )
+
+
+def _spans_minus_gap(spans, lo: float, hi: float):
+    """Subtract the interval [lo, hi] from a list of (t0, t1) spans."""
+    out = []
+    for t0, t1 in spans:
+        if hi <= t0 or lo >= t1:
+            out.append((t0, t1))
+            continue
+        if t0 < lo:
+            out.append((t0, lo))
+        if hi < t1:
+            out.append((hi, t1))
+    return [(t0, t1) for t0, t1 in out if t1 - t0 > 1e-9]
+
+
+def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: float | None):
+    """Dimension-line ink from *a* to *b* assembled without booleans (#177).
+
+    Follows ``DimensionLine``'s layout: when the label and both heads fit within
+    the span the arrows sit inside with the line broken around the label
+    (gap = label extent + ``pad_around_text`` each side); otherwise the arrows
+    sit outside pointing in, with no line drawn between the ends — exactly as
+    build123d draws that case.
+
+    ``label_t`` is the label centre along a→b in mm; ``None`` centres it when it
+    fits and hangs it past *b* otherwise (DimensionLine's external-label spot).
+
+    Returns ``(faces, spans, label_geo)``: the ink faces, the drawn line pieces
+    as ((x0,y0),(x1,y1)) segment metadata, and ``(cx, cy, angle_deg, half_w,
+    half_h)`` for the label or ``None`` when *label_str* is empty.
+    """
+    av = Vector(a.X, a.Y, 0.0)
+    bv = Vector(b.X, b.Y, 0.0)
+    span = bv - av
+    length = span.length
+    u = span * (1.0 / length)
+    u_ang = math.degrees(math.atan2(u.Y, u.X))
+    # keep the label upright — readable from the bottom/right of the sheet
+    label_ang = u_ang if -90.0 < u_ang <= 90.0 else u_ang - math.copysign(180.0, u_ang)
+
+    al = draft.arrow_length
+    pad = draft.pad_around_text
+
+    text_face = None
+    half_w = half_h = 0.0
+    if label_str:
+        text_face = Text(
+            txt=label_str,
+            font_size=draft.font_size,
+            font=draft.font,
+            font_path=_font_path(draft),
+            align=(Align.CENTER, Align.CENTER),
+            mode=Mode.PRIVATE,
+        )
+        tb = text_face.bounding_box()
+        half_w, half_h = tb.size.X / 2.0, tb.size.Y / 2.0
+
+    fits = 2.0 * half_w + 2.0 * al < length
+    if fits:
+        # heads at the ends, tips outward, bodies inward; shafts trimmed by
+        # half a head so the tip isn't overdrawn (Arrow's own trim)
+        head_angles = [(0.0, u_ang + 180.0), (length, u_ang)]
+        ink = [(al / 2.0, length - al / 2.0)]
+        if label_t is None:
+            label_t = length / 2.0
+    else:
+        head_angles = [(0.0, u_ang), (length, u_ang + 180.0)]
+        ink = [(-2.0 * al, -al / 2.0), (length + al / 2.0, length + 2.0 * al)]
+        if label_t is None:
+            label_t = length + 2.0 * al + pad + half_w
+    if text_face is not None:
+        ink = _spans_minus_gap(ink, label_t - half_w - pad, label_t + half_w + pad)
+
+    faces: list[Any] = []
+    spans = []
+    for t0, t1 in ink:
+        p, q = av + u * t0, av + u * t1
+        rect = _rect_face((p.X, p.Y), (q.X, q.Y), draft.line_width)
+        if rect is not None:
+            faces.append(rect)
+            spans.append(((p.X, p.Y), (q.X, q.Y)))
+    head = _arrowhead_face(al, draft.head_type)
+    for t, ang in head_angles:
+        tip = av + u * t
+        faces.append(head.moved(Location(Vector(tip.X, tip.Y, 0.0), (0, 0, 1), ang)))
+
+    label_geo = None
+    if text_face is not None:
+        c = av + u * label_t
+        faces.append(text_face.moved(Location(Vector(c.X, c.Y, 0.0), (0, 0, 1), label_ang)))
+        label_geo = (c.X, c.Y, label_ang, half_w, half_h)
+    return faces, spans, label_geo
+
+
 class Dimension(_Annotation):
-    """ExtensionLine wrapper with named placement side, as a native Sketch.
+    """ExtensionLine-style dimension with named placement side, as a native Sketch.
+
+    Renders the same ink as build123d's ``ExtensionLine`` (witness lines, broken
+    dimension line, arrowheads, label) but assembles it without boolean
+    operations — see :func:`_dim_line_ink` (#177).
 
     Args:
         p1, p2: endpoints of the segment to dimension (3-tuple or 2-tuple).
@@ -472,98 +612,48 @@ class Dimension(_Annotation):
         sign = _offset_sign(p1, p2, toward)
         offset = sign * abs(distance)
 
-        measured_label = label
-        if label_offset_x != 0.0:
-            measured_label = ""  # suppress built-in label; we'll place our own Text
+        p1v = Vector(p1[0], p1[1], 0.0)
+        p2v = Vector(p2[0], p2[1], 0.0)
+        measured = (p2v - p1v).length
+        if measured < 1e-9:
+            raise ValueError("Start and end points of border must be different.")
+        u = (p2v - p1v) * (1.0 / measured)  # path direction
+        n = Vector(u.Y, -u.X, 0.0)  # right-hand normal (matches _offset_sign)
+        d1 = p1v + n * offset  # dimension-line endpoints
+        d2 = p2v + n * offset
 
-        _force_external = False
-        try:
-            el = ExtensionLine(
-                border=[p1, p2],
-                offset=offset,
-                draft=draft,
-                label=measured_label,
-                tolerance=tolerance,
-                mode=Mode.PRIVATE,
-            )
-        except ValueError:
-            el = ExtensionLine(
-                border=[p1, p2],
-                offset=offset,
-                draft=draft,
-                label=None,
-                tolerance=None,
-                mode=Mode.PRIVATE,
-            )
-            label_offset_x = label_offset_x or 0.0
-            _force_external = True
-
-        measured = el.dimension
+        # rendered text: what ExtensionLine would draw inline (units and all);
+        # .label metadata keeps _format_label's unit-less form for lint parity
+        rendered = label if label is not None else draft._number_with_units(measured, tolerance)
         label_str = label if label is not None else _format_label(measured, draft, tolerance)
 
-        bb = el.bounding_box()
-        dim_level_y = bb.max.Y if abs(bb.max.Y) >= abs(bb.min.Y) else bb.min.Y
-
-        mid_x = (p1[0] + p2[0]) / 2.0
-        mid_y = (p1[1] + p2[1]) / 2.0
-        dxp, dyp = p2[0] - p1[0], p2[1] - p1[1]
-        plen = math.hypot(dxp, dyp) or 1.0
-        ux, uy = dxp / plen, dyp / plen  # path direction
-        nx, ny = uy, -ux  # right-hand normal
-        label_cx = mid_x + nx * offset + ux * label_offset_x
-        label_cy = mid_y + ny * offset + uy * label_offset_x
-        vertical = abs(dyp) > abs(dxp)
-
-        probe = Text(
-            txt=label_str,
-            font_size=draft.font_size,
-            font=draft.font,
-            font_path=_font_path(draft),
-            align=Align.CENTER,
-            mode=Mode.PRIVATE,
+        faces, spans, label_geo = _dim_line_ink(
+            d1, d2, draft, rendered, label_t=measured / 2.0 + label_offset_x
         )
-        text_bb = probe.bounding_box()
-        half_w = text_bb.size.X / 2.0
-        half_h = text_bb.size.Y / 2.0
-        hx, hy = (half_h, half_w) if vertical else (half_w, half_h)
-        label_bbox_tuple = (label_cx - hx, label_cy - hy, label_cx + hx, label_cy + hy)
 
-        # ExtensionLine geometry: keep its faces directly (already filled). When the
-        # label is placed externally (shifted off the midpoint via label_offset_x, or
-        # relocated because it didn't fit the path), `el` was built with an empty/no
-        # label above, so ExtensionLine drew one continuous, unbroken line — it has no
-        # way to know where the *external* label will actually land. Left as-is, that
-        # label sits directly on top of the now-unbroken line. Cut the same gap
-        # ExtensionLine/DimensionLine would have cut for an inline label — full label
-        # extent plus draft.pad_around_text on every side, matching their own
-        # `label_length + 2 * pad_around_text` convention — but centred on the label's
-        # real (possibly shifted) position instead of the path midpoint.
-        if label_offset_x != 0.0 or _force_external:
-            pad = draft.pad_around_text
-            gap = Face.make_rect(2 * (hx + pad), 2 * (hy + pad)).moved(
-                Location(Vector(label_cx, label_cy, 0.0))
+        # witness (extension) lines: from the part — offset by extension_gap
+        # along their own direction, as ExtensionLine places them
+        w = n if offset >= 0 else -n
+        g = draft.extension_gap
+        for pv, dv in ((p1v, d1), (p2v, d2)):
+            wa, wb = pv + w * g, dv + w * g
+            rect = _rect_face((wa.X, wa.Y), (wb.X, wb.Y), draft.line_width)
+            if rect is not None:
+                faces.append(rect)
+                spans.append(((wa.X, wa.Y), (wb.X, wb.Y)))
+
+        ink_bb = Sketch(children=list(faces)).bounding_box()
+        dim_level_y = ink_bb.max.Y if abs(ink_bb.max.Y) >= abs(ink_bb.min.Y) else ink_bb.min.Y
+
+        if label_geo is not None:
+            label_cx, label_cy, label_ang, half_w, half_h = label_geo
+            label_bbox_tuple = _xf_bbox(
+                (-half_w, -half_h, half_w, half_h), label_ang, (label_cx, label_cy)
             )
-            faces = list((Sketch(children=list(el.faces())) - gap).faces())
         else:
-            faces = list(el.faces())
+            mid = (d1 + d2) * 0.5 + u * label_offset_x
+            label_bbox_tuple = (mid.X, mid.Y, mid.X, mid.Y)
         strokes: list[Edge] = []
-        extra_text: list = []
-
-        if label_offset_x != 0.0 or _force_external:
-            extra_text.append(
-                Text(
-                    txt=label_str,
-                    font_size=draft.font_size,
-                    font=draft.font,
-                    font_path=_font_path(draft),
-                    align=(Align.CENTER, Align.CENTER),
-                    mode=Mode.PRIVATE,
-                ).moved(
-                    Location(
-                        Vector(label_cx, label_cy, 0.0), Vector(0, 0, 1), 90.0 if vertical else 0.0
-                    )
-                )
-            )
 
         if basic:
             bpad = 0.4 * draft.font_size
@@ -579,14 +669,13 @@ class Dimension(_Annotation):
             ]
             label_bbox_tuple = (bx0, by0, bx1, by1)
 
-        # Combine ExtensionLine faces, any box strokes (as thin faces) and extra text.
+        # Combine the dimension/witness ink with any box strokes (as thin faces).
         if strokes:
             faces += trace(strokes, line_width=line_width).faces()
-        faces += extra_text
         sk = Sketch(children=faces)
 
-        # segments come from the ExtensionLine's straight edges + box strokes
-        seg = _segments(el.edges()) + _segments(strokes)
+        # segments are the drawn line pieces (witness lines, shafts) + box strokes
+        seg = spans + _segments(strokes)
 
         super().__init__(
             sk,
@@ -607,11 +696,14 @@ def _truncate(s: str, max_len: int = 6) -> str:
 
 
 class SafeDimension(_Annotation):
-    """DimensionLine wrapper that won't crash on labels longer than the path.
+    """DimensionLine-style dimension that won't crash on labels longer than the path.
 
-    build123d raises ValueError("Can't get geom adaptor of empty wire") when the
-    label is wider than the dimension path. This retries with a truncated label;
-    if both attempts fail, it falls back to a bare line.
+    A straight path renders through the boolean-free ink builder (#177), whose
+    arithmetic layout handles any label: one too wide for the path moves the
+    arrows outside and hangs the text past the end, as DimensionLine draws that
+    case. Curved paths still go through build123d's ``DimensionLine`` with the
+    old truncate-and-retry guard (build123d raises ValueError when the label is
+    wider than the dimension path).
 
     Metadata: ``.label``, ``.label_bbox`` (None), ``.measured_length``, ``.segments``.
     """
@@ -633,20 +725,31 @@ class SafeDimension(_Annotation):
             edge = path
         measured = edge.length
 
+        try:
+            is_line = edge.geom_type == GeomType.LINE
+        except Exception:
+            is_line = False
+
         chosen_label = fallback_label or _truncate(label)
         faces = None
         seg: list = []
-        for lbl in [label, fallback_label or _truncate(label)]:
-            try:
-                dl = DimensionLine(path=path, draft=draft, label=lbl, mode=Mode.PRIVATE)
-                # compute segments before committing `faces`, so a failure here can't
-                # leave faces set with seg unbound (the else-branch would then NameError).
-                seg = _segments(dl.edges())
-                faces = list(dl.faces())
-                chosen_label = lbl
-                break
-            except Exception:
-                continue
+        if is_line and measured > 1e-9:
+            faces, seg, _ = _dim_line_ink(
+                edge.position_at(0), edge.position_at(1), draft, label, label_t=None
+            )
+            chosen_label = label
+        else:
+            for lbl in [label, fallback_label or _truncate(label)]:
+                try:
+                    dl = DimensionLine(path=path, draft=draft, label=lbl, mode=Mode.PRIVATE)
+                    # compute segments before committing `faces`, so a failure here can't
+                    # leave faces set with seg unbound (the else-branch would then NameError).
+                    seg = _segments(dl.edges())
+                    faces = list(dl.faces())
+                    chosen_label = lbl
+                    break
+                except Exception:
+                    continue
 
         if faces is None:
             # Last resort — bare edge so the drawing isn't missing the line. No
