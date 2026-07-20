@@ -2667,6 +2667,70 @@ class SurfaceFinish(_Annotation):
         self.mark_position = (pos_v.X, pos_v.Y)
 
 
+class ProjectionSymbol(_Annotation):
+    """ISO 5456-2 projection-method symbol — the truncated-cone glyph that marks
+    a drawing as **third-angle** or **first-angle**, for a title-block cell (#179).
+
+    The symbol is a truncated cone shown in two views sharing a centreline: the
+    cone in elevation (an isosceles trapezoid tapering from the small to the
+    large diameter) beside its end view (two concentric circles, outer = large
+    diameter, inner = small). The two projection methods are exact mirror images:
+
+    * ``method="third"`` — the small end on the left, the large end and the
+      concentric circles on the right (the ISO third-angle arrangement);
+    * ``method="first"`` — the horizontal mirror of that.
+
+    Pure geometry (thin filled faces on one ink layer, like every glyph here),
+    no text; sized from ``draft.font_size`` so it drops into a title-block cell
+    without extra scaling. Placed at the origin with align/rotation as usual.
+
+    Metadata: ``.label`` (""), ``.method``, ``.segments``.
+    """
+
+    def __init__(
+        self,
+        method: Literal["third", "first"] = "third",
+        size: float | None = None,
+        draft: Draft | None = None,
+        line_width: float = 0.15,
+        rotation: float = 0,
+        align=None,
+        mode: Mode = Mode.ADD,
+    ):
+        if method not in ("third", "first"):
+            raise ValueError(f"method must be 'third' or 'first', got {method!r}")
+        draft = draft or Draft(font_size=2.5)
+        h = size if size is not None else draft.font_size
+        big_r = 0.5 * h  # large-end radius
+        small_r = 0.3 * h  # small-end radius
+        cone_len = 1.3 * h  # axial length of the cone elevation
+        gap = 0.5 * h  # space between the elevation and the end view
+        circ_cx = cone_len + gap + big_r  # centre of the concentric circles
+
+        # Third-angle layout in local coords: cone axis on x, small end at x=0,
+        # large end at x=cone_len, circles beyond. first-angle mirrors x -> -x.
+        strokes: list[Edge] = []
+        strokes.append(Edge.make_line(Vector(0.0, -small_r, 0.0), Vector(0.0, small_r, 0.0)))
+        strokes.append(Edge.make_line(Vector(cone_len, -big_r, 0.0), Vector(cone_len, big_r, 0.0)))
+        strokes.append(Edge.make_line(Vector(0.0, small_r, 0.0), Vector(cone_len, big_r, 0.0)))
+        strokes.append(Edge.make_line(Vector(0.0, -small_r, 0.0), Vector(cone_len, -big_r, 0.0)))
+        strokes += _circle_arcs(big_r, Vector(circ_cx, 0.0, 0.0))
+        strokes += _circle_arcs(small_r, Vector(circ_cx, 0.0, 0.0))
+        # centreline through both views, protruding a little past each end
+        cl_lo, cl_hi = -0.25 * h, circ_cx + big_r + 0.25 * h
+        strokes.append(Edge.make_line(Vector(cl_lo, 0.0, 0.0), Vector(cl_hi, 0.0, 0.0)))
+
+        if method == "first":
+            mirror = Location((0.0, 0.0, 0.0), (0.0, 1.0, 0.0), 180.0)
+            strokes = [e.moved(mirror) for e in strokes]
+
+        sk, seg = _strokes_and_text(strokes, [], line_width)
+        super().__init__(
+            sk, label="", label_bbox=None, segments=seg, rotation=rotation, align=align, mode=mode
+        )
+        self.method = method
+
+
 # ---------------------------------------------------------------------------
 # GD&T — feature control frame and datum symbols (ISO 1101 / ISO 5459)
 # ---------------------------------------------------------------------------

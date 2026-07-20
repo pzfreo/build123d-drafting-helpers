@@ -18,6 +18,7 @@ from build123d_drafting import (
     HoleCallout,
     Leader,
     Note,
+    ProjectionSymbol,
     SafeDimension,
     SurfaceFinish,
     TextBlock,
@@ -2409,6 +2410,67 @@ class TestNote:
         assert x0 == pytest.approx(50, abs=0.1)
         assert (y0 + y1) / 2 == pytest.approx(40, abs=0.1)
         assert x1 > 50
+
+
+class TestProjectionSymbol:
+    """ProjectionSymbol — ISO 5456-2 third/first-angle glyph (#179)."""
+
+    def test_is_a_sketch(self, draft):
+        assert isinstance(ProjectionSymbol("third", draft=draft), Sketch)
+
+    def test_renders_filled_ink(self, draft):
+        _export_ink(ProjectionSymbol("third", draft=draft))  # must not raise
+
+    def test_face_count_deterministic(self, draft):
+        # 4 cone strokes + 2 concentric circles (2 half-arcs each) + 1 centreline
+        assert len(ProjectionSymbol("third", draft=draft).faces()) == 9
+
+    def test_straight_segments_are_cone_and_centreline(self, draft):
+        # .segments carries only the straight strokes (arcs excluded): the four
+        # cone-silhouette lines plus the centreline
+        assert len(ProjectionSymbol("third", draft=draft).segments) == 5
+
+    def test_method_stored(self, draft):
+        assert ProjectionSymbol("first", draft=draft).method == "first"
+
+    def test_no_label(self, draft):
+        # pure geometry, no text — like the GD&T glyphs
+        assert ProjectionSymbol("third", draft=draft).label == ""
+
+    def test_third_has_small_end_left_large_right(self, draft):
+        # ISO third-angle arrangement: the cone tapers small (left) to large
+        # (right). The two vertical cone-end strokes encode this — the shorter
+        # (small-diameter) end must sit left of the taller (large-diameter) end.
+        segs = ProjectionSymbol("third", draft=draft).segments
+        verticals = [s for s in segs if abs(s[0][0] - s[1][0]) < 1e-6]
+        assert len(verticals) == 2
+        verticals.sort(key=lambda s: s[0][0])  # by x, left to right
+        left_h = abs(verticals[0][0][1] - verticals[0][1][1])
+        right_h = abs(verticals[1][0][1] - verticals[1][1][1])
+        assert left_h < right_h  # small end on the left
+
+    def test_first_is_horizontal_mirror_of_third(self, draft):
+        tb = ProjectionSymbol("third", draft=draft).bounding_box()
+        fb = ProjectionSymbol("first", draft=draft).bounding_box()
+        assert fb.min.X == pytest.approx(-tb.max.X, abs=1e-6)
+        assert fb.max.X == pytest.approx(-tb.min.X, abs=1e-6)
+        assert fb.min.Y == pytest.approx(tb.min.Y, abs=1e-6)
+
+    def test_size_scales_geometry(self, draft):
+        small = ProjectionSymbol("third", size=5).bounding_box().size.X
+        big = ProjectionSymbol("third", size=10).bounding_box().size.X
+        assert big == pytest.approx(2 * small, rel=1e-6)
+
+    def test_sizes_from_font_when_no_size(self):
+        from build123d import Draft
+
+        w5 = ProjectionSymbol("third", draft=Draft(font_size=5)).bounding_box().size.X
+        w10 = ProjectionSymbol("third", draft=Draft(font_size=10)).bounding_box().size.X
+        assert w10 == pytest.approx(2 * w5, rel=1e-6)
+
+    def test_invalid_method_raises(self, draft):
+        with pytest.raises(ValueError):
+            ProjectionSymbol("second", draft=draft)
 
 
 class TestTextBlock:

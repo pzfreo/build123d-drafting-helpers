@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **`ProjectionSymbol`** — the ISO 5456-2 projection-method glyph (the
+  truncated-cone symbol) for a title-block cell (#179). `ProjectionSymbol("third")`
+  and `ProjectionSymbol("first")` return mirror-image annotation sketches (cone
+  elevation beside its two-concentric-circle end view), sized from
+  `draft.font_size` like the other title-block glyphs. Pure geometry on one ink
+  layer, no text — consistent with `SurfaceFinish` and the GD&T primitives.
+
 ### Deprecated
 
 - **Feature recognition and linting** — these subsystems have moved to the
