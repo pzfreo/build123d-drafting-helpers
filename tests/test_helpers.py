@@ -18,6 +18,7 @@ from build123d_drafting import (
     HoleCallout,
     Leader,
     Note,
+    ProjectionSymbol,
     SafeDimension,
     SurfaceFinish,
     TextBlock,
@@ -2409,6 +2410,114 @@ class TestNote:
         assert x0 == pytest.approx(50, abs=0.1)
         assert (y0 + y1) / 2 == pytest.approx(40, abs=0.1)
         assert x1 > 50
+
+
+class TestProjectionSymbol:
+    """ProjectionSymbol — ISO 5456-2 third/first-angle glyph (#179)."""
+
+    def test_is_a_sketch(self, draft):
+        assert isinstance(ProjectionSymbol("third", draft=draft), Sketch)
+
+    def test_renders_filled_ink(self, draft):
+        _export_ink(ProjectionSymbol("third", draft=draft))  # must not raise
+
+    def test_face_count_deterministic(self, draft):
+        # 4 cone strokes + 2 concentric circles (2 half-arcs each) + 1 centreline
+        assert len(ProjectionSymbol("third", draft=draft).faces()) == 9
+
+    def test_straight_segments_are_cone_and_centreline(self, draft):
+        # .segments carries only the straight strokes (arcs excluded): the four
+        # cone-silhouette lines plus the centreline
+        assert len(ProjectionSymbol("third", draft=draft).segments) == 5
+
+    def test_method_stored(self, draft):
+        assert ProjectionSymbol("first", draft=draft).method == "first"
+
+    def test_no_label(self, draft):
+        # pure geometry, no text — like the GD&T glyphs
+        assert ProjectionSymbol("third", draft=draft).label == ""
+
+    @staticmethod
+    def _cone_end_heights(sym):
+        """(far_end_height, near_end_height) of the cone silhouette, where
+        'near' is the vertical stroke closer to the concentric circles."""
+        verticals = [s for s in sym.segments if abs(s[0][0] - s[1][0]) < 1e-6]
+        assert len(verticals) == 2
+        verticals.sort(key=lambda s: s[0][0])  # circles sit to the right (larger x)
+        far, near = verticals[0], verticals[1]
+        return abs(far[0][1] - far[1][1]), abs(near[0][1] - near[1][1])
+
+    def test_third_small_end_faces_circles(self, draft):
+        # ISO 5456-2 third-angle: the small (narrow) cone end is adjacent to the
+        # circles, so the vertical nearer the circles is the shorter one.
+        far_h, near_h = self._cone_end_heights(ProjectionSymbol("third", draft=draft))
+        assert near_h < far_h
+
+    def test_first_large_end_faces_circles(self, draft):
+        # ISO 5456-2 first-angle: the large cone end is adjacent to the circles,
+        # so the vertical nearer the circles is the taller one — the defining
+        # difference from third-angle (not a mirror; the circles stay put).
+        far_h, near_h = self._cone_end_heights(ProjectionSymbol("first", draft=draft))
+        assert near_h > far_h
+
+    def test_first_and_third_differ(self, draft):
+        # same footprint, opposite taper — the two methods must not be identical
+        third = self._cone_end_heights(ProjectionSymbol("third", draft=draft))
+        first = self._cone_end_heights(ProjectionSymbol("first", draft=draft))
+        assert third != first
+
+    def test_first_and_third_share_footprint(self, draft):
+        # the two methods differ only in taper direction, so their overall
+        # bounding box is identical (the distinction is content, not extent)
+        tb = ProjectionSymbol("third", draft=draft).bounding_box()
+        fb = ProjectionSymbol("first", draft=draft).bounding_box()
+        assert fb.min.X == pytest.approx(tb.min.X, abs=1e-6)
+        assert fb.max.X == pytest.approx(tb.max.X, abs=1e-6)
+        assert fb.min.Y == pytest.approx(tb.min.Y, abs=1e-6)
+        assert fb.max.Y == pytest.approx(tb.max.Y, abs=1e-6)
+
+    def test_dxf_round_trip(self, draft, tmp_path):
+        # CLAUDE.md: output must round-trip to DXF as well as SVG. This is the
+        # first arc-based title-block glyph, so exercise ExportDXF explicitly.
+        from build123d import ExportDXF
+
+        dxf = ExportDXF()
+        dxf.add_layer("ink")
+        dxf.add_shape(ProjectionSymbol("third", draft=draft), layer="ink")
+        out = tmp_path / "proj.dxf"
+        dxf.write(str(out))
+        assert out.stat().st_size > 0
+
+    def test_default_draft_when_none(self):
+        # size=None and draft=None → the hardcoded Draft(font_size=2.5) fallback
+        s = ProjectionSymbol("third")
+        assert len(s.faces()) == 9
+        assert s.bounding_box().size.X > 0
+
+    def test_align_centers_symbol(self, draft):
+        from build123d import Align
+
+        centered = ProjectionSymbol(
+            "third", draft=draft, align=(Align.CENTER, Align.CENTER)
+        ).bounding_box()
+        assert (centered.min.X + centered.max.X) / 2 == pytest.approx(0.0, abs=1e-6)
+        assert (centered.min.Y + centered.max.Y) / 2 == pytest.approx(0.0, abs=1e-6)
+
+    def test_size_scales_geometry(self, draft):
+        small = ProjectionSymbol("third", size=5).bounding_box().size.X
+        big = ProjectionSymbol("third", size=10).bounding_box().size.X
+        assert big == pytest.approx(2 * small, rel=1e-6)
+
+    def test_sizes_from_font_when_no_size(self):
+        from build123d import Draft
+
+        w5 = ProjectionSymbol("third", draft=Draft(font_size=5)).bounding_box().size.X
+        w10 = ProjectionSymbol("third", draft=Draft(font_size=10)).bounding_box().size.X
+        assert w10 == pytest.approx(2 * w5, rel=1e-6)
+
+    def test_invalid_method_raises(self, draft):
+        with pytest.raises(ValueError):
+            ProjectionSymbol("second", draft=draft)
 
 
 class TestTextBlock:
