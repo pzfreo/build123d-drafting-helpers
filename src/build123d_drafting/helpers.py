@@ -2672,26 +2672,37 @@ class ProjectionSymbol(_Annotation):
     a drawing as **third-angle** or **first-angle**, for a title-block cell (#179).
 
     The symbol is a truncated cone shown in two views sharing a centreline: the
-    cone in elevation (an isosceles trapezoid tapering from the small to the
-    large diameter) beside its end view (two concentric circles, outer = large
-    diameter, inner = small). The two projection methods are exact mirror images:
+    cone in elevation (an isosceles trapezoid) beside its end view (two
+    concentric circles, outer = large diameter, inner = small). The two
+    projection methods differ in **which cone end faces the circles** — the
+    orientation-independent rule that actually distinguishes them (ISO 5456-2;
+    left/right placement is immaterial):
 
-    * ``method="third"`` — the small end on the left, the large end and the
-      concentric circles on the right (the ISO third-angle arrangement);
-    * ``method="first"`` — the horizontal mirror of that.
+    * ``method="third"`` — the **small** (narrow) end of the cone is adjacent to
+      the concentric circles;
+    * ``method="first"`` — the **large** end is adjacent to the circles.
+
+    They are therefore *not* mirror images: a left-right mirror preserves which
+    end touches the circles, so only the taper direction relative to the end
+    view changes between the two.
+
+    ``method`` is required — the projection convention is region-dependent
+    (ASME/US drawings are third-angle, many ISO/EU drawings first-angle) and a
+    wrong symbol inverts every view, so there is deliberately no default.
 
     Pure geometry (thin filled faces on one ink layer, like every glyph here),
-    no text; sized from ``draft.font_size`` so it drops into a title-block cell
-    without extra scaling. Placed at the origin with align/rotation as usual.
+    no text; ``size`` (the large-end diameter's reach) defaults to
+    ``draft.font_size`` so it drops into a title-block cell without extra
+    scaling. Placed at the origin with align/rotation as usual.
 
     Metadata: ``.label`` (""), ``.method``, ``.segments``.
     """
 
     def __init__(
         self,
-        method: Literal["third", "first"] = "third",
-        size: float | None = None,
+        method: Literal["third", "first"],
         draft: Draft | None = None,
+        size: float | None = None,
         line_width: float = 0.15,
         rotation: float = 0,
         align=None,
@@ -2705,24 +2716,26 @@ class ProjectionSymbol(_Annotation):
         small_r = 0.3 * h  # small-end radius
         cone_len = 1.3 * h  # axial length of the cone elevation
         gap = 0.5 * h  # space between the elevation and the end view
-        circ_cx = cone_len + gap + big_r  # centre of the concentric circles
+        circ_cx = cone_len + gap + big_r  # centre of the concentric circles (right)
 
-        # Third-angle layout in local coords: cone axis on x, small end at x=0,
-        # large end at x=cone_len, circles beyond. first-angle mirrors x -> -x.
+        # Cone elevation on the left (x=0..cone_len), end-view circles on the
+        # right. The cone end nearer the circles (x=cone_len) carries the small
+        # diameter for third-angle, the large diameter for first-angle — the ISO
+        # rule that distinguishes the methods. The circles (outer=large,
+        # inner=small) are the same for both; only the taper flips.
+        near_r, far_r = (small_r, big_r) if method == "third" else (big_r, small_r)
         strokes: list[Edge] = []
-        strokes.append(Edge.make_line(Vector(0.0, -small_r, 0.0), Vector(0.0, small_r, 0.0)))
-        strokes.append(Edge.make_line(Vector(cone_len, -big_r, 0.0), Vector(cone_len, big_r, 0.0)))
-        strokes.append(Edge.make_line(Vector(0.0, small_r, 0.0), Vector(cone_len, big_r, 0.0)))
-        strokes.append(Edge.make_line(Vector(0.0, -small_r, 0.0), Vector(cone_len, -big_r, 0.0)))
+        strokes.append(Edge.make_line(Vector(0.0, -far_r, 0.0), Vector(0.0, far_r, 0.0)))
+        strokes.append(
+            Edge.make_line(Vector(cone_len, -near_r, 0.0), Vector(cone_len, near_r, 0.0))
+        )
+        strokes.append(Edge.make_line(Vector(0.0, far_r, 0.0), Vector(cone_len, near_r, 0.0)))
+        strokes.append(Edge.make_line(Vector(0.0, -far_r, 0.0), Vector(cone_len, -near_r, 0.0)))
         strokes += _circle_arcs(big_r, Vector(circ_cx, 0.0, 0.0))
         strokes += _circle_arcs(small_r, Vector(circ_cx, 0.0, 0.0))
         # centreline through both views, protruding a little past each end
         cl_lo, cl_hi = -0.25 * h, circ_cx + big_r + 0.25 * h
         strokes.append(Edge.make_line(Vector(cl_lo, 0.0, 0.0), Vector(cl_hi, 0.0, 0.0)))
-
-        if method == "first":
-            mirror = Location((0.0, 0.0, 0.0), (0.0, 1.0, 0.0), 180.0)
-            strokes = [e.moved(mirror) for e in strokes]
 
         sk, seg = _strokes_and_text(strokes, [], line_width)
         super().__init__(

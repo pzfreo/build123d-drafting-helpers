@@ -6,9 +6,10 @@
 
 - **`ProjectionSymbol`** — the ISO 5456-2 projection-method glyph (the
   truncated-cone symbol) for a title-block cell (#179). `ProjectionSymbol("third")`
-  and `ProjectionSymbol("first")` return mirror-image annotation sketches (cone
-  elevation beside its two-concentric-circle end view), sized from
-  `draft.font_size` like the other title-block glyphs. Pure geometry on one ink
+  puts the cone's small end toward the concentric-circle end view;
+  `ProjectionSymbol("first")` puts the large end toward it — the ISO rule that
+  distinguishes the two methods (they are not mirror images). Sized from
+  `draft.font_size` like the other title-block glyphs; pure geometry on one ink
   layer, no text — consistent with `SurfaceFinish` and the GD&T primitives.
 
 ### Deprecated
