@@ -1741,6 +1741,10 @@ class TestTransformMetadata:
         for (x, y), (mx, my) in zip(original, moved, strict=True):
             assert mx == pytest.approx(50 - y, abs=0.01)
             assert my == pytest.approx(20 + x, abs=0.01)
+        xs, ys = zip(*moved, strict=True)
+        assert d.moved(Location(Vector(50, 20, 0), (0, 0, 1), 90)).label_bbox == pytest.approx(
+            (min(xs), min(ys), max(xs), max(ys))
+        )
 
     def test_moved_shifts_segments(self, draft):
         from build123d import Location, Vector

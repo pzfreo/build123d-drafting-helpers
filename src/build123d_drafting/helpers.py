@@ -349,6 +349,11 @@ class _Annotation(BaseSketchObject):
 
     @property
     def label_bbox(self):
+        if self._label_polygon_local is not None:
+            ang, off = self._loc()
+            polygon = [_xf_pt(point, ang, off) for point in self._label_polygon_local]
+            xs, ys = zip(*polygon, strict=True)
+            return (min(xs), min(ys), max(xs), max(ys))
         if self._label_bbox_local is None:
             return None
         return _xf_bbox(self._label_bbox_local, *self._loc())
