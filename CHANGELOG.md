@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Exact rotated label geometry** — `Dimension.label_polygon` exposes the four
+  transform-aware corners of the label's real keep-clear rectangle.  Its
+  existing `label_bbox` remains available as the axis-aligned extent; consumers
+  doing collision or crossing checks no longer need to mistake that inflated
+  box for the text region on a diagonal dimension.
+
 - **`ProjectionSymbol`** — the ISO 5456-2 projection-method glyph (the
   truncated-cone symbol) for a title-block cell (#179). `ProjectionSymbol("third")`
   puts the cone's small end toward the concentric-circle end view;

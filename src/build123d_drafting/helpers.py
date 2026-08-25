@@ -295,9 +295,9 @@ class _Annotation(BaseSketchObject):
     """Shared base for the drawing-annotation sketch objects.
 
     Centralises the construct-and-store boilerplate and, crucially, keeps the
-    lint metadata (``label_bbox`` / ``segments`` and, on leaders, ``tip`` /
-    ``elbow``) consistent with the geometry under transforms. The values are
-    cached in the object's *build* frame; the properties apply the object's
+    lint metadata (``label_bbox`` / ``label_polygon`` / ``segments`` and, on
+    leaders, ``tip`` / ``elbow``) consistent with the geometry under transforms.
+    The values are cached in the object's *build* frame; the properties apply the object's
     current ``.location`` (so ``.moved()`` / ``.located()`` / ``.rotate()`` all
     track), and the construction-time ``rotation`` / ``align`` — which
     ``BaseSketchObject`` bakes into the geometry — is baked into the cache too.
@@ -309,6 +309,7 @@ class _Annotation(BaseSketchObject):
         *,
         label="",
         label_bbox=None,
+        label_polygon=None,
         segments=None,
         rotation=0,
         align=None,
@@ -326,6 +327,11 @@ class _Annotation(BaseSketchObject):
         self._init_rot = rotation
         self.label = label
         self._label_bbox_local = _bake_bbox(label_bbox, off, rotation) if label_bbox else None
+        self._label_polygon_local = (
+            tuple(_bake_pt(point, off, rotation) for point in label_polygon)
+            if label_polygon
+            else None
+        )
         self._segments_local = [
             (_bake_pt(a, off, rotation), _bake_pt(b, off, rotation)) for a, b in (segments or [])
         ]
@@ -346,6 +352,20 @@ class _Annotation(BaseSketchObject):
         if self._label_bbox_local is None:
             return None
         return _xf_bbox(self._label_bbox_local, *self._loc())
+
+    @property
+    def label_polygon(self):
+        """Exact label keep-clear polygon in the annotation's current coordinates.
+
+        ``label_bbox`` remains the convenient axis-aligned extent.  A rotated
+        label cannot be represented tightly by that box, so annotations that
+        know their original label geometry additionally expose its transformed
+        corners here.  ``None`` means that no tighter polygon is available.
+        """
+        if self._label_polygon_local is None:
+            return None
+        ang, off = self._loc()
+        return tuple(_xf_pt(point, ang, off) for point in self._label_polygon_local)
 
     @property
     def segments(self):
@@ -604,7 +624,8 @@ class Dimension(_Annotation):
             four separate Edges so it strokes cleanly.
 
     Metadata attributes: ``.label``, ``.label_bbox`` (min_x, min_y, max_x, max_y),
-    ``.measured_length``, ``.dim_level_y``, ``.is_basic``, ``.segments``.
+    ``.label_polygon`` (the exact four text-region corners), ``.measured_length``,
+    ``.dim_level_y``, ``.is_basic``, ``.segments``.
     """
 
     def __init__(
@@ -674,8 +695,18 @@ class Dimension(_Annotation):
         min_y = min(b.min.Y for b in boxes)
         dim_level_y = max_y if abs(max_y) >= abs(min_y) else min_y
 
+        label_polygon_tuple = None
         if label_geo is not None:
             label_cx, label_cy, label_ang, half_w, half_h = label_geo
+            label_polygon_tuple = tuple(
+                _xf_pt(point, label_ang, (label_cx, label_cy))
+                for point in (
+                    (-half_w, -half_h),
+                    (half_w, -half_h),
+                    (half_w, half_h),
+                    (-half_w, half_h),
+                )
+            )
             label_bbox_tuple = _xf_bbox(
                 (-half_w, -half_h, half_w, half_h), label_ang, (label_cx, label_cy)
             )
@@ -697,6 +728,10 @@ class Dimension(_Annotation):
                 for a, b in zip(corners, corners[1:], strict=False)
             ]
             label_bbox_tuple = (bx0, by0, bx1, by1)
+            # The basic-dimension frame is deliberately axis-aligned around the
+            # rotated text's AABB, so it — rather than the inner glyph rectangle
+            # — is the exact keep-clear region.
+            label_polygon_tuple = tuple(corners[:-1])
 
         # Combine the dimension/witness ink with any box strokes (as thin faces).
         if strokes:
@@ -710,6 +745,7 @@ class Dimension(_Annotation):
             sk,
             label=label_str,
             label_bbox=label_bbox_tuple,
+            label_polygon=label_polygon_tuple,
             segments=seg,
             rotation=rotation,
             align=align,

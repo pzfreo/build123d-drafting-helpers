@@ -135,6 +135,27 @@ class TestDimension:
         lmin_x, *_ = d.label_bbox
         assert lmin_x > 0.0
 
+    def test_diagonal_dimension_exposes_its_exact_label_polygon(self, draft):
+        d = Dimension((0, 0, 0), (10, 10, 0), "above", 4, draft, label="10")
+
+        polygon = d.label_polygon
+        assert polygon is not None and len(polygon) == 4
+        # The polygon follows the dimension line rather than becoming the
+        # inflated square AABB of that rotated rectangle.
+        edge = (polygon[1][0] - polygon[0][0], polygon[1][1] - polygon[0][1])
+        assert abs(edge[0]) == pytest.approx(abs(edge[1]))
+        xs, ys = zip(*polygon, strict=True)
+        assert d.label_bbox == pytest.approx((min(xs), min(ys), max(xs), max(ys)))
+
+    def test_basic_dimension_polygon_is_its_drawn_axis_aligned_frame(self, draft):
+        d = Dimension((0, 0, 0), (10, 10, 0), "above", 4, draft, label="10", basic=True)
+
+        x0, y0, x1, y1 = d.label_bbox
+        expected = ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+        assert d.label_polygon is not None
+        for actual, corner in zip(d.label_polygon, expected, strict=True):
+            assert actual == pytest.approx(corner)
+
     def test_label_offset_x_cuts_a_gap_in_the_dimension_line(self, draft):
         # A shifted label is placed externally (ExtensionLine draws a continuous,
         # unbroken line since it was built with no inline label) — the shift must
@@ -1709,6 +1730,17 @@ class TestTransformMetadata:
         cy1 = (m.label_bbox[1] + m.label_bbox[3]) / 2.0
         assert cx1 == pytest.approx(cx0 + 50, abs=0.01)
         assert cy1 == pytest.approx((d.label_bbox[1] + d.label_bbox[3]) / 2.0 + 20, abs=0.01)
+
+    def test_moved_and_rotated_dimension_tracks_label_polygon(self, draft):
+        from build123d import Location, Vector
+
+        d = Dimension((0, 0, 0), (30, 0, 0), "below", 6, draft, label="30")
+        original = d.label_polygon
+        moved = d.moved(Location(Vector(50, 20, 0), (0, 0, 1), 90)).label_polygon
+        assert original is not None and moved is not None
+        for (x, y), (mx, my) in zip(original, moved, strict=True):
+            assert mx == pytest.approx(50 - y, abs=0.01)
+            assert my == pytest.approx(20 + x, abs=0.01)
 
     def test_moved_shifts_segments(self, draft):
         from build123d import Location, Vector
