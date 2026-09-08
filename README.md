@@ -98,6 +98,27 @@ draft = draft_preset(font_path=None)                      # opt out → resolve 
 ```
 
 The same applies to any `Draft`: assign `draft.font_path = "/path/to/Font.ttf"` (or `None`).
+
+**Dimension text.** Position and reading orientation are independent helper settings:
+
+```python
+draft = draft_preset(text_position="above", text_orientation="aligned")
+# Or keep every dimension label horizontal:
+draft = draft_preset(text_position="above", text_orientation="horizontal")
+```
+
+The defaults are `text_position="inline"` and `text_orientation="aligned"`.
+Above mode offsets text from a continuous dimension line. Aligned text reads from
+the bottom or right of the sheet; above a vertical line therefore means its left
+side, regardless of endpoint order. Horizontal orientation keeps the text horizontal
+without changing that placement side. Short spans use outside arrows and preserve
+the full label, tolerances and font size. The label polygon, bounds and segment
+metadata describe the resulting geometry, including moved or rotated annotations.
+
+These settings apply to `Dimension` and straight-path `SafeDimension`. Non-default
+styles on curved `SafeDimension` paths raise `ValueError`; they cannot silently
+fall back to inline text. This is a rendering choice, not a standards-conformance
+preset. Unknown position or orientation values also raise `ValueError`.
 A path always wins over the `font` name.
 
 ---

@@ -387,6 +387,9 @@ def draft_preset(
     font_size: float = 2.5,
     decimal_precision: int = 2,
     font_path: str | None = _UNSET,  # type: ignore[assignment]
+    *,
+    text_position: Literal["inline", "above"] = "inline",
+    text_orientation: Literal["aligned", "horizontal"] = "aligned",
     **overrides,
 ) -> Draft:
     """A ``Draft`` tuned for clean technical-drawing output.
@@ -404,6 +407,11 @@ def draft_preset(
     different font *file*, or ``font_path=None`` to opt out and resolve the
     ``font`` *name* through the OS font stack instead. The choice travels on the
     returned ``Draft`` as a ``font_path`` attribute (see :func:`_font_path`).
+
+    ``text_position`` selects an inline gap or text above a continuous dimension
+    line. ``text_orientation`` independently selects bottom/right-readable aligned
+    text or horizontal text. These helper extensions travel on the returned Draft;
+    ordinary build123d Draft instances retain inline/aligned behavior.
     """
     params: dict[str, Any] = dict(
         font_size=font_size,
@@ -413,9 +421,22 @@ def draft_preset(
     )
     params.update(overrides)
     draft = Draft(**params)
+    draft.text_position = text_position  # type: ignore[attr-defined]
+    draft.text_orientation = text_orientation  # type: ignore[attr-defined]
+    _dimension_text_style(draft)
     if font_path is not _UNSET:
         draft.font_path = font_path  # type: ignore[attr-defined]  # Draft has no field; we pin it
     return draft
+
+
+def _dimension_text_style(draft: Draft) -> tuple[str, str]:
+    position = getattr(draft, "text_position", "inline")
+    orientation = getattr(draft, "text_orientation", "aligned")
+    if position not in ("inline", "above"):
+        raise ValueError(f"unknown dimension text_position {position!r}")
+    if orientation not in ("aligned", "horizontal"):
+        raise ValueError(f"unknown dimension text_orientation {orientation!r}")
+    return position, orientation
 
 
 # ---------------------------------------------------------------------------
@@ -513,14 +534,51 @@ def _spans_minus_gap(spans, lo: float, hi: float):
     return [(t0, t1) for t0, t1 in out if t1 - t0 > 1e-9]
 
 
-def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: float | None):
+def _line_outside_label(start, end, label_geo, padding):
+    """Clip a straight witness segment against the resolved oriented label region."""
+    cx, cy, angle, half_w, half_h = label_geo
+    angle = math.radians(angle)
+    c, s = math.cos(angle), math.sin(angle)
+
+    def local(point):
+        x, y = point.X - cx, point.Y - cy
+        return c * x + s * y, -s * x + c * y
+
+    a, b = local(start), local(end)
+    lo, hi = 0.0, 1.0
+    for x, y, extent in zip(a, b, (half_w + padding, half_h + padding), strict=True):
+        delta = y - x
+        if abs(delta) < 1e-12:
+            if abs(x) > extent:
+                return [(start, end)]
+            continue
+        first, last = sorted(((-extent - x) / delta, (extent - x) / delta))
+        lo, hi = max(lo, first), min(hi, last)
+        if lo >= hi:
+            return [(start, end)]
+    return [
+        (start + (end - start) * first, start + (end - start) * last)
+        for first, last in _spans_minus_gap([(0.0, 1.0)], lo, hi)
+    ]
+
+
+def _dim_line_ink(
+    a: Vector,
+    b: Vector,
+    draft: Draft,
+    label_str: str,
+    label_t: float | None,
+    *,
+    frame_padding: float = 0.0,
+):
     """Dimension-line ink from *a* to *b* assembled without booleans (#177).
 
     Follows ``DimensionLine``'s layout: when the label and both heads fit within
     the span the arrows sit inside with the line broken around the label
     (gap = label extent + ``pad_around_text`` each side); otherwise the arrows
     sit outside pointing in, with no line drawn between the ends — exactly as
-    build123d draws that case.
+    build123d draws that case. Above-line style retains the middle shaft and
+    offsets the complete label from it; orientation is resolved independently.
 
     ``label_t`` is the label centre along a→b in mm; ``None`` centres it when it
     fits and hangs it past *b* otherwise (DimensionLine's external-label spot).
@@ -529,6 +587,7 @@ def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: f
     as ((x0,y0),(x1,y1)) segment metadata, and ``(cx, cy, angle_deg, half_w,
     half_h)`` for the label or ``None`` when *label_str* is empty.
     """
+    position, orientation = _dimension_text_style(draft)
     av = Vector(a.X, a.Y, 0.0)
     bv = Vector(b.X, b.Y, 0.0)
     span = bv - av
@@ -536,7 +595,8 @@ def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: f
     u = span * (1.0 / length)
     u_ang = math.degrees(math.atan2(u.Y, u.X))
     # keep the label upright — readable from the bottom/right of the sheet
-    label_ang = u_ang if -90.0 < u_ang <= 90.0 else u_ang - math.copysign(180.0, u_ang)
+    aligned_ang = u_ang if -90.0 < u_ang <= 90.0 else u_ang - math.copysign(180.0, u_ang)
+    label_ang = aligned_ang if orientation == "aligned" else 0.0
 
     al = draft.arrow_length
     pad = draft.pad_around_text
@@ -556,13 +616,25 @@ def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: f
         tb = text_face.bounding_box()
         half_w, half_h = tb.size.X / 2.0, tb.size.Y / 2.0
 
+    relative = math.radians(label_ang - u_ang)
+    half_along = abs(math.cos(relative)) * half_w + abs(math.sin(relative)) * half_h
+    half_normal = abs(math.sin(relative)) * half_w + abs(math.cos(relative)) * half_h
+    if frame_padding:
+        # Basic frames surround the text's page-aligned bounding box.
+        angle = math.radians(label_ang)
+        box_x = abs(math.cos(angle)) * half_w + abs(math.sin(angle)) * half_h + frame_padding
+        box_y = abs(math.sin(angle)) * half_w + abs(math.cos(angle)) * half_h + frame_padding
+        half_normal = abs(u.Y) * box_x + abs(u.X) * box_y
+        if (position, orientation) != ("inline", "aligned"):
+            half_along = abs(u.X) * box_x + abs(u.Y) * box_y
+
     # Inside arrows need the label to fit (DimensionLine's own test) AND a
     # drawable shaft piece beside each head: where the reference formula
     # (length/2 - half_w - pad) leaves less than the al/2 head trim, build123d
     # raises "empty wire" — route that band to the outside-arrows layout
     # instead of rendering a head with no shaft behind it.
-    fits = 2.0 * half_w + 2.0 * al < length and (
-        text_face is None or length / 2.0 - half_w - pad > al / 2.0
+    fits = 2.0 * half_along + 2.0 * al < length and (
+        text_face is None or length / 2.0 - half_along - pad > al / 2.0
     )
     if fits:
         # heads at the ends, tips outward, bodies inward; shafts trimmed by
@@ -577,9 +649,13 @@ def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: f
         if label_t is None:
             # a label that fits between the ends stays centred (DimensionLine's
             # scorer keeps it there); only one wider than the span hangs past the end
-            label_t = length / 2.0 if 2.0 * half_w < length else length + 2.0 * al + pad + half_w
-    if text_face is not None:
-        ink = _spans_minus_gap(ink, label_t - half_w - pad, label_t + half_w + pad)
+            label_t = (
+                length / 2.0 if 2.0 * half_along < length else length + 2.0 * al + pad + half_along
+            )
+        if position == "above":
+            ink.insert(1, (0.0, length))
+    if text_face is not None and position == "inline":
+        ink = _spans_minus_gap(ink, label_t - half_along - pad, label_t + half_along + pad)
 
     faces: list[Any] = []
     spans = []
@@ -594,7 +670,12 @@ def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: f
         # nothing renders under the label: a head the text itself would cover is
         # dropped, as the old boolean gap-cut removed that ink (pad-zone contact
         # is fine — DimensionLine's scorer tested actual glyph overlap, not pads)
-        if text_face is not None and label_t - half_w < h_hi and h_lo < label_t + half_w:
+        if (
+            position == "inline"
+            and text_face is not None
+            and label_t - half_along < h_hi
+            and h_lo < label_t + half_along
+        ):
             continue
         tip = av + u * t
         faces.append(head.moved(Location(Vector(tip.X, tip.Y, 0.0), (0, 0, 1), ang)))
@@ -602,6 +683,14 @@ def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: f
     label_geo = None
     if text_face is not None:
         c = av + u * label_t
+        if position == "above":
+            # Use the canonical reading side even with horizontal text or reversed ends.
+            angle = math.radians(aligned_ang)
+            head_box = head.bounding_box()
+            normal_clearance = max(draft.line_width / 2, abs(head_box.min.Y), abs(head_box.max.Y))
+            c += Vector(-math.sin(angle), math.cos(angle), 0) * (
+                half_normal + pad + normal_clearance
+            )
         faces.append(text_face.moved(Location(Vector(c.X, c.Y, 0.0), (0, 0, 1), label_ang)))
         label_geo = (c.X, c.Y, label_ang, half_w, half_h)
     return faces, spans, label_geo
@@ -610,9 +699,9 @@ def _dim_line_ink(a: Vector, b: Vector, draft: Draft, label_str: str, label_t: f
 class Dimension(_Annotation):
     """ExtensionLine-style dimension with named placement side, as a native Sketch.
 
-    Renders the same ink as build123d's ``ExtensionLine`` (witness lines, broken
-    dimension line, arrowheads, label) but assembles it without boolean
-    operations — see :func:`_dim_line_ink` (#177).
+    Defaults to build123d's ``ExtensionLine`` appearance, assembled without
+    boolean operations. Helper Draft settings independently select above-line
+    text and horizontal reading orientation — see :func:`draft_preset`.
 
     Args:
         p1, p2: endpoints of the segment to dimension (3-tuple or 2-tuple).
@@ -670,8 +759,17 @@ class Dimension(_Annotation):
         rendered = label if label is not None else draft._number_with_units(measured, tolerance)
         label_str = label if label is not None else _format_label(measured, draft, tolerance)
 
+        styled = _dimension_text_style(draft) != ("inline", "aligned")
+        frame_half_width = line_width / 2 if styled else 0.0
         label_t = measured / 2.0 + label_offset_x
-        faces, spans, label_geo = _dim_line_ink(d1, d2, draft, rendered, label_t=label_t)
+        faces, spans, label_geo = _dim_line_ink(
+            d1,
+            d2,
+            draft,
+            rendered,
+            label_t=label_t,
+            frame_padding=0.4 * draft.font_size + frame_half_width if basic else 0.0,
+        )
 
         # witness (extension) lines: from the part — offset by extension_gap
         # along their own direction, as ExtensionLine places them. The label
@@ -683,17 +781,33 @@ class Dimension(_Annotation):
         pad = draft.pad_around_text
         for t_i, pv in ((0.0, p1v), (measured, p2v)):
             s_spans = [(g, abs(offset) + g)]
-            if label_geo is not None and abs(label_t - t_i) < label_geo[3] + pad:
+            if not styled and label_geo is not None and abs(label_t - t_i) < label_geo[3] + pad:
                 half_h = label_geo[4]
                 s_spans = _spans_minus_gap(
                     s_spans, abs(offset) - half_h - pad, abs(offset) + half_h + pad
                 )
             for s0, s1 in s_spans:
                 wa, wb = pv + w * s0, pv + w * s1
-                rect = _rect_face((wa.X, wa.Y), (wb.X, wb.Y), draft.line_width)
-                if rect is not None:
-                    faces.append(rect)
-                    spans.append(((wa.X, wa.Y), (wb.X, wb.Y)))
+                pieces = [(wa, wb)]
+                if styled and label_geo is not None:
+                    keep_clear = label_geo
+                    if basic:
+                        cx, cy, angle, hw, hh = label_geo
+                        bx0, by0, bx1, by1 = _xf_bbox((-hw, -hh, hw, hh), angle, (cx, cy))
+                        keep_clear = (cx, cy, 0.0, (bx1 - bx0) / 2, (by1 - by0) / 2)
+                    pieces = _line_outside_label(
+                        wa,
+                        wb,
+                        keep_clear,
+                        pad
+                        + draft.line_width / 2
+                        + (0.4 * draft.font_size + frame_half_width if basic else 0.0),
+                    )
+                for wa, wb in pieces:
+                    rect = _rect_face((wa.X, wa.Y), (wb.X, wb.Y), draft.line_width)
+                    if rect is not None:
+                        faces.append(rect)
+                        spans.append(((wa.X, wa.Y), (wb.X, wb.Y)))
 
         boxes = [f.bounding_box() for f in faces]
         max_y = max(b.max.Y for b in boxes)
@@ -732,15 +846,24 @@ class Dimension(_Annotation):
                 Edge.make_line(Vector(a[0], a[1], 0), Vector(b[0], b[1], 0))
                 for a, b in zip(corners, corners[1:], strict=False)
             ]
+            bx0 -= frame_half_width
+            by0 -= frame_half_width
+            bx1 += frame_half_width
+            by1 += frame_half_width
             label_bbox_tuple = (bx0, by0, bx1, by1)
             # The basic-dimension frame is deliberately axis-aligned around the
             # rotated text's AABB, so it — rather than the inner glyph rectangle
             # — is the exact keep-clear region.
-            label_polygon_tuple = tuple(corners[:-1])
+            label_polygon_tuple = ((bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1))
 
         # Combine the dimension/witness ink with any box strokes (as thin faces).
         if strokes:
             faces += trace(strokes, line_width=line_width).faces()
+            if styled:
+                boxes = [face.bounding_box() for face in faces]
+                max_y = max(box.max.Y for box in boxes)
+                min_y = min(box.min.Y for box in boxes)
+                dim_level_y = max_y if abs(max_y) >= abs(min_y) else min_y
         sk = Sketch(children=faces)
 
         # segments are the drawn line pieces (witness lines, shafts) + box strokes
@@ -773,9 +896,11 @@ class SafeDimension(_Annotation):
     arrows outside and hangs the text past the end, as DimensionLine draws that
     case. Curved paths still go through build123d's ``DimensionLine`` with the
     old truncate-and-retry guard (build123d raises ValueError when the label is
-    wider than the dimension path).
+    wider than the dimension path). Non-default text styles require a nonzero
+    straight path and propagate rendering failures without a fallback.
 
-    Metadata: ``.label``, ``.label_bbox`` (None), ``.measured_length``, ``.segments``.
+    Metadata: ``.label``, ``.label_bbox`` / ``.label_polygon`` (styled straight paths),
+    ``.measured_length``, ``.segments``.
     """
 
     def __init__(
@@ -789,6 +914,7 @@ class SafeDimension(_Annotation):
         align=None,
         mode: Mode = Mode.ADD,
     ):
+        styled = _dimension_text_style(draft) != ("inline", "aligned")
         if isinstance(path, (list, tuple)):
             edge = Edge.make_line(Vector(*path[0][:3]), Vector(*path[1][:3]))
         else:
@@ -800,15 +926,21 @@ class SafeDimension(_Annotation):
         except Exception:
             is_line = False
 
+        if styled and (not is_line or measured <= 1e-9):
+            raise ValueError("dimension text style requires a nonzero straight SafeDimension path")
+
         faces = None
+        label_geo = None
         seg: list = []
         if is_line and measured > 1e-9:
             try:
-                faces, seg, _ = _dim_line_ink(
+                faces, seg, label_geo = _dim_line_ink(
                     edge.position_at(0), edge.position_at(1), draft, label, label_t=None
                 )
                 chosen_label = label
             except Exception:
+                if styled:
+                    raise  # Never lose authored style or text through the legacy fallback.
                 faces = None  # fall through to the legacy path, then the bare line
         if faces is None:
             for lbl in [label, fallback_label or _truncate(label)]:
@@ -832,10 +964,19 @@ class SafeDimension(_Annotation):
         else:
             sk = Sketch(children=faces)
 
+        label_polygon = label_bbox = None
+        if styled and label_geo is not None:
+            cx, cy, angle, hw, hh = label_geo
+            label_polygon = tuple(
+                _xf_pt(point, angle, (cx, cy))
+                for point in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh))
+            )
+            label_bbox = _xf_bbox((-hw, -hh, hw, hh), angle, (cx, cy))
         super().__init__(
             sk,
             label=chosen_label,
-            label_bbox=None,
+            label_bbox=label_bbox,
+            label_polygon=label_polygon,
             segments=seg,
             rotation=rotation,
             align=align,
