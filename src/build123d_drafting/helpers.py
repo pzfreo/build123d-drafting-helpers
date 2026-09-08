@@ -3491,6 +3491,9 @@ class HoleCallout(_Annotation):
     """Single-line hole note built from geometry symbols, e.g. ``4× ⌀8.5 THRU``.
     Bottom-left at (0, 0).
 
+    ``through_indicator`` selects the single-line text for a through hole. An
+    empty string omits its token; it never changes through/blind semantics.
+
     Metadata: ``.label`` (""), ``.label_bbox`` (None), ``.segments``,
     ``.callout_width``, ``.callout_height``, ``.covers_diameters``.
     """
@@ -3501,6 +3504,7 @@ class HoleCallout(_Annotation):
         *,
         count: int | None = None,
         through: bool = False,
+        through_indicator: str = "THRU",
         depth: float | str | None = None,
         cbore_dia=None,
         cbore_depth: float | str | None = None,
@@ -3513,6 +3517,11 @@ class HoleCallout(_Annotation):
         align=None,
         mode: Mode = Mode.ADD,
     ):
+        if not isinstance(through_indicator, str) or (
+            through_indicator
+            and (not through_indicator.isprintable() or not through_indicator.strip())
+        ):
+            raise ValueError("through_indicator must be printable single-line text, or '' to omit")
         draft = draft or Draft(font_size=2.5, decimal_precision=1)
         h = draft.font_size
         prec = draft.decimal_precision
@@ -3527,7 +3536,8 @@ class HoleCallout(_Annotation):
             tokens.append(("text", f"{count}×"))
         tokens += [("sym", "diameter"), ("text", _fmt(diameter))]
         if through:
-            tokens.append(("text", "THRU"))
+            if through_indicator:
+                tokens.append(("text", through_indicator))
         elif depth is not None:
             tokens += [("sym", "depth"), ("text", _fmt(depth))]
         if cbore_dia is not None:

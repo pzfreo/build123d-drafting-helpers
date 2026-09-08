@@ -353,6 +353,12 @@ datum-target circle (upper compartment = target-area size, lower = identifier).
 check-mark symbol (build123d does not ship one); its tip is exposed as `.mark_position`.
 `HoleCallout(diameter, *, count=None, through=False, depth=None, cbore_dia=None, …)` builds a
 single-line hole note, e.g. `4× ⌀8.5 THRU`.
+With `through=True`, `through_indicator="THROUGH ALL"` chooses the printed token,
+while `through_indicator=""` omits it. The default is `"THRU"`. This changes the
+measured native ink without changing diameter, count or recess content. For a blind
+hole (`through=False`), the indicator is unused and `depth` remains visible.
+Indicators must be printable single-line text. Controls, line separators and
+whitespace-only strings are rejected; use `""` for intentional omission.
 
 ### `Note(...)` and `TextBlock(...)`
 
