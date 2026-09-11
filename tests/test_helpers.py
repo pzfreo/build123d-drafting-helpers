@@ -4,7 +4,7 @@ import math
 import os
 
 import pytest
-from build123d import Color, Draft, ExportSVG, Sketch
+from build123d import Align, Color, Draft, ExportSVG, Mode, Sketch, Text
 
 from build123d_drafting import (
     Centerline,
@@ -1092,17 +1092,52 @@ class TestTitleBlock:
         )
         assert both.cell_bbox("date") != both.cell_bbox("revision")
 
-    def test_date_cell_sits_under_the_revision_column(self, draft):
+    def test_date_cell_takes_the_last_two_columns(self, draft):
         tb = TitleBlock(
             "Part", "001", revision="B", date="2026-01-01", width=170, cell_height=8, draft=draft
         )
-        date_cell, rev_cell = tb.cell_bbox("date"), tb.cell_bbox("revision")
-        # Same column as REV (the last 10% = 17 mm), bottom row.
-        assert date_cell["min_x"] == pytest.approx(rev_cell["min_x"])
-        assert date_cell["max_x"] == pytest.approx(rev_cell["max_x"])
-        assert date_cell["width"] == pytest.approx(17.0)
+        date_cell = tb.cell_bbox("date")
+        # The last 25% (mat 15% + rev 10% = 42.5 mm of 170), bottom row. Its
+        # left edge lines up with the mat/rev boundary in the row above.
+        assert date_cell["min_x"] == pytest.approx(tb.cell_bbox("material")["min_x"])
+        assert date_cell["max_x"] == pytest.approx(tb.cell_bbox("revision")["max_x"])
+        assert date_cell["width"] == pytest.approx(42.5)
         assert date_cell["min_y"] == pytest.approx(0.0)
         assert date_cell["max_y"] == pytest.approx(8.0)
+
+    def test_date_cell_is_wide_enough_for_a_real_date(self, draft):
+        # Regression: a one-column (10%) cell overflowed for every common date
+        # format on a 120 mm block at a 3 mm font — the draftwright A4 case.
+        # Guard the property that matters, at sizes a consumer actually uses.
+        big = Draft(font_size=3.0, decimal_precision=1)
+        for width in (120.0, 150.0, 170.0):
+            tb = TitleBlock(
+                "Part",
+                "001",
+                revision="B",
+                date="2026-01-01",
+                width=width,
+                cell_height=8,
+                draft=big,
+            )
+            cell = tb.cell_bbox("date")
+            for value in ("2026-01-01", "11/09/2026", "11 SEP 2026"):
+                ink = (
+                    Text(
+                        txt=value,
+                        font_size=big.font_size,
+                        font=big.font,
+                        font_path=_font_path(big),
+                        align=(Align.CENTER, Align.CENTER),
+                        mode=Mode.PRIVATE,
+                    )
+                    .bounding_box()
+                    .size.X
+                )
+                assert ink < cell["width"], (
+                    f"{value!r} needs {ink:.2f} mm but the date cell is "
+                    f"{cell['width']:.2f} mm at width={width}"
+                )
 
     def test_date_cell_shortens_the_drawn_by_cell(self, draft):
         # The bottom row still tiles exactly: drawn-by yields the last column.
@@ -1116,7 +1151,7 @@ class TestTitleBlock:
         )
         assert tol["max_x"] == pytest.approx(drawn_by["min_x"])
         assert drawn_by["max_x"] == pytest.approx(date_cell["min_x"])
-        assert drawn_by["max_x"] == pytest.approx(153.0)
+        assert drawn_by["max_x"] == pytest.approx(127.5)
         assert date_cell["max_x"] == pytest.approx(tb.block_bbox["width"])
         assert tb.drawn_by_cell_bbox() == drawn_by
 
