@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`TitleBlock` no longer discards a supplied `date`** (draftwright #1585) —
+  ISO 7200 treats date of issue and revision index as separate data fields, but
+  both competed for the single top-right cell and `revision` always won. A
+  caller who set both got no date at all, silently. Supplying both now gives the
+  date its own labelled cell in the bottom row, in the same column as `REV`, and
+  `cell_bbox("date")` names it. Supplying only one keeps the legacy shared cell,
+  so its rendered geometry is unchanged; the block does not change size, and the
+  top row is untouched. The drawn-by cell yields the last column when the date
+  cell is present, which `drawn_by_cell_bbox()` reports as it always has.
+
+- **`TitleBlock` treats a whitespace-only `date` or `revision` as empty** —
+  `"   "` is truthy in Python, so an unstripped one occupied a cell while
+  drawing nothing. A whitespace `revision` also beat a real `date` to the
+  top-right cell and stranded it, the same defect as above wearing spaces.
+  Both are now stripped on entry, as `legal_owner` always has been. Padded
+  values such as `" A "` render exactly as before.
+
 ### Added
 
 - **Exact rotated label geometry** — `Dimension.label_polygon` exposes the four
