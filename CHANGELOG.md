@@ -14,6 +14,13 @@
   top row is untouched. The drawn-by cell yields the last column when the date
   cell is present, which `drawn_by_cell_bbox()` reports as it always has.
 
+- **The dedicated date cell spans the last two columns, not one** — at 10% of
+  `width` it was too narrow for a date at practical sizes: on a 120 mm block at
+  a 3 mm font (draftwright's A4 title block) an ISO date needs 14.79 mm and the
+  cell offered 12.00 mm, so every common date format overflowed. It is now 25%
+  (`mat` + `rev`), with its left edge on the `mat`/`rev` boundary above. This
+  corrects v0.15.2, where the one-column cell shipped.
+
 - **`TitleBlock` treats a whitespace-only `date` or `revision` as empty** —
   `"   "` is truthy in Python, so an unstripped one occupied a cell while
   drawing nothing. A whitespace `revision` also beat a real `date` to the

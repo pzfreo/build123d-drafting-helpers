@@ -2511,13 +2511,17 @@ class TitleBlock(_Annotation):
         └──────────────────┴─────────────────────────────-┘
 
     With both ``revision`` and ``date`` set, the date takes a cell of its own
-    in the bottom row, in the same column as ``rev``::
+    in the bottom row, spanning the last two columns (``mat`` + ``rev``)::
 
         ┌──────────────────┬─────────┬──────┬──────┬──────┐
         │  part_name       │ dwg_no  │scale │ mat  │ rev  │
-        ├──────────────────┼─────────┴──────┴──────┼──────┤
-        │ general_tolerance│    designed_by        │ date │
-        └──────────────────┴───────────────────────┴──────┘
+        ├──────────────────┼─────────┴──────┼──────┴──────┤
+        │ general_tolerance│  designed_by   │    date     │
+        └──────────────────┴────────────────┴─────────────┘
+
+    Two columns, not one: at 25 % of ``width`` the cell holds a date in every
+    common format at practical font sizes.  A single 10 % column does not — an
+    ISO date at a 3 mm font overflows it on a 120 mm block.
 
     With ``legal_owner`` set, a full-width third row is added at the top::
 
@@ -2640,10 +2644,10 @@ class TitleBlock(_Annotation):
             strokes.append(Edge.make_line(Vector(xi, y1, 0), Vector(xi, y2, 0)))
         # First column vertical in the bottom row.
         strokes.append(Edge.make_line(Vector(x[1], y0, 0), Vector(x[1], y1, 0)))
-        # Date cell vertical, aligned under the REV column so the two ISO 7200
-        # fields sit in one column.
+        # Date cell vertical, on the mat/rev column boundary so the divider
+        # lines up with one above it.
         if date_cell:
-            strokes.append(Edge.make_line(Vector(x[4], y0, 0), Vector(x[4], y1, 0)))
+            strokes.append(Edge.make_line(Vector(x[3], y0, 0), Vector(x[3], y1, 0)))
 
         fs = draft.font_size
         font = draft.font
@@ -2702,7 +2706,7 @@ class TitleBlock(_Annotation):
         bot_y_mid = (y0 + y1) / 2.0
         # The drawn-by cell runs to the right border unless the date cell claims
         # the last column.
-        drawn_by_right = x[4] if date_cell else x[-1]
+        drawn_by_right = x[3] if date_cell else x[-1]
         bot_cells = [
             (general_tolerance, (x[0] + x[1]) / 2.0),
             (designed_by, (x[1] + drawn_by_right) / 2.0),
@@ -2712,8 +2716,8 @@ class TitleBlock(_Annotation):
             ("DRAWN BY", x[1], y0),
         ]
         if date_cell:
-            bot_cells.append((date, (x[4] + x[5]) / 2.0))
-            bot_label_specs.append(("DATE", x[4], y0))
+            bot_cells.append((date, (x[3] + x[5]) / 2.0))
+            bot_label_specs.append(("DATE", x[3], y0))
 
         text_faces = [_cell_txt(v, cx, top_y_mid) for v, cx in top_cells]
         text_faces += [_cell_txt(v, cx, bot_y_mid) for v, cx in bot_cells]
@@ -2762,7 +2766,7 @@ class TitleBlock(_Annotation):
         if legal_owner:
             self._cells["legal_owner"] = _bbox_dict(x[0], y2, x[-1], y_top)
         if date_cell:
-            self._cells["date"] = _bbox_dict(x[4], y0, x[5], y1)
+            self._cells["date"] = _bbox_dict(x[3], y0, x[5], y1)
         # Friendly aliases for the cells whose constructor name and ISO 7200
         # label differ. "date" is an alias for the shared top-right cell ONLY
         # while there is no dedicated date cell to name; a real cell always wins.
