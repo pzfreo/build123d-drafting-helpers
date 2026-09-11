@@ -1057,14 +1057,89 @@ class TestTitleBlock:
         with_date = TitleBlock("Part", "001", date="A", show_labels=False, draft=draft)
         assert self._fingerprint(with_revision) == self._fingerprint(with_date)
 
-    def test_revision_overrides_date(self, draft):
-        # When both are set, revision wins — result equals revision-only.
-        # Use show_labels=False to isolate value content from label content.
+    def test_revision_keeps_col5_when_date_also_given(self, draft):
+        # revision still wins the top-right cell. The date does not displace it;
+        # it moves to its own bottom-row cell (see the date-cell tests below).
         both = TitleBlock(
             "Part", "001", revision="B", date="2026-01-01", show_labels=False, draft=draft
         )
         rev_only = TitleBlock("Part", "001", revision="B", show_labels=False, draft=draft)
-        assert self._fingerprint(both) == self._fingerprint(rev_only)
+        assert both.cell_bbox("revision") == rev_only.cell_bbox("revision")
+
+    # --- ISO 7200 date of issue: the dedicated bottom-row cell ---
+
+    def test_date_is_not_dropped_when_revision_is_also_set(self, draft):
+        # The defect: with revision set, a supplied date rendered nothing at all.
+        # Precondition — the date must be absent from the revision-only block, so
+        # any added content can only come from the date.
+        rev_only = TitleBlock("Part", "001", revision="B", show_labels=False, draft=draft)
+        both = TitleBlock(
+            "Part", "001", revision="B", date="2026-01-01", show_labels=False, draft=draft
+        )
+        assert self._fingerprint(both) != self._fingerprint(rev_only)
+        assert len(both.faces()) > len(rev_only.faces())
+
+    def test_date_cell_only_exists_when_both_fields_supplied(self, draft):
+        # date alone keeps the legacy shared top-right cell...
+        date_only = TitleBlock("Part", "001", date="2026-01-01", cell_height=8, draft=draft)
+        assert date_only.cell_bbox("date") == date_only.cell_bbox("revision")
+        # ...revision alone likewise leaves the bottom row whole...
+        rev_only = TitleBlock("Part", "001", revision="B", width=170, cell_height=8, draft=draft)
+        assert rev_only.cell_bbox("designed_by")["max_x"] == pytest.approx(170.0)
+        # ...and only both together cut a dedicated cell out of the bottom row.
+        both = TitleBlock(
+            "Part", "001", revision="B", date="2026-01-01", width=170, cell_height=8, draft=draft
+        )
+        assert both.cell_bbox("date") != both.cell_bbox("revision")
+
+    def test_date_cell_sits_under_the_revision_column(self, draft):
+        tb = TitleBlock(
+            "Part", "001", revision="B", date="2026-01-01", width=170, cell_height=8, draft=draft
+        )
+        date_cell, rev_cell = tb.cell_bbox("date"), tb.cell_bbox("revision")
+        # Same column as REV (the last 10% = 17 mm), bottom row.
+        assert date_cell["min_x"] == pytest.approx(rev_cell["min_x"])
+        assert date_cell["max_x"] == pytest.approx(rev_cell["max_x"])
+        assert date_cell["width"] == pytest.approx(17.0)
+        assert date_cell["min_y"] == pytest.approx(0.0)
+        assert date_cell["max_y"] == pytest.approx(8.0)
+
+    def test_date_cell_shortens_the_drawn_by_cell(self, draft):
+        # The bottom row still tiles exactly: drawn-by yields the last column.
+        tb = TitleBlock(
+            "Part", "001", revision="B", date="2026-01-01", width=170, cell_height=8, draft=draft
+        )
+        tol, drawn_by, date_cell = (
+            tb.cell_bbox("general_tolerance"),
+            tb.cell_bbox("designed_by"),
+            tb.cell_bbox("date"),
+        )
+        assert tol["max_x"] == pytest.approx(drawn_by["min_x"])
+        assert drawn_by["max_x"] == pytest.approx(date_cell["min_x"])
+        assert drawn_by["max_x"] == pytest.approx(153.0)
+        assert date_cell["max_x"] == pytest.approx(tb.block_bbox["width"])
+        assert tb.drawn_by_cell_bbox() == drawn_by
+
+    def test_date_cell_adds_its_divider_stroke(self, draft):
+        without = TitleBlock("Part", "001", revision="B", draft=draft)
+        with_date = TitleBlock("Part", "001", revision="B", date="2026-01-01", draft=draft)
+        assert len(with_date.segments) == len(without.segments) + 1
+
+    def test_date_cell_does_not_change_block_size(self, draft):
+        # The date claims existing bottom-row space; it must not grow the block.
+        without = TitleBlock("Part", "001", revision="B", cell_height=8, draft=draft)
+        with_date = TitleBlock(
+            "Part", "001", revision="B", date="2026-01-01", cell_height=8, draft=draft
+        )
+        assert with_date.block_bbox == without.block_bbox
+
+    def test_date_cell_leaves_the_top_row_untouched(self, draft):
+        without = TitleBlock("Part", "001", revision="B", width=170, cell_height=8, draft=draft)
+        with_date = TitleBlock(
+            "Part", "001", revision="B", date="2026-01-01", width=170, cell_height=8, draft=draft
+        )
+        for name in ("title", "drawing_number", "scale", "material", "revision"):
+            assert with_date.cell_bbox(name) == without.cell_bbox(name)
 
     def test_legal_owner_increases_height(self, draft):
         without = TitleBlock("Part", "001", cell_height=8, draft=draft)
@@ -1199,6 +1274,8 @@ class TestTitleBlock:
     def test_cell_bbox_aliases(self, draft):
         tb = TitleBlock("Part", "001", draft=draft)
         assert tb.cell_bbox("drawn_by") == tb.cell_bbox("designed_by")
+        # "date" aliases the shared top-right cell only while no dedicated
+        # date cell exists; a real cell always wins over the alias.
         assert tb.cell_bbox("date") == tb.cell_bbox("revision")
 
     def test_legal_owner_cell_only_when_row_present(self, draft):

@@ -2510,6 +2510,15 @@ class TitleBlock(_Annotation):
         │ general_tolerance│    designed_by               │
         └──────────────────┴─────────────────────────────-┘
 
+    With both ``revision`` and ``date`` set, the date takes a cell of its own
+    in the bottom row, in the same column as ``rev``::
+
+        ┌──────────────────┬─────────┬──────┬──────┬──────┐
+        │  part_name       │ dwg_no  │scale │ mat  │ rev  │
+        ├──────────────────┼─────────┴──────┴──────┼──────┤
+        │ general_tolerance│    designed_by        │ date │
+        └──────────────────┴───────────────────────┴──────┘
+
     With ``legal_owner`` set, a full-width third row is added at the top::
 
         ┌──────────────────────────────────────────────────┐
@@ -2528,13 +2537,19 @@ class TitleBlock(_Annotation):
     - Field 2 (document title)     → ``part_name``
     - Field 3 (document identifier) → ``drawing_number``
     - Field 4 (revision indicator) → ``revision``
+    - Date of issue                → ``date``
 
-    The ``revision`` parameter takes priority over ``date`` in the top-right
-    cell.  Supply either ``revision`` (ISO 7200 preferred) or ``date`` (legacy).
+    ``revision`` and ``date`` are distinct ISO 7200 data fields, but only one
+    can occupy the top-right cell: ``revision`` takes priority there.  Supplying
+    **both** therefore gives ``date`` its own cell in the bottom row (labelled
+    ``DATE``, under the ``REV`` column), so a supplied date is never silently
+    dropped.  Supplying only one keeps the shared top-right cell and the
+    output is unchanged.
 
     When ``show_labels`` is ``True`` (the default), each cell carries a small
     bottom-left field identifier: ``TITLE``, ``DWG NO.``, ``SCALE``, ``MAT.``,
-    ``REV`` / ``DATE``, ``GEN. TOL.``, ``DRAWN BY``, and ``LEGAL OWNER``.
+    ``REV`` / ``DATE``, ``GEN. TOL.``, ``DRAWN BY``, ``DATE`` (the dedicated
+    bottom-row cell), and ``LEGAL OWNER``.
     Pass ``show_labels=False`` to suppress labels (legacy appearance).
 
     ``legal_owner_label`` controls just the full-width owner/origin row's
@@ -2594,6 +2609,14 @@ class TitleBlock(_Annotation):
         # When legal_owner is provided an extra full-width row sits above y2.
         y_top = (3.0 if legal_owner else 2.0) * cell_height
 
+        # ISO 7200 treats date of issue and revision index as separate data
+        # fields, but the top-right cell can only hold one of them. When BOTH
+        # are supplied the date gets a cell of its own in the bottom row,
+        # under REV, rather than losing to revision and vanishing. Supplying
+        # only one keeps the legacy shared cell, so existing output is
+        # unchanged (the caller is not asking for two fields).
+        date_cell = bool(date and revision)
+
         strokes: list[Edge] = []
         # Outer border (right and left edges extend to y_top).
         strokes.append(Edge.make_line(Vector(x[0], y0, 0), Vector(x[-1], y0, 0)))
@@ -2610,6 +2633,10 @@ class TitleBlock(_Annotation):
             strokes.append(Edge.make_line(Vector(xi, y1, 0), Vector(xi, y2, 0)))
         # First column vertical in the bottom row.
         strokes.append(Edge.make_line(Vector(x[1], y0, 0), Vector(x[1], y1, 0)))
+        # Date cell vertical, aligned under the REV column so the two ISO 7200
+        # fields sit in one column.
+        if date_cell:
+            strokes.append(Edge.make_line(Vector(x[4], y0, 0), Vector(x[4], y1, 0)))
 
         fs = draft.font_size
         font = draft.font
@@ -2648,6 +2675,8 @@ class TitleBlock(_Annotation):
 
         top_y_mid = (y1 + y2) / 2.0
         # revision takes priority over date in the top-right cell (ISO 7200 field 4).
+        # With both supplied the date is not discarded: it has its own bottom-row
+        # cell (date_cell above).
         col5_value, col5_label = (revision, "REV") if revision else (date, "DATE")
         top_cells = [
             (part_name, (x[0] + x[1]) / 2.0),
@@ -2664,14 +2693,20 @@ class TitleBlock(_Annotation):
             (col5_label, x[4], y1),
         ]
         bot_y_mid = (y0 + y1) / 2.0
+        # The drawn-by cell runs to the right border unless the date cell claims
+        # the last column.
+        drawn_by_right = x[4] if date_cell else x[-1]
         bot_cells = [
             (general_tolerance, (x[0] + x[1]) / 2.0),
-            (designed_by, (x[1] + x[-1]) / 2.0),
+            (designed_by, (x[1] + drawn_by_right) / 2.0),
         ]
         bot_label_specs = [
             ("GEN. TOL.", x[0], y0),
             ("DRAWN BY", x[1], y0),
         ]
+        if date_cell:
+            bot_cells.append((date, (x[4] + x[5]) / 2.0))
+            bot_label_specs.append(("DATE", x[4], y0))
 
         text_faces = [_cell_txt(v, cx, top_y_mid) for v, cx in top_cells]
         text_faces += [_cell_txt(v, cx, bot_y_mid) for v, cx in bot_cells]
@@ -2715,23 +2750,31 @@ class TitleBlock(_Annotation):
             "material": _bbox_dict(x[3], y1, x[4], y2),
             "revision": _bbox_dict(x[4], y1, x[5], y2),
             "general_tolerance": _bbox_dict(x[0], y0, x[1], y1),
-            "designed_by": _bbox_dict(x[1], y0, x[5], y1),
+            "designed_by": _bbox_dict(x[1], y0, drawn_by_right, y1),
         }
         if legal_owner:
             self._cells["legal_owner"] = _bbox_dict(x[0], y2, x[-1], y_top)
-        # Friendly aliases for the two cells whose constructor name and ISO 7200
-        # label differ.
-        self._cell_aliases = {"drawn_by": "designed_by", "date": "revision"}
+        if date_cell:
+            self._cells["date"] = _bbox_dict(x[4], y0, x[5], y1)
+        # Friendly aliases for the cells whose constructor name and ISO 7200
+        # label differ. "date" is an alias for the shared top-right cell ONLY
+        # while there is no dedicated date cell to name; a real cell always wins.
+        self._cell_aliases = {"drawn_by": "designed_by"}
+        if not date_cell:
+            self._cell_aliases["date"] = "revision"
 
     def cell_bbox(self, name: str) -> dict:
         """Bounding box of the named title-block cell, in the BUILD frame.
 
         *name* is the constructor field the cell holds: ``"title"``,
-        ``"drawing_number"``, ``"scale"``, ``"material"``, ``"revision"``
-        (alias ``"date"``), ``"general_tolerance"``, ``"designed_by"`` (alias
-        ``"drawn_by"``), or ``"legal_owner"`` (only when a ``legal_owner`` row
-        was drawn). Returns a dict with ``min_x``, ``min_y``, ``max_x``,
-        ``max_y``, ``width``, ``height`` — same shape as ``block_bbox``.
+        ``"drawing_number"``, ``"scale"``, ``"material"``, ``"revision"``,
+        ``"general_tolerance"``, ``"designed_by"`` (alias ``"drawn_by"``),
+        ``"date"``, or ``"legal_owner"`` (only when a ``legal_owner`` row was
+        drawn).  ``"date"`` names the dedicated bottom-row cell when one was
+        drawn (``revision`` and ``date`` both supplied) and is otherwise an
+        alias for the shared ``"revision"`` cell.  Returns a dict with
+        ``min_x``, ``min_y``, ``max_x``, ``max_y``, ``width``, ``height`` —
+        same shape as ``block_bbox``.
 
         Coordinates are in the build frame (bottom-left of the block at the
         origin), like ``block_bbox``. When the title block has been
