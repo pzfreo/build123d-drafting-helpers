@@ -1133,6 +1133,24 @@ class TestTitleBlock:
         )
         assert with_date.block_bbox == without.block_bbox
 
+    def test_whitespace_only_date_does_not_cut_a_cell(self, draft):
+        # "   " is truthy in Python. Unstripped it would cut a cell out of the
+        # bottom row, draw a divider and a DATE caption, and fill none of it.
+        blank = TitleBlock("Part", "001", revision="A", date="   ", width=170, draft=draft)
+        none = TitleBlock("Part", "001", revision="A", width=170, draft=draft)
+        assert self._fingerprint(blank) == self._fingerprint(none)
+        assert len(blank.segments) == len(none.segments)
+        assert blank.cell_bbox("designed_by")["max_x"] == pytest.approx(170.0)
+        with pytest.raises(KeyError):
+            blank._cells["date"]
+
+    def test_whitespace_only_revision_does_not_suppress_the_date(self, draft):
+        # A whitespace revision is no revision, so it must not win the
+        # top-right cell and strand the date the way a real revision would.
+        blank_rev = TitleBlock("Part", "001", revision="   ", date="2026-09-11", draft=draft)
+        no_rev = TitleBlock("Part", "001", date="2026-09-11", draft=draft)
+        assert self._fingerprint(blank_rev) == self._fingerprint(no_rev)
+
     def test_date_cell_leaves_the_top_row_untouched(self, draft):
         without = TitleBlock("Part", "001", revision="B", width=170, cell_height=8, draft=draft)
         with_date = TitleBlock(

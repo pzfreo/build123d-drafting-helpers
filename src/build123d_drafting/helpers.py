@@ -2591,7 +2591,14 @@ class TitleBlock(_Annotation):
         drawing_scale: float | None = None,
     ):
         draft = draft or Draft(font_size=2.5, decimal_precision=1)
+        # Whitespace is not a value: "   " is truthy in Python, and an
+        # unstripped one would occupy a cell (and, for date, cut one) while
+        # drawing nothing. legal_owner has always been stripped for that
+        # reason; date and revision decide cells too, so they are stripped
+        # on the same grounds.
         legal_owner = legal_owner.strip()
+        date = date.strip()
+        revision = revision.strip()
 
         # A numeric drawing_scale is the single source of truth: it derives the
         # printed "5:1" indicator AND is the divisor lint_drawing() uses for the
@@ -2615,7 +2622,7 @@ class TitleBlock(_Annotation):
         # under REV, rather than losing to revision and vanishing. Supplying
         # only one keeps the legacy shared cell, so existing output is
         # unchanged (the caller is not asking for two fields).
-        date_cell = bool(date and revision)
+        date_cell = bool(date and revision)  # both already stripped above
 
         strokes: list[Edge] = []
         # Outer border (right and left edges extend to y_top).
