@@ -36,6 +36,7 @@ import math
 import re
 from dataclasses import dataclass
 from importlib.resources import files
+from types import MappingProxyType
 from typing import Any, Literal
 
 from build123d import (
@@ -2493,12 +2494,21 @@ class TitleBlockCell:
 
     A cell is sized one of three ways, and a row may mix them:
 
-    * ``chars=N`` — wide enough for *N* characters at the block's font, plus
-      the padding its label needs. This is the form to prefer: ISO 7200's
-      tables give a recommended number of characters per field, so a cell can
-      be sized from the standard rather than from a proportion someone chose.
-      The capacity is *declared*, not measured from the value, so every drawing
-      in a set gets an identically-shaped block.
+    * ``chars=N`` — a **nominal** capacity of *N* characters, plus the padding
+      its label needs. This is the form to prefer: ISO 7200's tables give a
+      recommended number of characters per field, so a cell can be sized from
+      the standard rather than from a proportion someone chose. The capacity is
+      *declared*, not measured from the value, so every drawing in a set gets
+      an identically-shaped block.
+
+      Nominal, because a proportional face has no one character width: *N* is
+      converted using the mean glyph width over ``_CHAR_SAMPLE``, so *N* narrow
+      characters leave room to spare and *N* wide ones can still overflow (30
+      ``'D'`` exceed a ``chars=30`` cell by about 4%, 30 ``'W'`` by about 40%).
+      Reserving the widest glyph instead would make every cell ~40% wider for a
+      guarantee only the widest string needs. An overflow is not hidden:
+      compare :attr:`TitleBlock.field_ink` against :meth:`TitleBlock.cell_bbox`
+      — which is what draftwright's ``title_field_overflow`` lint does.
     * ``width=f`` — a fraction of the block width. The original form; the cells
       of an all-fraction row must sum to 1.
     * ``flex=True`` — take an equal share of whatever the sized cells leave.
@@ -2522,6 +2532,19 @@ class TitleBlockCell:
     flex: bool = False
 
     def __post_init__(self):
+        if not isinstance(self.field, str) or not self.field.strip():
+            raise ValueError(
+                f"title-block cell field must be a non-empty name, got {self.field!r}; "
+                "it is the key a value is looked up under and the name cell_bbox() "
+                "answers to"
+            )
+        if self.chars is not None and (
+            isinstance(self.chars, bool) or not isinstance(self.chars, int)
+        ):
+            raise ValueError(
+                f"title-block cell {self.field!r} has chars={self.chars!r}; "
+                "a capacity is a whole number of characters"
+            )
         given = sum(x is not None for x in (self.width, self.chars)) + bool(self.flex)
         if given != 1:
             raise ValueError(
@@ -2641,6 +2664,13 @@ def _resolve_row_widths(row, width, char_w, pad, index):
                 out[i] += spare * (sized[i] / used)
         return out
     share = (width - used) / len(flex)
+    if share <= pad:
+        names = ", ".join(repr(row[i].field) for i in flex)
+        raise ValueError(
+            f"title-block row {index} leaves {width - used:.1f} mm for "
+            f"{len(flex)} flexible cell(s) ({names}), which cannot hold anything. "
+            "Reduce a capacity or widen the block."
+        )
     return [sized.get(i, share) for i in range(len(row))]
 
 
@@ -2648,16 +2678,18 @@ def _resolve_row_widths(row, width, char_w, pad, index):
 #: :func:`iso7200_layout` places. Taken from the standard's Tables 1-3
 #: ("Recommended number of characters"); legal owner is given as Unspecified
 #: there, so it takes the remaining width instead of a capacity.
-ISO7200_FIELD_CHARS = {
-    "document_type": 30,  # 5.3.6, mandatory
-    "title": 30,  # 5.2.2, mandatory (25/30)
-    "drawing_number": 16,  # 5.1.3 identification number, mandatory
-    "creator": 20,  # 5.3.5, mandatory
-    "approved_by": 20,  # 5.3.4 approval person, mandatory
-    "date": 10,  # 5.1.5 date of issue, mandatory
-    "sheet": 4,  # 5.1.6 segment/sheet number, mandatory
-    "revision": 2,  # 5.1.4 revision index, OPTIONAL
-}
+ISO7200_FIELD_CHARS = MappingProxyType(
+    {
+        "document_type": 30,  # 5.3.6, mandatory
+        "title": 30,  # 5.2.2, mandatory (25/30)
+        "drawing_number": 16,  # 5.1.3 identification number, mandatory
+        "creator": 20,  # 5.3.5, mandatory
+        "approved_by": 20,  # 5.3.4 approval person, mandatory
+        "date": 10,  # 5.1.5 date of issue, mandatory
+        "sheet": 4,  # 5.1.6 segment/sheet number, mandatory
+        "revision": 2,  # 5.1.4 revision index, OPTIONAL
+    }
+)
 
 
 def iso7200_layout(*, revision: bool = True) -> TitleBlockLayout:
@@ -2665,8 +2697,10 @@ def iso7200_layout(*, revision: bool = True) -> TitleBlockLayout:
 
     The standard specifies data fields, not geometry — but its Tables 1-3 give a
     recommended number of characters per field, and that is enough to size the
-    cells without inventing proportions. Each cell below declares the standard's
-    capacity; the block turns that into millimetres using its own font.
+    cells without inventing proportions. Most cells below declare the standard's
+    capacity, which the block turns into millimetres using its own font; ``title``
+    and ``legal_owner`` flex instead, taking their row's remainder, so they are
+    never narrower than the standard recommends and grow with the block.
 
     The eight mandatory fields are legal owner (5.1.2), identification number
     (5.1.3), date of issue (5.1.5), segment/sheet number (5.1.6), title (5.2.2),
@@ -2860,7 +2894,9 @@ class TitleBlock(_Annotation):
     bottom-row cell), and ``LEGAL OWNER``.
     Pass ``show_labels=False`` to suppress labels (legacy appearance).
 
-    ``legal_owner_label`` controls just the full-width owner/origin row's
+    ``legal_owner_label`` applies only to the built-in arrangement: with
+    ``layout=`` the captions are the layout's own, so set the cell's ``label``
+    instead. It controls just the full-width owner/origin row's
     identifier independently of ``show_labels``: pass ``None`` to omit it (e.g.
     when the row holds a self-attribution URL, where a ``LEGAL OWNER`` caption
     reads as a category error) or a string to rename it; the default keeps
@@ -2883,7 +2919,7 @@ class TitleBlock(_Annotation):
         self,
         part_name: str,
         drawing_number: str,
-        scale: str = "1:1",
+        scale: str | None = None,
         material: str = "",
         general_tolerance: str = "",
         designed_by: str = "",
@@ -2912,6 +2948,13 @@ class TitleBlock(_Annotation):
         legal_owner = legal_owner.strip()
         date = date.strip()
         revision = revision.strip()
+
+        # Whether `scale` is the untouched default matters to the unplaced-value
+        # check below: a caller who asked for "1:1" explicitly must not have it
+        # dropped in silence just because it happens to equal the default.
+        scale_defaulted = drawing_scale is None and scale is None
+        if scale is None:
+            scale = "1:1"
 
         # A numeric drawing_scale is the single source of truth: it derives the
         # printed "5:1" indicator AND is the divisor lint_drawing() uses for the
@@ -2962,8 +3005,12 @@ class TitleBlock(_Annotation):
             # reports it rather than the sheet quietly omitting it.
             values["revision"] = revision
             values["date"] = date
-        if values_ := values_extra:
-            values.update({k: str(v) for k, v in values_.items()})
+        if values_extra:
+            # None is "not supplied", not the text "None"; and a value is
+            # stripped, as every constructor field is.
+            values.update(
+                {k: ("" if v is None else str(v).strip()) for k, v in values_extra.items()}
+            )
 
         # Refuse to drop a value on the floor. A layout that has no cell for a
         # field the caller supplied would otherwise render a sheet quietly
@@ -2975,7 +3022,7 @@ class TitleBlock(_Annotation):
         unplaced = sorted(
             f
             for f, v in values.items()
-            if v and f not in layout.fields and not (f == "scale" and v == "1:1")
+            if v and f not in layout.fields and not (f == "scale" and scale_defaulted)
         )
         if unplaced:
             raise ValueError(
@@ -2997,7 +3044,14 @@ class TitleBlock(_Annotation):
 
         cell_height = float(cell_height)
         width = float(width)
-        char_w = _char_width(fs, font, font_path)
+        # Measured only when a cell declares a capacity: rendering the sample
+        # costs about as much as the rest of the block, and the default layout
+        # never needs it.
+        char_w = (
+            _char_width(fs, font, font_path)
+            if any(cell.chars is not None for row in layout.rows for cell in row)
+            else 0.0
+        )
         y_top = len(layout.rows) * cell_height
         strokes: list[Edge] = []
         # Outer border.

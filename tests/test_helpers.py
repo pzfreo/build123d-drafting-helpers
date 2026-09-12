@@ -44,8 +44,10 @@ from build123d_drafting import (
     view_axes,
 )
 from build123d_drafting.helpers import (
+    _CHAR_SAMPLE,
     _GDT_GLYPHS,
     DEFAULT_FONT_PATH,
+    _char_width,
     _font_path,
     _label_value,
 )
@@ -1638,10 +1640,21 @@ class TestTitleBlockLayout:
         )
 
 
+def _natural_row_width(layout, draft, values):
+    """The block width at which a capacity-only row has no spare to redistribute."""
+    char_w = _char_width(draft.font_size, draft.font, _font_path(draft))
+    pad = draft.pad_around_text * 0.4
+    return sum(c.chars * char_w + 2.0 * pad for c in layout.rows[0])
+
+
 class TestCapacitySizedCells:
     """A cell sized by character capacity, which is what ISO 7200 actually gives."""
 
-    def test_a_capacity_cell_is_wide_enough_for_its_capacity(self, draft):
+    def test_a_capacity_cell_holds_its_capacity_of_average_characters(self, draft):
+        # Built at the width the row actually needs, so no spare inflates the
+        # cells and each one sits at exactly its declared capacity. Built wider,
+        # this passes whatever the capacity means — which is how the first
+        # version of this test passed while `chars=N` did not hold N characters.
         layout = TitleBlockLayout(
             (
                 (
@@ -1650,16 +1663,26 @@ class TestCapacitySizedCells:
                 ),
             )
         )
-        tb = TitleBlock(
-            "",
-            "",
-            width=170,
-            draft=draft,
-            layout=layout,
-            values={"title": "M" * 20, "drawing_number": "0" * 16},
-        )
+        sample = _CHAR_SAMPLE
+        values = {
+            "title": (sample * 2)[:20],
+            "drawing_number": (sample * 2)[:16],
+        }
+        natural = _natural_row_width(layout, draft, values)
+        tb = TitleBlock("", "", width=natural, draft=draft, layout=layout, values=values)
         for field in ("title", "drawing_number"):
-            assert tb.field_ink[field][0] <= tb.cell_bbox(field)["width"]
+            assert tb.field_ink[field][0] <= tb.cell_bbox(field)["width"], field
+
+    def test_a_capacity_is_nominal_and_a_wide_string_still_overflows(self, draft):
+        # Documented behaviour, pinned so it is a known trade rather than a
+        # surprise: a capacity reserves N *average* characters, so N wide ones
+        # do not fit. The overflow is visible through field_ink vs cell_bbox,
+        # which is how a consumer's lint reports it.
+        layout = TitleBlockLayout(((TitleBlockCell("title", chars=20, label="TITLE"),),))
+        values = {"title": "W" * 20}
+        natural = _natural_row_width(layout, draft, values)
+        tb = TitleBlock("", "", width=natural, draft=draft, layout=layout, values=values)
+        assert tb.field_ink["title"][0] > tb.cell_bbox("title")["width"]
 
     def test_capacity_cells_keep_their_size_as_the_block_widens(self, draft):
         # The point of a capacity: a date cell is a date's width whatever the
@@ -1722,6 +1745,69 @@ class TestCapacitySizedCells:
         tb = TitleBlock("", "", width=170, draft=draft, layout=layout)
         # A 4-character field must not end up the widest cell on a wide block.
         assert tb.cell_bbox("sheet")["width"] < tb.cell_bbox("title")["width"]
+
+
+class TestValueRefusals:
+    """Every supplied value either lands in a cell or is refused; none is dropped."""
+
+    def test_an_explicit_scale_is_refused_when_the_layout_has_no_scale_cell(self, draft):
+        # "1:1" is also the default, so the check has to distinguish a caller
+        # who asked from a caller who did not — not compare against the value.
+        for kwargs in ({"scale": "1:1"}, {"scale": "5:1"}, {"drawing_scale": 1.0}):
+            with pytest.raises(ValueError, match="no cell for 'scale'"):
+                TitleBlock("", "", draft=draft, layout=iso7200_layout(), **kwargs)
+
+    def test_an_unasked_for_scale_is_not_refused(self, draft):
+        tb = TitleBlock("", "", draft=draft, layout=iso7200_layout())
+        assert "scale" not in tb.field_ink
+
+    def test_the_default_block_still_prints_its_default_scale(self, draft):
+        assert "scale" in TitleBlock("P", "001", draft=draft).field_ink
+
+    def test_a_none_value_is_absent_not_the_text_none(self, draft):
+        layout = TitleBlockLayout(((TitleBlockCell("sheet", chars=4, label="SHEET"),),))
+        tb = TitleBlock("", "", draft=draft, layout=layout, values={"sheet": None})
+        assert "sheet" not in tb.field_ink
+        spelled = TitleBlock("", "", draft=draft, layout=layout, values={"sheet": "None"})
+        assert spelled.field_ink["sheet"][0] > 0
+
+    def test_a_supplied_value_is_stripped_like_every_constructor_field(self, draft):
+        layout = TitleBlockLayout(((TitleBlockCell("sheet", chars=8, label="SHEET"),),))
+        padded = TitleBlock("", "", draft=draft, layout=layout, values={"sheet": "  1/1  "})
+        exact = TitleBlock("", "", draft=draft, layout=layout, values={"sheet": "1/1"})
+        assert padded.field_ink["sheet"] == exact.field_ink["sheet"]
+        blank = TitleBlock("", "", draft=draft, layout=layout, values={"sheet": "   "})
+        assert "sheet" not in blank.field_ink
+
+
+class TestCellValidation:
+    def test_a_cell_needs_a_usable_field_name(self):
+        for bad in ("", "   ", None, 42):
+            with pytest.raises(ValueError, match="non-empty name"):
+                TitleBlockCell(bad, chars=4)
+
+    def test_a_capacity_must_be_a_whole_number(self):
+        for bad in (2.5, True):
+            with pytest.raises(ValueError, match="whole number of characters"):
+                TitleBlockCell("a", chars=bad)
+
+    def test_a_flexible_cell_squeezed_to_nothing_is_refused(self, draft):
+        # Previously it collapsed to zero width and drew its caption outside
+        # the block outline.
+        layout = TitleBlockLayout(
+            (
+                (
+                    TitleBlockCell("title", chars=40),
+                    TitleBlockCell("legal_owner", flex=True, label="LEGAL OWNER"),
+                ),
+            )
+        )
+        pad = draft.pad_around_text * 0.4
+        needed = _char_width(draft.font_size, draft.font, _font_path(draft)) * 40 + 2 * pad
+        # Just wide enough for the capacity cell, leaving the flexible one a
+        # sliver — a different refusal from "the row does not fit at all".
+        with pytest.raises(ValueError, match="cannot hold anything"):
+            TitleBlock("", "", width=needed + pad * 0.5, draft=draft, layout=layout)
 
 
 class TestISO7200Layout:
