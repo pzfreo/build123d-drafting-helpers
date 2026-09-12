@@ -7,6 +7,7 @@ import pytest
 from build123d import Align, Color, Draft, ExportSVG, Mode, Sketch, Text
 
 from build123d_drafting import (
+    ISO7200_FIELD_CHARS,
     Centerline,
     CenterlineCircle,
     CenterMark,
@@ -34,6 +35,7 @@ from build123d_drafting import (
     find_overlaps,
     format_drawing_scale,
     helpers,
+    iso7200_layout,
     leader_offset,
     lint_drawing,
     place_dims,
@@ -1561,13 +1563,28 @@ class TestTitleBlockLayout:
         [
             ((((("a", 0.4), ("b", 0.4)),)), "sums to 0.8"),
             (((("a", 1.0),), (("a", 1.0),)), "duplicate"),
-            (((("a", 1.5), ("b", -0.5)),), "finite and positive"),
         ],
     )
     def test_a_layout_that_cannot_be_drawn_is_refused(self, rows, message):
         spec = tuple(tuple(TitleBlockCell(f, w) for f, w in row) for row in rows)
         with pytest.raises(ValueError, match=message):
             TitleBlockLayout(spec)
+
+    def test_a_cell_that_cannot_be_sized_is_refused(self):
+        # Sizing is checked when the cell is built, so a bad one never reaches
+        # a layout at all.
+        with pytest.raises(ValueError, match="finite and positive"):
+            TitleBlockCell("a", -0.5)
+        with pytest.raises(ValueError, match="sized exactly one way"):
+            TitleBlockCell("a")
+        with pytest.raises(ValueError, match="sized exactly one way"):
+            TitleBlockCell("a", width=0.5, chars=10)
+        with pytest.raises(ValueError, match="positive number of characters"):
+            TitleBlockCell("a", chars=0)
+
+    def test_a_row_cannot_mix_fractions_with_capacities(self):
+        with pytest.raises(ValueError, match="mixes width= fractions"):
+            TitleBlockLayout(((TitleBlockCell("a", width=0.5), TitleBlockCell("b", chars=10)),))
 
     def test_an_empty_layout_is_refused(self):
         with pytest.raises(ValueError, match="at least one row"):
@@ -1619,6 +1636,176 @@ class TestTitleBlockLayout:
             "designed_by",
             "date",
         )
+
+
+class TestCapacitySizedCells:
+    """A cell sized by character capacity, which is what ISO 7200 actually gives."""
+
+    def test_a_capacity_cell_is_wide_enough_for_its_capacity(self, draft):
+        layout = TitleBlockLayout(
+            (
+                (
+                    TitleBlockCell("title", chars=20, label="TITLE"),
+                    TitleBlockCell("drawing_number", chars=16, label="DWG NO."),
+                ),
+            )
+        )
+        tb = TitleBlock(
+            "",
+            "",
+            width=170,
+            draft=draft,
+            layout=layout,
+            values={"title": "M" * 20, "drawing_number": "0" * 16},
+        )
+        for field in ("title", "drawing_number"):
+            assert tb.field_ink[field][0] <= tb.cell_bbox(field)["width"]
+
+    def test_capacity_cells_keep_their_size_as_the_block_widens(self, draft):
+        # The point of a capacity: a date cell is a date's width whatever the
+        # block is, so the same fields render the same way across a drawing set.
+        layout = TitleBlockLayout(
+            ((TitleBlockCell("legal_owner", flex=True), TitleBlockCell("date", chars=10)),)
+        )
+        narrow = TitleBlock(
+            "",
+            "",
+            width=120,
+            draft=draft,
+            layout=layout,
+            values={"legal_owner": "ACME", "date": "2026-01-01"},
+        )
+        wide = TitleBlock(
+            "",
+            "",
+            width=180,
+            draft=draft,
+            layout=layout,
+            values={"legal_owner": "ACME", "date": "2026-01-01"},
+        )
+        assert narrow.cell_bbox("date")["width"] == pytest.approx(wide.cell_bbox("date")["width"])
+        # The flexible cell absorbs the whole difference.
+        assert wide.cell_bbox("legal_owner")["width"] - narrow.cell_bbox("legal_owner")[
+            "width"
+        ] == pytest.approx(60.0)
+
+    def test_a_row_that_cannot_fit_its_capacities_is_refused(self, draft):
+        layout = TitleBlockLayout(
+            ((TitleBlockCell("title", chars=60), TitleBlockCell("drawing_number", chars=60)),)
+        )
+        with pytest.raises(ValueError, match="but the block is"):
+            TitleBlock("", "", width=40, draft=draft, layout=layout)
+
+    def test_rows_always_tile_the_full_width(self, draft):
+        # Whether the spare goes to flex cells or is spread over capacities.
+        for layout in (
+            TitleBlockLayout(
+                ((TitleBlockCell("title", chars=10), TitleBlockCell("date", chars=10)),)
+            ),
+            TitleBlockLayout(
+                ((TitleBlockCell("title", flex=True), TitleBlockCell("date", chars=10)),)
+            ),
+        ):
+            tb = TitleBlock("", "", width=170, draft=draft, layout=layout)
+            cells = sorted(
+                (tb.cell_bbox(c.field) for c in layout.rows[0]), key=lambda c: c["min_x"]
+            )
+            assert cells[0]["min_x"] == pytest.approx(0.0)
+            assert cells[-1]["max_x"] == pytest.approx(170.0)
+            for lo, hi in zip(cells, cells[1:]):
+                assert lo["max_x"] == pytest.approx(hi["min_x"])
+
+    def test_spare_width_is_spread_by_capacity_not_dumped_on_the_last_cell(self, draft):
+        layout = TitleBlockLayout(
+            ((TitleBlockCell("title", chars=30), TitleBlockCell("sheet", chars=4)),)
+        )
+        tb = TitleBlock("", "", width=170, draft=draft, layout=layout)
+        # A 4-character field must not end up the widest cell on a wide block.
+        assert tb.cell_bbox("sheet")["width"] < tb.cell_bbox("title")["width"]
+
+
+class TestISO7200Layout:
+    def test_it_carries_every_mandatory_field(self):
+        # ISO 7200:2004 Tables 1-3, obligation column M.
+        mandatory = {
+            "legal_owner",
+            "drawing_number",
+            "date",
+            "sheet",
+            "title",
+            "approved_by",
+            "creator",
+            "document_type",
+        }
+        assert mandatory <= set(iso7200_layout().fields)
+
+    def test_the_optional_revision_can_be_left_out(self):
+        assert "revision" in iso7200_layout().fields
+        assert "revision" not in iso7200_layout(revision=False).fields
+
+    def test_sized_cells_take_their_capacity_from_the_standard(self):
+        cells = {c.field: c for row in iso7200_layout().rows for c in row}
+        for field, cell in cells.items():
+            if cell.chars is not None:
+                assert cell.chars == ISO7200_FIELD_CHARS[field], field
+        # Legal owner's length is "Unspecified" in the standard, so it flexes.
+        assert cells["legal_owner"].flex
+
+    def test_flexible_cells_still_hold_their_recommended_capacity(self, draft):
+        # A flexible cell takes the row's remainder rather than declaring a
+        # capacity, so the guarantee worth testing is that the remainder is
+        # never less than the standard recommends — at the narrowest block
+        # draftwright uses.
+        big = Draft(font_size=3.0, decimal_precision=1)
+        tb = TitleBlock("", "", width=120.0, draft=big, layout=iso7200_layout())
+        layout_cells = {c.field: c for row in iso7200_layout().rows for c in row}
+        for field, chars in ISO7200_FIELD_CHARS.items():
+            if not layout_cells[field].flex:
+                continue
+            needed = (
+                Text(
+                    txt="M" * chars,
+                    font_size=3.0,
+                    font=big.font,
+                    font_path=_font_path(big),
+                    align=(Align.CENTER, Align.CENTER),
+                    mode=Mode.PRIVATE,
+                )
+                .bounding_box()
+                .size.X
+            )
+            assert tb.cell_bbox(field)["width"] >= needed, field
+
+    def test_it_fits_the_block_draftwright_uses_on_a4(self, draft):
+        # 120 mm at a 3 mm font. If this ever stops fitting, the layout needs a
+        # row, not a wider block.
+        big = Draft(font_size=3.0, decimal_precision=1)
+        tb = TitleBlock(
+            "",
+            "",
+            width=120.0,
+            draft=big,
+            layout=iso7200_layout(),
+            values={
+                "legal_owner": "ACME ENGINEERING LTD",
+                "document_type": "DETAIL DRAWING",
+                "title": "THUMBWHEEL DRIVE SCREW",
+                "drawing_number": "GRM03-001",
+                "creator": "S. Perez",
+                "approved_by": "J. Okafor",
+                "date": "2026-09-12",
+                "revision": "A",
+                "sheet": "1/1",
+            },
+        )
+        for field, (ink_w, _) in tb.field_ink.items():
+            assert ink_w <= tb.cell_bbox(field)["width"], field
+
+    def test_scale_and_material_are_absent_by_design(self):
+        # ISO 7200 section 4 keeps them out of the block; a consumer that wants
+        # them adds cells rather than finding them here by accident.
+        fields = set(iso7200_layout().fields)
+        assert not fields & {"scale", "material", "general_tolerance"}
 
 
 # ---------------------------------------------------------------------------

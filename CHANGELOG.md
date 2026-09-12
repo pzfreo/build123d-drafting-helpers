@@ -24,6 +24,27 @@
   would otherwise be dropped in silence, which is the defect the two entries
   below were fixing.
 
+- **Cells sized by character capacity, and `iso7200_layout()`** — a
+  `TitleBlockCell` can now be sized `chars=N` (wide enough for *N* characters at
+  the block's font) or `flex=True` (take what the sized cells leave), as well as
+  by the original `width=` fraction. `iso7200_layout()` returns a layout
+  carrying all eight ISO 7200:2004 **mandatory** fields — legal owner,
+  identification number, date of issue, segment/sheet number, title, approval
+  person, creator and document type — each sized from the standard's own
+  "Recommended number of characters", published as `ISO7200_FIELD_CHARS`.
+
+  This exists because the proportional model made someone invent a number every
+  time content did not fit. ISO 7200 specifies field lengths in characters, so
+  the cell widths follow from the standard and the font rather than from a
+  judgement call. A capacity is *declared*, never measured from a drawing's own
+  values, so every drawing in a set gets an identically-shaped block. It fits
+  the 120 mm block draftwright uses on A4 in three rows, with no widening.
+
+  Note the obligation that is usually inverted: the date of issue (5.1.5) is
+  mandatory, the revision index (5.1.4) is not. Scale, material and general
+  tolerance are absent by design — ISO 7200 §4 presents those "outside the title
+  block only when used".
+
 - **`TitleBlock.field_ink`** — the measured `(width, height)` of every value
   the block drew, by cell name, in the build frame like `cell_bbox`. The block
   measures this to place the text and used to discard it, so every consumer
