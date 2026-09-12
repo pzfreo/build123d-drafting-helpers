@@ -36,6 +36,7 @@ import math
 import re
 from dataclasses import dataclass
 from importlib.resources import files
+from types import MappingProxyType
 from typing import Any, Literal
 
 from build123d import (
@@ -2487,6 +2488,339 @@ def format_drawing_scale(scale: float) -> str:
 _TB_COL_FRACTIONS = [0.40, 0.20, 0.15, 0.15, 0.10]
 
 
+@dataclass(frozen=True)
+class TitleBlockCell:
+    """One cell of a title-block row.
+
+    A cell is sized one of three ways, and a row may mix them:
+
+    * ``chars=N`` — a **nominal** capacity of *N* characters, plus the padding
+      its label needs. This is the form to prefer: ISO 7200's tables give a
+      recommended number of characters per field, so a cell can be sized from
+      the standard rather than from a proportion someone chose. The capacity is
+      *declared*, not measured from the value, so every drawing in a set gets
+      an identically-shaped block.
+
+      Nominal, because a proportional face has no one character width: *N* is
+      converted using the mean glyph width over an A-Z 0-9 sample, so *N* narrow
+      characters leave room to spare and *N* wide ones can still overflow: at
+      this library's default face 30 ``'D'`` exceed a ``chars=30`` cell by
+      about 8% and 30 ``'W'`` by about 42%.
+      Reserving the widest glyph instead would make every cell ~40% wider for a
+      guarantee only the widest string needs. An overflow is not hidden:
+      compare :attr:`TitleBlock.field_ink` against :meth:`TitleBlock.cell_bbox`
+      — which is what draftwright's ``title_field_overflow`` lint does.
+    * ``width=f`` — a fraction of the block width. The original form; the cells
+      of an all-fraction row must sum to 1.
+    * ``flex=True`` — take an equal share of whatever the sized cells leave.
+
+    Args:
+        field: the cell's name. It is both the key this cell's value is looked
+            up under and the name :meth:`TitleBlock.cell_bbox` answers to, so it
+            must be unique across the layout.
+        width: the cell's share of the block width, as a fraction.
+        label: the small field identifier drawn at the cell's bottom-left, or
+            ``None`` for no identifier. Subject to ``show_labels`` and to the
+            cell being tall enough, exactly like the built-in captions.
+        chars: the cell's capacity in characters.
+        flex: take an equal share of the row's remaining width.
+    """
+
+    field: str
+    width: float | None = None
+    label: str | None = None
+    chars: int | None = None
+    flex: bool = False
+
+    def __post_init__(self):
+        if not isinstance(self.field, str) or not self.field.strip():
+            raise ValueError(
+                f"title-block cell field must be a non-empty name, got {self.field!r}; "
+                "it is the key a value is looked up under and the name cell_bbox() "
+                "answers to"
+            )
+        if self.chars is not None and (
+            isinstance(self.chars, bool) or not isinstance(self.chars, int)
+        ):
+            raise ValueError(
+                f"title-block cell {self.field!r} has chars={self.chars!r}; "
+                "a capacity is a whole number of characters"
+            )
+        given = sum(x is not None for x in (self.width, self.chars)) + bool(self.flex)
+        if given != 1:
+            raise ValueError(
+                f"title-block cell {self.field!r} must be sized exactly one way — "
+                "width=<fraction>, chars=<capacity> or flex=True — "
+                f"got {given}"
+            )
+        if self.width is not None and (not math.isfinite(self.width) or self.width <= 0):
+            raise ValueError(
+                f"title-block cell {self.field!r} has width {self.width}; widths are "
+                "fractions of the block width and must be finite and positive"
+            )
+        if self.chars is not None and self.chars <= 0:
+            raise ValueError(
+                f"title-block cell {self.field!r} has chars={self.chars}; "
+                "a capacity is a positive number of characters"
+            )
+
+
+@dataclass(frozen=True)
+class TitleBlockLayout:
+    """A title block's cell structure, top row first.
+
+    The layout is *policy*: which fields exist, what they are called, and how
+    the width is shared between them. Supplying one lets a caller own that
+    policy — and change it — without this library releasing a new shape for
+    every arrangement someone needs. :class:`TitleBlock` keeps the rendering.
+
+    Every row spans the full width and is ``cell_height`` tall, so the block is
+    ``len(rows) * cell_height`` high. Use :func:`default_title_block_layout` to
+    start from the ISO 7200 arrangement this class has always drawn.
+    """
+
+    rows: tuple[tuple[TitleBlockCell, ...], ...]
+
+    def __post_init__(self):
+        # Materialise first: a generator is truthy, validates, and is then
+        # exhausted, leaving a layout that passed its checks and has no cells.
+        try:
+            rows = tuple(tuple(row) for row in self.rows)
+        except TypeError:
+            raise ValueError(
+                "a title-block layout is rows of cells; pass a tuple of rows, "
+                "each row a tuple of TitleBlockCell (a bare cell is not a row)"
+            ) from None
+        object.__setattr__(self, "rows", rows)
+        if not self.rows:
+            raise ValueError("a title-block layout needs at least one row")
+        seen: set[str] = set()
+        for index, row in enumerate(self.rows):
+            if not row:
+                raise ValueError(f"title-block row {index} has no cells")
+            for cell in row:
+                if cell.field in seen:
+                    raise ValueError(
+                        f"duplicate title-block cell {cell.field!r}; a field names "
+                        "exactly one cell, because cell_bbox() answers by that name"
+                    )
+                seen.add(cell.field)
+            if all(cell.width is not None for cell in row):
+                # An all-fraction row still has to tile the width exactly; a row
+                # using chars/flex is measured against the font at render time.
+                total = math.fsum(cell.width for cell in row if cell.width is not None)
+                if abs(total - 1.0) > 1e-9:
+                    fields = ", ".join(repr(cell.field) for cell in row)
+                    raise ValueError(
+                        f"title-block row {index} ({fields}) sums to {total:g}, not 1; "
+                        "cell widths are fractions of the block width"
+                    )
+            elif any(cell.width is not None for cell in row):
+                fields = ", ".join(repr(cell.field) for cell in row)
+                raise ValueError(
+                    f"title-block row {index} ({fields}) mixes width= fractions with "
+                    "chars=/flex= sizing; a fraction is a share of the whole row, so "
+                    "the two cannot be combined. Use chars= or flex= for every cell "
+                    "in the row."
+                )
+
+    @property
+    def fields(self) -> tuple[str, ...]:
+        """Every cell name in the layout, top row first, left to right."""
+        return tuple(cell.field for row in self.rows for cell in row)
+
+
+def _resolve_row_widths(row, width, char_w, pad, index):
+    """Cell widths in mm for one row, in order.
+
+    Fraction cells take their share of *width*. ``chars=`` cells take what their
+    capacity needs at the block's font plus the padding a label sits in. ``flex``
+    cells share whatever is left. A row whose sized cells do not fit is refused
+    rather than drawn overlapping.
+    """
+    if all(cell.width is not None for cell in row):
+        return [cell.width * width for cell in row]
+    sized = {
+        i: cell.chars * char_w + 2.0 * pad for i, cell in enumerate(row) if cell.chars is not None
+    }
+    flex = [i for i, cell in enumerate(row) if cell.flex]
+    used = math.fsum(sized.values())
+    if used > width + 1e-9:
+        needed = ", ".join(f"{row[i].field!r} {sized[i]:.1f} mm" for i in sorted(sized))
+        raise ValueError(
+            f"title-block row {index} needs {used:.1f} mm but the block is "
+            f"{width:.1f} mm wide ({needed}). Reduce a capacity, widen the block, "
+            "or move a field to another row."
+        )
+    if not flex:
+        # No flexible cell to absorb the slack. Spread it across the sized cells
+        # in proportion to their capacity, so a 30-character field grows more
+        # than a 4-character one and the row still tiles the full width. Dumping
+        # it all on the last cell instead gives a SHEET field 86 mm on a wide
+        # block, which looks like a mistake because it is one.
+        spare = width - used
+        out = [sized.get(i, 0.0) for i in range(len(row))]
+        if spare > 0 and used > 0:
+            for i in sized:
+                out[i] += spare * (sized[i] / used)
+        return out
+    share = (width - used) / len(flex)
+    if share <= pad:
+        names = ", ".join(repr(row[i].field) for i in flex)
+        raise ValueError(
+            f"title-block row {index} leaves {width - used:.1f} mm for "
+            f"{len(flex)} flexible cell(s) ({names}), which cannot hold anything. "
+            "Reduce a capacity or widen the block."
+        )
+    return [sized.get(i, share) for i in range(len(row))]
+
+
+#: ISO 7200:2004 recommended field lengths, in characters, for the fields
+#: :func:`iso7200_layout` places. Taken from the standard's Tables 1-3
+#: ("Recommended number of characters"); legal owner is given as Unspecified
+#: there, so it takes the remaining width instead of a capacity.
+ISO7200_FIELD_CHARS = MappingProxyType(
+    {
+        "document_type": 30,  # 5.3.6, mandatory
+        "title": 30,  # 5.2.2, mandatory (25/30)
+        "drawing_number": 16,  # 5.1.3 identification number, mandatory
+        "creator": 20,  # 5.3.5, mandatory
+        "approved_by": 20,  # 5.3.4 approval person, mandatory
+        "date": 10,  # 5.1.5 date of issue, mandatory
+        "sheet": 4,  # 5.1.6 segment/sheet number, mandatory
+        "revision": 2,  # 5.1.4 revision index, OPTIONAL
+    }
+)
+
+
+def iso7200_layout(*, revision: bool = True) -> TitleBlockLayout:
+    """A layout carrying every ISO 7200:2004 **mandatory** title-block field.
+
+    The standard specifies data fields, not geometry — but its Tables 1-3 give a
+    recommended number of characters per field, and that is enough to size the
+    cells without inventing proportions. Most cells below declare the standard's
+    capacity, which the block turns into millimetres using its own font; ``title``
+    and ``legal_owner`` flex instead, taking their row's remainder and growing
+    with the block. ``title`` is never narrower than the 30 characters the
+    standard recommends, because its row is not the one that binds first;
+    ``legal_owner`` has no recommendation to be narrower than.
+
+    The eight mandatory fields are legal owner (5.1.2), identification number
+    (5.1.3), date of issue (5.1.5), segment/sheet number (5.1.6), title (5.2.2),
+    approval person (5.3.4), creator (5.3.5) and document type (5.3.6). Note
+    that the date of issue is mandatory and the revision index (5.1.4) is not —
+    the reverse of how the two are usually treated.
+
+    ``legal_owner`` takes the width the sized cells leave, because the standard
+    gives its length as Unspecified.
+
+    Args:
+        revision: include the optional revision index (5.1.4) beside the date.
+
+    Note:
+        Scale, material and general tolerance are absent by design. ISO 7200 §4
+        keeps the title block to a minimum and presents other fields "outside
+        the title block only when used, e.g. scale, projection symbol". A
+        consumer that wants them can add cells to a copy of this layout.
+    """
+    c = ISO7200_FIELD_CHARS
+    third = [
+        TitleBlockCell("creator", chars=c["creator"], label="CREATED BY"),
+        TitleBlockCell("approved_by", chars=c["approved_by"], label="APPROVED BY"),
+        TitleBlockCell("date", chars=c["date"], label="DATE OF ISSUE"),
+    ]
+    if revision:
+        third.append(TitleBlockCell("revision", chars=c["revision"], label="REV"))
+    third.append(TitleBlockCell("sheet", chars=c["sheet"], label="SHEET"))
+    return TitleBlockLayout(
+        (
+            (
+                TitleBlockCell("legal_owner", flex=True, label="LEGAL OWNER"),
+                TitleBlockCell("document_type", chars=c["document_type"], label="DOCUMENT TYPE"),
+            ),
+            (
+                TitleBlockCell("title", flex=True, label="TITLE"),
+                TitleBlockCell("drawing_number", chars=c["drawing_number"], label="DWG NO."),
+            ),
+            tuple(third),
+        )
+    )
+
+
+def default_title_block_layout(
+    *,
+    legal_owner: bool = False,
+    legal_owner_label: str | None = "LEGAL OWNER",
+    date_cell: bool = False,
+    date_in_top_right: bool = False,
+) -> TitleBlockLayout:
+    """The ISO 7200 arrangement :class:`TitleBlock` draws when given no layout.
+
+    Args:
+        legal_owner: add the full-width owner/origin row above the other two.
+        legal_owner_label: that row's identifier; ``None`` omits it.
+        date_cell: give ``date`` a cell of its own in the bottom row, taking the
+            last two columns from ``designed_by``. Used when a revision occupies
+            the top-right cell and the date would otherwise have nowhere to go.
+        date_in_top_right: caption the shared top-right cell ``DATE`` rather than
+            ``REV``. That cell is named ``revision`` either way — it is one cell
+            holding whichever of the two fields was supplied.
+    """
+    f = _TB_COL_FRACTIONS
+    rows: list[tuple[TitleBlockCell, ...]] = []
+    if legal_owner:
+        rows.append((TitleBlockCell("legal_owner", 1.0, legal_owner_label),))
+    rows.append(
+        (
+            TitleBlockCell("title", f[0], "TITLE"),
+            TitleBlockCell("drawing_number", f[1], "DWG NO."),
+            TitleBlockCell("scale", f[2], "SCALE"),
+            TitleBlockCell("material", f[3], "MAT."),
+            TitleBlockCell("revision", f[4], "DATE" if date_in_top_right else "REV"),
+        )
+    )
+    if date_cell:
+        # The date takes the last two columns; one column is too narrow for a
+        # date at practical sizes (an ISO date at a 3 mm font needs ~15 mm,
+        # and one column of a 120 mm block is 12 mm).
+        rows.append(
+            (
+                TitleBlockCell("general_tolerance", f[0], "GEN. TOL."),
+                TitleBlockCell("designed_by", 1.0 - f[0] - f[3] - f[4], "DRAWN BY"),
+                TitleBlockCell("date", f[3] + f[4], "DATE"),
+            )
+        )
+    else:
+        rows.append(
+            (
+                TitleBlockCell("general_tolerance", f[0], "GEN. TOL."),
+                TitleBlockCell("designed_by", 1.0 - f[0], "DRAWN BY"),
+            )
+        )
+    return TitleBlockLayout(tuple(rows))
+
+
+#: The sample a cell's character capacity is measured against. ISO 7200 states
+#: field lengths as a number of characters, which is a nominal figure for a
+#: proportional face, so the width of one character is taken as the mean over
+#: this alphanumeric run — deterministic for a given font and size, and not
+#: dependent on any drawing's own values.
+_CHAR_SAMPLE = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+
+def _char_width(font_size: float, font, font_path) -> float:
+    """Mean rendered width of one character of *font* at *font_size*, in mm."""
+    ink = Text(
+        txt=_CHAR_SAMPLE,
+        font_size=font_size,
+        font=font,
+        font_path=font_path,
+        align=(Align.CENTER, Align.CENTER),
+        mode=Mode.PRIVATE,
+    ).bounding_box()
+    return ink.size.X / len(_CHAR_SAMPLE)
+
+
 def _bbox_dict(min_x, min_y, max_x, max_y):
     """A bbox dict in the same shape as ``TitleBlock.block_bbox``."""
     return {
@@ -2501,6 +2835,13 @@ def _bbox_dict(min_x, min_y, max_x, max_y):
 
 class TitleBlock(_Annotation):
     """ISO 7200:2004 title block built at the origin (bottom-left at (0, 0)).
+
+    The arrangement is a :class:`TitleBlockLayout`, and it is pluggable: pass
+    ``layout=`` to own it, with ``values=`` to fill any cell this constructor
+    has no parameter for. Pass neither and you get the ISO 7200 arrangement
+    below, unchanged — :func:`default_title_block_layout` builds it. A value
+    supplied for a field the layout has no cell for raises rather than being
+    dropped.
 
     Standard 2-row layout::
 
@@ -2556,7 +2897,9 @@ class TitleBlock(_Annotation):
     bottom-row cell), and ``LEGAL OWNER``.
     Pass ``show_labels=False`` to suppress labels (legacy appearance).
 
-    ``legal_owner_label`` controls just the full-width owner/origin row's
+    ``legal_owner_label`` applies only to the built-in arrangement: with
+    ``layout=`` the captions are the layout's own, so set the cell's ``label``
+    instead. It controls just the full-width owner/origin row's
     identifier independently of ``show_labels``: pass ``None`` to omit it (e.g.
     when the row holds a self-attribution URL, where a ``LEGAL OWNER`` caption
     reads as a category error) or a string to rename it; the default keeps
@@ -2569,14 +2912,17 @@ class TitleBlock(_Annotation):
     indicator and the label-vs-measured check stay in agreement.
 
     Metadata: ``.label`` (part_name), ``.label_bbox`` (None), ``.segments``,
-    ``.block_bbox`` dict ({min_x, min_y, max_x, max_y, width, height}).
+    ``.block_bbox`` dict ({min_x, min_y, max_x, max_y, width, height}),
+    ``.layout`` (the :class:`TitleBlockLayout` that was drawn), and
+    ``.field_ink`` ({cell name: (width, height)} of each rendered value, in the
+    build frame like ``cell_bbox``, so the two can be compared directly).
     """
 
     def __init__(
         self,
         part_name: str,
         drawing_number: str,
-        scale: str = "1:1",
+        scale: str | None = None,
         material: str = "",
         general_tolerance: str = "",
         designed_by: str = "",
@@ -2593,6 +2939,8 @@ class TitleBlock(_Annotation):
         align=None,
         mode: Mode = Mode.ADD,
         drawing_scale: float | None = None,
+        layout: TitleBlockLayout | None = None,
+        values: dict[str, str] | None = None,
     ):
         draft = draft or Draft(font_size=2.5, decimal_precision=1)
         # Whitespace is not a value: "   " is truthy in Python, and an
@@ -2604,6 +2952,13 @@ class TitleBlock(_Annotation):
         date = date.strip()
         revision = revision.strip()
 
+        # Whether `scale` is the untouched default matters to the unplaced-value
+        # check below: a caller who asked for "1:1" explicitly must not have it
+        # dropped in silence just because it happens to equal the default.
+        scale_defaulted = drawing_scale is None and scale is None
+        if scale is None:
+            scale = "1:1"
+
         # A numeric drawing_scale is the single source of truth: it derives the
         # printed "5:1" indicator AND is the divisor lint_drawing() uses for the
         # label-vs-measured check, so the two can never drift. It overrides any
@@ -2611,124 +2966,151 @@ class TitleBlock(_Annotation):
         if drawing_scale is not None:
             scale = format_drawing_scale(drawing_scale)
 
-        col_widths = [f * width for f in _TB_COL_FRACTIONS]
-        x: list[float] = [0.0]
-        for w in col_widths:
-            x.append(x[-1] + w)
-
-        y0, y1, y2 = 0.0, cell_height, 2.0 * cell_height
-        # When legal_owner is provided an extra full-width row sits above y2.
-        y_top = (3.0 if legal_owner else 2.0) * cell_height
-
-        # ISO 7200 treats date of issue and revision index as separate data
-        # fields, but the top-right cell can only hold one of them. When BOTH
-        # are supplied the date gets a cell of its own in the bottom row,
-        # under REV, rather than losing to revision and vanishing. Supplying
-        # only one keeps the legacy shared cell, so existing output is
-        # unchanged (the caller is not asking for two fields).
-        date_cell = bool(date and revision)  # both already stripped above
-
-        strokes: list[Edge] = []
-        # Outer border (right and left edges extend to y_top).
-        strokes.append(Edge.make_line(Vector(x[0], y0, 0), Vector(x[-1], y0, 0)))
-        strokes.append(Edge.make_line(Vector(x[-1], y0, 0), Vector(x[-1], y_top, 0)))
-        strokes.append(Edge.make_line(Vector(x[-1], y_top, 0), Vector(x[0], y_top, 0)))
-        strokes.append(Edge.make_line(Vector(x[0], y_top, 0), Vector(x[0], y0, 0)))
-        # Row 0 / row 1 divider.
-        strokes.append(Edge.make_line(Vector(x[0], y1, 0), Vector(x[-1], y1, 0)))
-        # Row 1 / legal_owner divider (only when legal_owner row exists).
-        if legal_owner:
-            strokes.append(Edge.make_line(Vector(x[0], y2, 0), Vector(x[-1], y2, 0)))
-        # Column verticals in the top content row.
-        for xi in x[1:-1]:
-            strokes.append(Edge.make_line(Vector(xi, y1, 0), Vector(xi, y2, 0)))
-        # First column vertical in the bottom row.
-        strokes.append(Edge.make_line(Vector(x[1], y0, 0), Vector(x[1], y1, 0)))
-        # Date cell vertical, on the mat/rev column boundary so the divider
-        # lines up with one above it.
+        values_extra = values
+        values = {
+            "title": part_name,
+            "drawing_number": drawing_number,
+            "scale": scale,
+            "material": material,
+            "general_tolerance": general_tolerance,
+            "designed_by": designed_by,
+            "legal_owner": legal_owner,
+        }
+        if layout is None:
+            # ISO 7200 treats date of issue and revision index as separate data
+            # fields, but the top-right cell can only hold one of them. When BOTH
+            # are supplied the date gets a cell of its own in the bottom row
+            # rather than losing to revision and vanishing; supplying only one
+            # keeps the shared cell, so existing output is unchanged.
+            date_cell = bool(date and revision)
+            layout = default_title_block_layout(
+                legal_owner=bool(legal_owner),
+                legal_owner_label=legal_owner_label,
+                date_cell=date_cell,
+                date_in_top_right=not revision,
+            )
+        else:
+            date_cell = "date" in layout.fields
+        # Where the date goes. The top-right cell holds one field: revision
+        # claims it whenever it is set, and the date then needs a cell of its
+        # own. The three cases are spelled out because folding them into one
+        # expression is how the date got dropped in silence twice already.
         if date_cell:
-            strokes.append(Edge.make_line(Vector(x[3], y0, 0), Vector(x[3], y1, 0)))
+            values["revision"] = revision
+            values["date"] = date
+        elif not revision:
+            # Nothing claims the shared cell, so the date takes it.
+            values["revision"] = date
+            values["date"] = ""
+        else:
+            # Revision owns the shared cell and the layout gave the date no
+            # cell. Leave the value in place so the unplaced check below
+            # reports it rather than the sheet quietly omitting it.
+            values["revision"] = revision
+            values["date"] = date
+        if values_extra:
+            # None is "not supplied", not the text "None"; and a value is
+            # stripped, as every constructor field is.
+            values.update(
+                {k: ("" if v is None else str(v).strip()) for k, v in values_extra.items()}
+            )
+
+        # Refuse to drop a value on the floor. A layout that has no cell for a
+        # field the caller supplied would otherwise render a sheet quietly
+        # missing it — the failure this class was twice fixed for. The default
+        # layout always has a cell for every field it fills, so this can only
+        # fire for a caller-supplied layout.
+        # `scale` is the one field with a non-empty default, so its presence is
+        # not evidence the caller asked for it; an explicit scale still counts.
+        unplaced = sorted(
+            f
+            for f, v in values.items()
+            if v and f not in layout.fields and not (f == "scale" and scale_defaulted)
+        )
+        if unplaced:
+            raise ValueError(
+                "title-block layout has no cell for "
+                + ", ".join(repr(f) for f in unplaced)
+                + f"; its cells are {', '.join(repr(f) for f in layout.fields)}. "
+                "Add a cell for each supplied value, or do not supply it — a "
+                "value with nowhere to go would be dropped in silence."
+            )
 
         fs = draft.font_size
         font = draft.font
         font_path = _font_path(draft)
-
-        def _cell_txt(value, cx, cy):
-            if not value:
-                return None
-            return Text(
-                txt=value,
-                font_size=fs,
-                font=font,
-                font_path=font_path,
-                align=(Align.CENTER, Align.CENTER),
-                mode=Mode.PRIVATE,
-            ).moved(Location(Vector(cx, cy, 0.0)))
-
-        # Small field-identifier labels anchored to bottom-left of each cell.
         lfs = fs * 0.5
         lpad = draft.pad_around_text * 0.4
         # Labels sit in the lower portion of a cell; suppress them if the label
         # text would overlap the (center-aligned) content text above it.
         _label_fits = (cell_height * 0.5 - fs * 0.5) > (lpad + lfs)
 
-        def _label(text, x_left, y_bottom):
-            if not show_labels or not _label_fits:
-                return None
-            return Text(
-                txt=text,
-                font_size=lfs,
-                font=font,
-                font_path=font_path,
-                align=(Align.MIN, Align.MIN),
-                mode=Mode.PRIVATE,
-            ).moved(Location(Vector(x_left + lpad, y_bottom + lpad, 0.0)))
+        cell_height = float(cell_height)
+        width = float(width)
+        # Measured only when a cell declares a capacity: rendering the sample
+        # costs about as much as the rest of the block, and the default layout
+        # never needs it.
+        char_w = (
+            _char_width(fs, font, font_path)
+            if any(cell.chars is not None for row in layout.rows for cell in row)
+            else 0.0
+        )
+        y_top = len(layout.rows) * cell_height
+        strokes: list[Edge] = []
+        # Outer border.
+        strokes.append(Edge.make_line(Vector(0.0, 0.0, 0), Vector(width, 0.0, 0)))
+        strokes.append(Edge.make_line(Vector(width, 0.0, 0), Vector(width, y_top, 0)))
+        strokes.append(Edge.make_line(Vector(width, y_top, 0), Vector(0.0, y_top, 0)))
+        strokes.append(Edge.make_line(Vector(0.0, y_top, 0), Vector(0.0, 0.0, 0)))
 
-        top_y_mid = (y1 + y2) / 2.0
-        # revision takes priority over date in the top-right cell (ISO 7200 field 4).
-        # With both supplied the date is not discarded: it has its own bottom-row
-        # cell (date_cell above).
-        col5_value, col5_label = (revision, "REV") if revision else (date, "DATE")
-        top_cells = [
-            (part_name, (x[0] + x[1]) / 2.0),
-            (drawing_number, (x[1] + x[2]) / 2.0),
-            (scale, (x[2] + x[3]) / 2.0),
-            (material, (x[3] + x[4]) / 2.0),
-            (col5_value, (x[4] + x[5]) / 2.0),
-        ]
-        top_label_specs = [
-            ("TITLE", x[0], y1),
-            ("DWG NO.", x[1], y1),
-            ("SCALE", x[2], y1),
-            ("MAT.", x[3], y1),
-            (col5_label, x[4], y1),
-        ]
-        bot_y_mid = (y0 + y1) / 2.0
-        # The drawn-by cell runs to the right border unless the date cell claims
-        # the last column.
-        drawn_by_right = x[3] if date_cell else x[-1]
-        bot_cells = [
-            (general_tolerance, (x[0] + x[1]) / 2.0),
-            (designed_by, (x[1] + drawn_by_right) / 2.0),
-        ]
-        bot_label_specs = [
-            ("GEN. TOL.", x[0], y0),
-            ("DRAWN BY", x[1], y0),
-        ]
-        if date_cell:
-            bot_cells.append((date, (x[3] + x[5]) / 2.0))
-            bot_label_specs.append(("DATE", x[3], y0))
-
-        text_faces = [_cell_txt(v, cx, top_y_mid) for v, cx in top_cells]
-        text_faces += [_cell_txt(v, cx, bot_y_mid) for v, cx in bot_cells]
-        text_faces += [_label(lbl, xl, yb) for lbl, xl, yb in top_label_specs]
-        text_faces += [_label(lbl, xl, yb) for lbl, xl, yb in bot_label_specs]
-        if legal_owner:
-            lo_y_mid = (y2 + y_top) / 2.0
-            text_faces.append(_cell_txt(legal_owner, (x[0] + x[-1]) / 2.0, lo_y_mid))
-            if legal_owner_label:
-                text_faces.append(_label(legal_owner_label, x[0], y2))
-        text_faces = [t for t in text_faces if t is not None]
+        text_faces: list = []
+        cells: dict[str, dict] = {}
+        field_ink: dict[str, tuple[float, float]] = {}
+        for index, row in enumerate(layout.rows):
+            row_bottom = (len(layout.rows) - 1 - index) * cell_height
+            row_top = row_bottom + cell_height
+            if index:  # divider above every row but the first
+                strokes.append(Edge.make_line(Vector(0.0, row_top, 0), Vector(width, row_top, 0)))
+            widths = _resolve_row_widths(row, width, char_w, lpad, index)
+            left = 0.0
+            for position, cell in enumerate(row):
+                right = width if position == len(row) - 1 else left + widths[position]
+                if position:  # vertical between cells, not at the row's edges
+                    strokes.append(
+                        Edge.make_line(Vector(left, row_bottom, 0), Vector(left, row_top, 0))
+                    )
+                cells[cell.field] = _bbox_dict(left, row_bottom, right, row_top)
+                value = values.get(cell.field, "")
+                if value:
+                    ink = Text(
+                        txt=value,
+                        font_size=fs,
+                        font=font,
+                        font_path=font_path,
+                        align=(Align.CENTER, Align.CENTER),
+                        mode=Mode.PRIVATE,
+                    )
+                    box = ink.bounding_box()
+                    field_ink[cell.field] = (box.size.X, box.size.Y)
+                    text_faces.append(
+                        ink.moved(
+                            Location(
+                                Vector((left + right) / 2.0, (row_bottom + row_top) / 2.0, 0.0)
+                            )
+                        )
+                    )
+                if cell.label and show_labels and _label_fits:
+                    text_faces.append(
+                        Text(
+                            txt=cell.label,
+                            font_size=lfs,
+                            font=font,
+                            font_path=font_path,
+                            align=(Align.MIN, Align.MIN),
+                            mode=Mode.PRIVATE,
+                        ).moved(Location(Vector(left + lpad, row_bottom + lpad, 0.0)))
+                    )
+                left = right
 
         sk, seg = _strokes_and_text(strokes, text_faces, line_width)
         super().__init__(
@@ -2740,6 +3122,14 @@ class TitleBlock(_Annotation):
             align=align,
             mode=mode,
         )
+        self.layout = layout
+        #: Measured ink extents ``(width, height)`` in mm of each field that
+        #: rendered a value, by cell name. The block measures these to draw
+        #: them, so a consumer checking a value against ``cell_bbox()`` need not
+        #: re-derive them — and cannot get the font or size wrong doing so.
+        #: In the BUILD frame, like ``cell_bbox`` and ``block_bbox``: unrotated,
+        #: so the two compare directly whatever ``rotation=`` was given.
+        self.field_ink = field_ink
         # block_bbox: the frame extents in the BUILD frame (before any .moved()
         # or rotation=). Use .bounding_box() for the live, transform-accurate
         # extents when the title block has been repositioned.
@@ -2751,28 +3141,13 @@ class TitleBlock(_Annotation):
             "width": width,
             "height": y_top,
         }
-        # Named cell rectangles in the BUILD frame, keyed by the constructor
-        # field they hold (see cell_bbox()). The legal-owner cell exists only
-        # when that full-width row was drawn.
-        self._cells = {
-            "title": _bbox_dict(x[0], y1, x[1], y2),
-            "drawing_number": _bbox_dict(x[1], y1, x[2], y2),
-            "scale": _bbox_dict(x[2], y1, x[3], y2),
-            "material": _bbox_dict(x[3], y1, x[4], y2),
-            "revision": _bbox_dict(x[4], y1, x[5], y2),
-            "general_tolerance": _bbox_dict(x[0], y0, x[1], y1),
-            "designed_by": _bbox_dict(x[1], y0, drawn_by_right, y1),
-        }
-        if legal_owner:
-            self._cells["legal_owner"] = _bbox_dict(x[0], y2, x[-1], y_top)
-        if date_cell:
-            self._cells["date"] = _bbox_dict(x[3], y0, x[5], y1)
+        # Named cell rectangles in the BUILD frame, keyed by the layout's cell
+        # names (see cell_bbox()).
+        self._cells = cells
         # Friendly aliases for the cells whose constructor name and ISO 7200
         # label differ. "date" is an alias for the shared top-right cell ONLY
         # while there is no dedicated date cell to name; a real cell always wins.
-        self._cell_aliases = {"drawn_by": "designed_by"}
-        if not date_cell:
-            self._cell_aliases["date"] = "revision"
+        self._cell_aliases = {"drawn_by": "designed_by", "date": "revision"}
 
     def cell_bbox(self, name: str) -> dict:
         """Bounding box of the named title-block cell, in the BUILD frame.
@@ -2798,7 +3173,10 @@ class TitleBlock(_Annotation):
             KeyError: if *name* is not a known cell (or ``"legal_owner"`` when
                 no legal-owner row was drawn).
         """
-        key = self._cell_aliases.get(name, name)
+        # A real cell always wins: an alias only answers for a name the layout
+        # did not use, so a layout with its own "drawn_by" or "date" cell gets
+        # that cell rather than the one the alias points at.
+        key = name if name in self._cells else self._cell_aliases.get(name, name)
         if key not in self._cells:
             raise KeyError(f"unknown title-block cell: {name!r}")
         return dict(self._cells[key])

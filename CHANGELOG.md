@@ -2,6 +2,70 @@
 
 ## Unreleased
 
+### Added
+
+- **The title-block arrangement is the caller's to own** — `TitleBlock` now
+  renders a declarative `TitleBlockLayout` of `TitleBlockCell(field, width,
+  label)` rows, supplied as `layout=`, with `values=` filling any cell the
+  constructor has no parameter for. Rows beyond the built-in two or three work,
+  and a cell may name a field this library has never heard of. Pass no layout
+  and the output is unchanged; `default_title_block_layout()` builds that
+  arrangement and takes the owner row, the dedicated date cell and the
+  REV-vs-DATE caption as arguments.
+
+  It exists because three releases in one day went into moving one divider: the
+  arrangement was a module constant and a fixed sequence of inline cells, so a
+  consumer wanting a different split had to wait for a release.
+
+  A layout that cannot be drawn is refused with a message naming the problem —
+  a row that does not sum to 1 (and what it does sum to), a duplicate field, a
+  non-finite or non-positive width, no rows, an empty row, rows that are not
+  cells. So is a value supplied for a field the layout has no cell for: it
+  would otherwise be dropped in silence, which is the defect the two entries
+  below were fixing.
+
+- **Cells sized by character capacity, and `iso7200_layout()`** — a
+  `TitleBlockCell` can now be sized `chars=N` (a **nominal** capacity of *N*
+  characters, converted using the mean glyph width at the block's font — *N*
+  wide characters can still overflow, and `field_ink` against `cell_bbox` is
+  how a consumer detects that) or `flex=True` (take what the sized cells
+  leave), as well as by the original `width=` fraction. `iso7200_layout()` returns a layout
+  carrying all eight ISO 7200:2004 **mandatory** fields — legal owner,
+  identification number, date of issue, segment/sheet number, title, approval
+  person, creator and document type — each sized from the standard's own
+  "Recommended number of characters", published as `ISO7200_FIELD_CHARS`.
+
+  This exists because the proportional model made someone invent a number every
+  time content did not fit. ISO 7200 specifies field lengths in characters, so
+  the cell widths follow from the standard and the font rather than from a
+  judgement call. A capacity is *declared*, never measured from a drawing's own
+  values, so every drawing in a set gets an identically-shaped block. It fits
+  the 120 mm block draftwright uses on A4 in three rows, with no widening.
+
+  Note the obligation that is usually inverted: the date of issue (5.1.5) is
+  mandatory, the revision index (5.1.4) is not. Scale, material and general
+  tolerance are absent by design — ISO 7200 §4 presents those "outside the title
+  block only when used".
+
+- **`TitleBlock.field_ink`** — the measured `(width, height)` of every value
+  the block drew, by cell name, in the build frame like `cell_bbox`. The block
+  measures this to place the text and used to discard it, so every consumer
+  re-derived it and had to know the right font and size to do so. Getting that
+  wrong is what shipped a too-narrow date cell in v0.15.2.
+
+  Also `TitleBlock.layout`, the layout that was drawn.
+
+### Changed
+
+- `TitleBlock`'s `scale` parameter now defaults to `None`, meaning "1:1", rather
+  than to the string `"1:1"`. Any explicit string still behaves as before; the
+  sentinel lets the block tell an asked-for scale from an unasked-for one, so a
+  layout with no scale cell can refuse the former instead of dropping it.
+
+- `TitleBlock.segments` are ordered row by row rather than all values before
+  all labels. The same segments are present; only their order changed. Anything
+  indexing `segments` positionally should not.
+
 ### Fixed
 
 - **`TitleBlock` no longer discards a supplied `date`** (draftwright #1585) —
