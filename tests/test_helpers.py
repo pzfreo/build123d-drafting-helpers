@@ -1354,22 +1354,128 @@ class TestTitleBlock:
 class TestTitleBlockLayout:
     """The layout is the caller's to own; the block only renders it."""
 
-    def test_default_layout_matches_what_the_block_draws_unasked(self, draft):
-        # The refactor's whole risk: a supplied default-shaped layout must
-        # reproduce the built-in arrangement exactly, cell for cell.
-        implicit = TitleBlock("Part", "001", revision="A", width=170, draft=draft)
-        explicit = TitleBlock(
+    def test_the_default_arrangement_is_pinned_to_its_actual_geometry(self, draft):
+        # NOT a comparison of the code to itself: the implicit path calls
+        # default_title_block_layout() too, so asserting the two agree moves
+        # both sides together and catches nothing. These are the boxes the
+        # block has always drawn, written out, so changing the default
+        # arrangement fails here.
+        tb = TitleBlock(
             "Part",
             "001",
             revision="A",
+            legal_owner="ACME",
+            width=170,
+            cell_height=8,
+            draft=draft,
+        )
+        assert {
+            k: (v["min_x"], v["min_y"], v["max_x"], v["max_y"]) for k, v in tb._cells.items()
+        } == {
+            "legal_owner": (0.0, 16.0, 170.0, 24.0),
+            "title": (0.0, 8.0, 68.0, 16.0),
+            "drawing_number": (68.0, 8.0, 102.0, 16.0),
+            "scale": (102.0, 8.0, 127.5, 16.0),
+            "material": (127.5, 8.0, 153.0, 16.0),
+            "revision": (153.0, 8.0, 170.0, 16.0),
+            "general_tolerance": (0.0, 0.0, 68.0, 8.0),
+            "designed_by": (68.0, 0.0, 170.0, 8.0),
+        }
+
+    def test_the_default_arrangement_with_a_date_is_pinned_too(self, draft):
+        tb = TitleBlock(
+            "Part",
+            "001",
+            revision="A",
+            date="2026-01-01",
+            width=170,
+            cell_height=8,
+            draft=draft,
+        )
+        bottom = {k: (v["min_x"], v["max_x"]) for k, v in tb._cells.items() if v["min_y"] == 0.0}
+        assert bottom == {
+            "general_tolerance": (0.0, 68.0),
+            "designed_by": (68.0, 127.5),
+            "date": (127.5, 170.0),
+        }
+
+    def test_the_default_captions_are_pinned(self, draft):
+        layout = default_title_block_layout(legal_owner=True, date_cell=True)
+        assert [[(c.field, c.label) for c in row] for row in layout.rows] == [
+            [("legal_owner", "LEGAL OWNER")],
+            [
+                ("title", "TITLE"),
+                ("drawing_number", "DWG NO."),
+                ("scale", "SCALE"),
+                ("material", "MAT."),
+                ("revision", "REV"),
+            ],
+            [("general_tolerance", "GEN. TOL."), ("designed_by", "DRAWN BY"), ("date", "DATE")],
+        ]
+
+    def test_a_layout_with_no_cell_for_a_supplied_value_is_refused(self, draft):
+        # The defect this whole feature exists to prevent, reintroduced by the
+        # feature itself: handing the library its own default factory back
+        # while supplying a date silently dropped the date, and cell_bbox("date")
+        # then returned the REVISION cell's box.
+        with pytest.raises(ValueError, match="no cell for 'date'"):
+            TitleBlock(
+                "Part",
+                "001",
+                revision="A",
+                date="2026-01-01",
+                draft=draft,
+                layout=default_title_block_layout(),
+            )
+        # Saying so makes it work.
+        tb = TitleBlock(
+            "Part",
+            "001",
+            revision="A",
+            date="2026-01-01",
+            draft=draft,
+            layout=default_title_block_layout(date_cell=True),
+        )
+        assert tb.field_ink["date"][0] > 0
+
+    def test_a_date_without_a_revision_still_needs_no_date_cell(self, draft):
+        # It occupies the shared top-right cell, so it is not an unplaced value.
+        tb = TitleBlock("Part", "001", date="2026-01-01", draft=draft)
+        assert "date" not in tb._cells
+        assert tb.field_ink["revision"][0] > 0
+
+    def test_caller_named_fields_can_carry_values(self, draft):
+        layout = TitleBlockLayout(
+            (
+                (
+                    TitleBlockCell("customer", 0.5, "CUSTOMER"),
+                    TitleBlockCell("project", 0.5, "PROJECT"),
+                ),
+            )
+        )
+        tb = TitleBlock(
+            "", "", draft=draft, layout=layout, values={"customer": "ACME", "project": "Apollo"}
+        )
+        assert set(tb.field_ink) == {"customer", "project"}
+        with pytest.raises(ValueError, match="no cell for 'nosuch'"):
+            TitleBlock("", "", draft=draft, layout=layout, values={"nosuch": "X"})
+
+    def test_a_real_cell_beats_an_alias(self, draft):
+        layout = TitleBlockLayout(
+            ((TitleBlockCell("designed_by", 0.5), TitleBlockCell("drawn_by", 0.5)),)
+        )
+        tb = TitleBlock(
+            "",
+            "",
             width=170,
             draft=draft,
-            layout=default_title_block_layout(),
+            layout=layout,
+            values={"designed_by": "X", "drawn_by": "Y"},
         )
-        assert implicit._cells == explicit._cells
-        assert len(implicit.faces()) == len(explicit.faces())
-        assert len(implicit.segments) == len(explicit.segments)
-        assert implicit.block_bbox == explicit.block_bbox
+        # Previously the alias resolved first and silently returned the
+        # designed_by box for a layout that has a real drawn_by cell.
+        assert tb.cell_bbox("drawn_by")["min_x"] == pytest.approx(85.0)
+        assert tb.cell_bbox("designed_by")["min_x"] == pytest.approx(0.0)
 
     def test_default_layout_variants_cover_the_built_in_conditionals(self, draft):
         owner = default_title_block_layout(legal_owner=True)
@@ -1446,8 +1552,8 @@ class TestTitleBlockLayout:
         bare = TitleBlockLayout(
             ((TitleBlockCell("title", 0.5, "TITLE"), TitleBlockCell("scale", 0.5)),)
         )
-        with_caption = TitleBlock("P", "001", draft=draft, layout=captioned)
-        without = TitleBlock("P", "001", draft=draft, layout=bare)
+        with_caption = TitleBlock("P", "", draft=draft, layout=captioned)
+        without = TitleBlock("P", "", draft=draft, layout=bare)
         assert len(with_caption.faces()) > len(without.faces())
 
     @pytest.mark.parametrize(
@@ -1455,7 +1561,7 @@ class TestTitleBlockLayout:
         [
             ((((("a", 0.4), ("b", 0.4)),)), "sums to 0.8"),
             (((("a", 1.0),), (("a", 1.0),)), "duplicate"),
-            (((("a", 1.5), ("b", -0.5)),), "must be positive"),
+            (((("a", 1.5), ("b", -0.5)),), "finite and positive"),
         ],
     )
     def test_a_layout_that_cannot_be_drawn_is_refused(self, rows, message):

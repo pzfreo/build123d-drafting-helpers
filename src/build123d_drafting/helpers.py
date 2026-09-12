@@ -2524,6 +2524,16 @@ class TitleBlockLayout:
     rows: tuple[tuple[TitleBlockCell, ...], ...]
 
     def __post_init__(self):
+        # Materialise first: a generator is truthy, validates, and is then
+        # exhausted, leaving a layout that passed its checks and has no cells.
+        try:
+            rows = tuple(tuple(row) for row in self.rows)
+        except TypeError:
+            raise ValueError(
+                "a title-block layout is rows of cells; pass a tuple of rows, "
+                "each row a tuple of TitleBlockCell (a bare cell is not a row)"
+            ) from None
+        object.__setattr__(self, "rows", rows)
         if not self.rows:
             raise ValueError("a title-block layout needs at least one row")
         seen: set[str] = set()
@@ -2531,10 +2541,13 @@ class TitleBlockLayout:
             if not row:
                 raise ValueError(f"title-block row {index} has no cells")
             for cell in row:
-                if cell.width <= 0:
+                if not math.isfinite(cell.width) or cell.width <= 0:
+                    # NaN passes both `<= 0` and the sum check below, and then
+                    # produces NaN cell boxes and NaN strokes.
                     raise ValueError(
                         f"title-block cell {cell.field!r} has width {cell.width}; "
-                        "widths are fractions of the block width and must be positive"
+                        "widths are fractions of the block width and must be "
+                        "finite and positive"
                     )
                 if cell.field in seen:
                     raise ValueError(
@@ -2624,6 +2637,13 @@ def _bbox_dict(min_x, min_y, max_x, max_y):
 class TitleBlock(_Annotation):
     """ISO 7200:2004 title block built at the origin (bottom-left at (0, 0)).
 
+    The arrangement is a :class:`TitleBlockLayout`, and it is pluggable: pass
+    ``layout=`` to own it, with ``values=`` to fill any cell this constructor
+    has no parameter for. Pass neither and you get the ISO 7200 arrangement
+    below, unchanged — :func:`default_title_block_layout` builds it. A value
+    supplied for a field the layout has no cell for raises rather than being
+    dropped.
+
     Standard 2-row layout::
 
         ┌──────────────────┬─────────┬──────┬──────┬──────┐
@@ -2691,7 +2711,10 @@ class TitleBlock(_Annotation):
     indicator and the label-vs-measured check stay in agreement.
 
     Metadata: ``.label`` (part_name), ``.label_bbox`` (None), ``.segments``,
-    ``.block_bbox`` dict ({min_x, min_y, max_x, max_y, width, height}).
+    ``.block_bbox`` dict ({min_x, min_y, max_x, max_y, width, height}),
+    ``.layout`` (the :class:`TitleBlockLayout` that was drawn), and
+    ``.field_ink`` ({cell name: (width, height)} of each rendered value, in the
+    build frame like ``cell_bbox``, so the two can be compared directly).
     """
 
     def __init__(
@@ -2716,6 +2739,7 @@ class TitleBlock(_Annotation):
         mode: Mode = Mode.ADD,
         drawing_scale: float | None = None,
         layout: TitleBlockLayout | None = None,
+        values: dict[str, str] | None = None,
     ):
         draft = draft or Draft(font_size=2.5, decimal_precision=1)
         # Whitespace is not a value: "   " is truthy in Python, and an
@@ -2734,6 +2758,7 @@ class TitleBlock(_Annotation):
         if drawing_scale is not None:
             scale = format_drawing_scale(drawing_scale)
 
+        values_extra = values
         values = {
             "title": part_name,
             "drawing_number": drawing_number,
@@ -2756,14 +2781,48 @@ class TitleBlock(_Annotation):
                 date_cell=date_cell,
                 date_in_top_right=not revision,
             )
-            # One cell holds whichever of the two the caller supplied; revision
-            # takes it when both are set, and the date then has its own.
-            values["revision"] = revision or date
-            values["date"] = date
         else:
             date_cell = "date" in layout.fields
-            values["revision"] = revision or ("" if date_cell else date)
+        # Where the date goes. The top-right cell holds one field: revision
+        # claims it whenever it is set, and the date then needs a cell of its
+        # own. The three cases are spelled out because folding them into one
+        # expression is how the date got dropped in silence twice already.
+        if date_cell:
+            values["revision"] = revision
             values["date"] = date
+        elif not revision:
+            # Nothing claims the shared cell, so the date takes it.
+            values["revision"] = date
+            values["date"] = ""
+        else:
+            # Revision owns the shared cell and the layout gave the date no
+            # cell. Leave the value in place so the unplaced check below
+            # reports it rather than the sheet quietly omitting it.
+            values["revision"] = revision
+            values["date"] = date
+        if values_ := values_extra:
+            values.update({k: str(v) for k, v in values_.items()})
+
+        # Refuse to drop a value on the floor. A layout that has no cell for a
+        # field the caller supplied would otherwise render a sheet quietly
+        # missing it — the failure this class was twice fixed for. The default
+        # layout always has a cell for every field it fills, so this can only
+        # fire for a caller-supplied layout.
+        # `scale` is the one field with a non-empty default, so its presence is
+        # not evidence the caller asked for it; an explicit scale still counts.
+        unplaced = sorted(
+            f
+            for f, v in values.items()
+            if v and f not in layout.fields and not (f == "scale" and v == "1:1")
+        )
+        if unplaced:
+            raise ValueError(
+                "title-block layout has no cell for "
+                + ", ".join(repr(f) for f in unplaced)
+                + f"; its cells are {', '.join(repr(f) for f in layout.fields)}. "
+                "Add a cell for each supplied value, or do not supply it — a "
+                "value with nowhere to go would be dropped in silence."
+            )
 
         fs = draft.font_size
         font = draft.font
@@ -2775,6 +2834,7 @@ class TitleBlock(_Annotation):
         _label_fits = (cell_height * 0.5 - fs * 0.5) > (lpad + lfs)
 
         cell_height = float(cell_height)
+        width = float(width)
         y_top = len(layout.rows) * cell_height
         strokes: list[Edge] = []
         # Outer border.
@@ -2787,8 +2847,8 @@ class TitleBlock(_Annotation):
         cells: dict[str, dict] = {}
         field_ink: dict[str, tuple[float, float]] = {}
         for index, row in enumerate(layout.rows):
-            row_top = y_top - index * cell_height
-            row_bottom = row_top - cell_height
+            row_bottom = (len(layout.rows) - 1 - index) * cell_height
+            row_top = row_bottom + cell_height
             if index:  # divider above every row but the first
                 strokes.append(Edge.make_line(Vector(0.0, row_top, 0), Vector(width, row_top, 0)))
             left = 0.0
@@ -2846,6 +2906,8 @@ class TitleBlock(_Annotation):
         #: rendered a value, by cell name. The block measures these to draw
         #: them, so a consumer checking a value against ``cell_bbox()`` need not
         #: re-derive them — and cannot get the font or size wrong doing so.
+        #: In the BUILD frame, like ``cell_bbox`` and ``block_bbox``: unrotated,
+        #: so the two compare directly whatever ``rotation=`` was given.
         self.field_ink = field_ink
         # block_bbox: the frame extents in the BUILD frame (before any .moved()
         # or rotation=). Use .bounding_box() for the live, transform-accurate
@@ -2864,9 +2926,7 @@ class TitleBlock(_Annotation):
         # Friendly aliases for the cells whose constructor name and ISO 7200
         # label differ. "date" is an alias for the shared top-right cell ONLY
         # while there is no dedicated date cell to name; a real cell always wins.
-        self._cell_aliases = {"drawn_by": "designed_by"}
-        if "date" not in self._cells:
-            self._cell_aliases["date"] = "revision"
+        self._cell_aliases = {"drawn_by": "designed_by", "date": "revision"}
 
     def cell_bbox(self, name: str) -> dict:
         """Bounding box of the named title-block cell, in the BUILD frame.
@@ -2892,7 +2952,10 @@ class TitleBlock(_Annotation):
             KeyError: if *name* is not a known cell (or ``"legal_owner"`` when
                 no legal-owner row was drawn).
         """
-        key = self._cell_aliases.get(name, name)
+        # A real cell always wins: an alias only answers for a name the layout
+        # did not use, so a layout with its own "drawn_by" or "date" cell gets
+        # that cell rather than the one the alias points at.
+        key = name if name in self._cells else self._cell_aliases.get(name, name)
         if key not in self._cells:
             raise KeyError(f"unknown title-block cell: {name!r}")
         return dict(self._cells[key])
