@@ -1640,7 +1640,7 @@ class TestTitleBlockLayout:
         )
 
 
-def _natural_row_width(layout, draft, values):
+def _natural_row_width(layout, draft):
     """The block width at which a capacity-only row has no spare to redistribute."""
     char_w = _char_width(draft.font_size, draft.font, _font_path(draft))
     pad = draft.pad_around_text * 0.4
@@ -1668,7 +1668,7 @@ class TestCapacitySizedCells:
             "title": (sample * 2)[:20],
             "drawing_number": (sample * 2)[:16],
         }
-        natural = _natural_row_width(layout, draft, values)
+        natural = _natural_row_width(layout, draft)
         tb = TitleBlock("", "", width=natural, draft=draft, layout=layout, values=values)
         for field in ("title", "drawing_number"):
             assert tb.field_ink[field][0] <= tb.cell_bbox(field)["width"], field
@@ -1680,7 +1680,7 @@ class TestCapacitySizedCells:
         # which is how a consumer's lint reports it.
         layout = TitleBlockLayout(((TitleBlockCell("title", chars=20, label="TITLE"),),))
         values = {"title": "W" * 20}
-        natural = _natural_row_width(layout, draft, values)
+        natural = _natural_row_width(layout, draft)
         tb = TitleBlock("", "", width=natural, draft=draft, layout=layout, values=values)
         assert tb.field_ink["title"][0] > tb.cell_bbox("title")["width"]
 
@@ -1803,11 +1803,35 @@ class TestCellValidation:
             )
         )
         pad = draft.pad_around_text * 0.4
-        needed = _char_width(draft.font_size, draft.font, _font_path(draft)) * 40 + 2 * pad
+        needed = _natural_row_width(
+            TitleBlockLayout(((TitleBlockCell("title", chars=40),),)), draft
+        )
         # Just wide enough for the capacity cell, leaving the flexible one a
         # sliver — a different refusal from "the row does not fit at all".
         with pytest.raises(ValueError, match="cannot hold anything"):
             TitleBlock("", "", width=needed + pad * 0.5, draft=draft, layout=layout)
+
+    def test_a_block_with_no_capacity_cell_never_measures_the_font(self, monkeypatch):
+        # Measuring the sample costs about as much as the rest of the block, so
+        # the default path must not pay for a feature it does not use.
+        seen = []
+        real = helpers.Text
+
+        def spy(*args, **kwargs):
+            seen.append(kwargs.get("txt", args[0] if args else ""))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(helpers, "Text", spy)
+        TitleBlock("Part", "001", revision="A")
+        assert _CHAR_SAMPLE not in seen
+
+        seen.clear()
+        TitleBlock(
+            "",
+            "",
+            layout=TitleBlockLayout(((TitleBlockCell("title", chars=10),),)),
+        )
+        assert _CHAR_SAMPLE in seen, "a capacity cell must measure the font"
 
 
 class TestISO7200Layout:

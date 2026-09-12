@@ -2502,9 +2502,10 @@ class TitleBlockCell:
       an identically-shaped block.
 
       Nominal, because a proportional face has no one character width: *N* is
-      converted using the mean glyph width over ``_CHAR_SAMPLE``, so *N* narrow
-      characters leave room to spare and *N* wide ones can still overflow (30
-      ``'D'`` exceed a ``chars=30`` cell by about 4%, 30 ``'W'`` by about 40%).
+      converted using the mean glyph width over an A-Z 0-9 sample, so *N* narrow
+      characters leave room to spare and *N* wide ones can still overflow: at
+      this library's default face 30 ``'D'`` exceed a ``chars=30`` cell by
+      about 8% and 30 ``'W'`` by about 42%.
       Reserving the widest glyph instead would make every cell ~40% wider for a
       guarantee only the widest string needs. An overflow is not hidden:
       compare :attr:`TitleBlock.field_ink` against :meth:`TitleBlock.cell_bbox`
@@ -2699,8 +2700,10 @@ def iso7200_layout(*, revision: bool = True) -> TitleBlockLayout:
     recommended number of characters per field, and that is enough to size the
     cells without inventing proportions. Most cells below declare the standard's
     capacity, which the block turns into millimetres using its own font; ``title``
-    and ``legal_owner`` flex instead, taking their row's remainder, so they are
-    never narrower than the standard recommends and grow with the block.
+    and ``legal_owner`` flex instead, taking their row's remainder and growing
+    with the block. ``title`` is never narrower than the 30 characters the
+    standard recommends, because its row is not the one that binds first;
+    ``legal_owner`` has no recommendation to be narrower than.
 
     The eight mandatory fields are legal owner (5.1.2), identification number
     (5.1.3), date of issue (5.1.5), segment/sheet number (5.1.6), title (5.2.2),
