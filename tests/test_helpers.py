@@ -23,9 +23,12 @@ from build123d_drafting import (
     SurfaceFinish,
     TextBlock,
     TitleBlock,
+    TitleBlockCell,
+    TitleBlockLayout,
     ViewCoordinates,
     annotate,
     clear_page,
+    default_title_block_layout,
     draft_preset,
     find_interferences,
     find_overlaps,
@@ -1346,6 +1349,170 @@ class TestTitleBlock:
     def test_cell_bbox_unknown_name_raises(self, draft):
         with pytest.raises(KeyError):
             TitleBlock("Part", "001", draft=draft).cell_bbox("nonsense")
+
+
+class TestTitleBlockLayout:
+    """The layout is the caller's to own; the block only renders it."""
+
+    def test_default_layout_matches_what_the_block_draws_unasked(self, draft):
+        # The refactor's whole risk: a supplied default-shaped layout must
+        # reproduce the built-in arrangement exactly, cell for cell.
+        implicit = TitleBlock("Part", "001", revision="A", width=170, draft=draft)
+        explicit = TitleBlock(
+            "Part",
+            "001",
+            revision="A",
+            width=170,
+            draft=draft,
+            layout=default_title_block_layout(),
+        )
+        assert implicit._cells == explicit._cells
+        assert len(implicit.faces()) == len(explicit.faces())
+        assert len(implicit.segments) == len(explicit.segments)
+        assert implicit.block_bbox == explicit.block_bbox
+
+    def test_default_layout_variants_cover_the_built_in_conditionals(self, draft):
+        owner = default_title_block_layout(legal_owner=True)
+        assert owner.rows[0][0].field == "legal_owner"
+        assert len(owner.rows) == 3
+        assert "date" not in default_title_block_layout().fields
+        assert "date" in default_title_block_layout(date_cell=True).fields
+        top_right = default_title_block_layout(date_in_top_right=True).rows[-2][-1]
+        assert (top_right.field, top_right.label) == ("revision", "DATE")
+
+    def test_a_caller_layout_drives_the_cells(self, draft):
+        layout = TitleBlockLayout(
+            (
+                (
+                    TitleBlockCell("title", 0.40, "TITLE"),
+                    TitleBlockCell("drawing_number", 0.20, "DWG NO."),
+                    TitleBlockCell("scale", 0.15, "SCALE"),
+                    TitleBlockCell("material", 0.15, "MAT."),
+                    TitleBlockCell("revision", 0.10, "REV"),
+                ),
+                (
+                    TitleBlockCell("general_tolerance", 0.30, "GEN. TOL."),
+                    TitleBlockCell("designed_by", 0.45, "DRAWN BY"),
+                    TitleBlockCell("date", 0.25, "DATE"),
+                ),
+            )
+        )
+        tb = TitleBlock(
+            "Part",
+            "001",
+            revision="A",
+            date="2026-01-01",
+            width=120,
+            cell_height=8,
+            draft=draft,
+            layout=layout,
+        )
+        # The consumer's split, not this library's: 30/45/25 of 120 mm.
+        assert tb.cell_bbox("general_tolerance")["width"] == pytest.approx(36.0)
+        assert tb.cell_bbox("designed_by")["width"] == pytest.approx(54.0)
+        assert tb.cell_bbox("date")["width"] == pytest.approx(30.0)
+        assert tb.layout is layout
+
+    def test_rows_beyond_the_built_in_three_are_drawn(self, draft):
+        layout = TitleBlockLayout(
+            (
+                (TitleBlockCell("legal_owner", 1.0, "ORIGIN"),),
+                (TitleBlockCell("title", 0.7, "TITLE"), TitleBlockCell("drawing_number", 0.3)),
+                (TitleBlockCell("scale", 0.5, "SCALE"), TitleBlockCell("revision", 0.5, "REV")),
+                (TitleBlockCell("designed_by", 0.6, "DRAWN BY"), TitleBlockCell("date", 0.4)),
+            )
+        )
+        tb = TitleBlock(
+            "X",
+            "Y",
+            legal_owner="ACME",
+            revision="C",
+            date="2026-01-01",
+            width=100,
+            cell_height=8,
+            draft=draft,
+            layout=layout,
+        )
+        assert tb.block_bbox["height"] == pytest.approx(32.0)
+        # Four rows tile the height with no gaps, top row first.
+        tops = [tb.cell_bbox(row[0].field)["max_y"] for row in layout.rows]
+        assert tops == pytest.approx([32.0, 24.0, 16.0, 8.0])
+        assert tb.cell_bbox("date")["width"] == pytest.approx(40.0)
+
+    def test_a_cell_without_a_label_draws_no_caption(self, draft):
+        captioned = TitleBlockLayout(
+            ((TitleBlockCell("title", 0.5, "TITLE"), TitleBlockCell("scale", 0.5, "SCALE")),)
+        )
+        bare = TitleBlockLayout(
+            ((TitleBlockCell("title", 0.5, "TITLE"), TitleBlockCell("scale", 0.5)),)
+        )
+        with_caption = TitleBlock("P", "001", draft=draft, layout=captioned)
+        without = TitleBlock("P", "001", draft=draft, layout=bare)
+        assert len(with_caption.faces()) > len(without.faces())
+
+    @pytest.mark.parametrize(
+        "rows,message",
+        [
+            ((((("a", 0.4), ("b", 0.4)),)), "sums to 0.8"),
+            (((("a", 1.0),), (("a", 1.0),)), "duplicate"),
+            (((("a", 1.5), ("b", -0.5)),), "must be positive"),
+        ],
+    )
+    def test_a_layout_that_cannot_be_drawn_is_refused(self, rows, message):
+        spec = tuple(tuple(TitleBlockCell(f, w) for f, w in row) for row in rows)
+        with pytest.raises(ValueError, match=message):
+            TitleBlockLayout(spec)
+
+    def test_an_empty_layout_is_refused(self):
+        with pytest.raises(ValueError, match="at least one row"):
+            TitleBlockLayout(())
+        with pytest.raises(ValueError, match="no cells"):
+            TitleBlockLayout(((),))
+
+    def test_field_ink_is_what_the_block_measured_to_draw(self, draft):
+        # The point of exposing it: a consumer checking fit must not have to
+        # re-derive the text width, and so cannot get the font or size wrong.
+        tb = TitleBlock("Part", "001", material="Al 6082", revision="A", draft=draft)
+        assert set(tb.field_ink) <= set(tb._cells)
+        for field, (w, h) in tb.field_ink.items():
+            value = {
+                "title": "Part",
+                "drawing_number": "001",
+                "material": "Al 6082",
+                "revision": "A",
+                "scale": "1:1",
+                "designed_by": "",
+                "general_tolerance": "",
+            }[field]
+            expected = Text(
+                txt=value,
+                font_size=draft.font_size,
+                font=draft.font,
+                font_path=_font_path(draft),
+                align=(Align.CENTER, Align.CENTER),
+                mode=Mode.PRIVATE,
+            ).bounding_box()
+            assert w == pytest.approx(expected.size.X)
+            assert h == pytest.approx(expected.size.Y)
+
+    def test_field_ink_omits_cells_that_drew_nothing(self, draft):
+        tb = TitleBlock("Part", "001", draft=draft)
+        assert "material" not in tb.field_ink  # not supplied, so nothing drawn
+        assert "title" in tb.field_ink
+
+    def test_layout_fields_lists_every_cell(self):
+        layout = default_title_block_layout(legal_owner=True, date_cell=True)
+        assert layout.fields == (
+            "legal_owner",
+            "title",
+            "drawing_number",
+            "scale",
+            "material",
+            "revision",
+            "general_tolerance",
+            "designed_by",
+            "date",
+        )
 
 
 # ---------------------------------------------------------------------------
