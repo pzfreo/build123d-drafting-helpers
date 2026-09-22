@@ -574,12 +574,12 @@ def _dim_line_ink(
 ):
     """Dimension-line ink from *a* to *b* assembled without booleans (#177).
 
-    Follows ``DimensionLine``'s layout: when the label and both heads fit within
-    the span the arrows sit inside with the line broken around the label
-    (gap = label extent + ``pad_around_text`` each side); otherwise the arrows
-    sit outside pointing in, with no line drawn between the ends — exactly as
-    build123d draws that case. Above-line style retains the middle shaft and
-    offsets the complete label from it; orientation is resolved independently.
+    When the label and both heads fit within the span the arrows sit inside with
+    the line broken around the label (gap = label extent +
+    ``pad_around_text`` each side). Otherwise the arrows sit outside pointing
+    in, while the measured endpoints remain joined by the same broken dimension
+    line. Above-line style retains the complete middle shaft and offsets the
+    label from it; orientation is resolved independently.
 
     ``label_t`` is the label centre along a→b in mm; ``None`` centres it when it
     fits and hangs it past *b* otherwise (DimensionLine's external-label spot).
@@ -646,15 +646,20 @@ def _dim_line_ink(
             label_t = length / 2.0
     else:
         heads = [(0.0, u_ang, (-al, 0.0)), (length, u_ang + 180.0, (length, length + al))]
-        ink = [(-2.0 * al, -al / 2.0), (length + al / 2.0, length + 2.0 * al)]
+        # Outside heads still identify the measured span through a line joining
+        # its endpoints. Without it a short dimension is two detached arrows,
+        # and neither arrow can be traced to the other witness line.
+        ink = [
+            (-2.0 * al, -al / 2.0),
+            (0.0, length),
+            (length + al / 2.0, length + 2.0 * al),
+        ]
         if label_t is None:
             # a label that fits between the ends stays centred (DimensionLine's
             # scorer keeps it there); only one wider than the span hangs past the end
             label_t = (
                 length / 2.0 if 2.0 * half_along < length else length + 2.0 * al + pad + half_along
             )
-        if position == "above":
-            ink.insert(1, (0.0, length))
     if text_face is not None and position == "inline":
         ink = _spans_minus_gap(ink, label_t - half_along - pad, label_t + half_along + pad)
 

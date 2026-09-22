@@ -209,6 +209,25 @@ class TestDimension:
         d = Dimension((-2, 0, 0), (2, 0, 0), "above", 5, draft, label="4")
         assert d.label_bbox is not None
 
+    def test_short_path_keeps_a_dimension_line_between_the_witnesses(self, draft):
+        # The value fits between the witnesses, but the value plus both arrowheads
+        # does not, so this exercises the outside-arrow layout used by an 8 mm
+        # feature on a normal drawing.
+        d = Dimension((-4, 0, 0), (4, 0, 0), "above", 5, draft, label="8")
+
+        between_witnesses = [
+            (start, end)
+            for start, end in d.segments
+            if start[1] == pytest.approx(5)
+            and end[1] == pytest.approx(5)
+            and max(start[0], end[0]) > -4
+            and min(start[0], end[0]) < 4
+        ]
+        endpoints = [point[0] for segment in between_witnesses for point in segment]
+        assert any(x == pytest.approx(-4) for x in endpoints) and any(
+            x == pytest.approx(4) for x in endpoints
+        ), "outside arrows must not leave the measured endpoints as two detached shafts"
+
     def test_zero_distance_raises(self, draft):
         with pytest.raises(ValueError):
             Dimension((-10, 0, 0), (10, 0, 0), "above", 0, draft, label="20")
