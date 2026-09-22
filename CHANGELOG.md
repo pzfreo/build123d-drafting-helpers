@@ -68,6 +68,10 @@
 
 ### Fixed
 
+- **Short dimensions with outside arrowheads retain the dimension line between both
+  witness lines.** The outside-arrow path previously drew only the shafts beyond the
+  arrowheads, leaving the measured span blank even when its value fit there.
+
 - **`TitleBlock` no longer discards a supplied `date`** (draftwright #1585) —
   ISO 7200 treats date of issue and revision index as separate data fields, but
   both competed for the single top-right cell and `revision` always won. A
